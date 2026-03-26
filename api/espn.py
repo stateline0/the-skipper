@@ -116,6 +116,7 @@ def get_league_data(team_id: int, week: int) -> dict:
 
         lineup_slot = entry.get("lineupSlotId", 0)
         inj_status = pool_entry.get("injuryStatus", "")
+        print(f"PLAYER: {player.get('fullName')} | lineupSlot: {lineup_slot} | eligible: {sorted(eligible_slots)} | stats_count: {len(player.get('stats', []))}")
         slot_label = get_slot_label(lineup_slot, eligible_slots)
         status_label = get_status(lineup_slot, inj_status)
         pro_team_id = player.get("proTeamId", 0)
