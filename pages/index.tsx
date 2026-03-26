@@ -116,6 +116,16 @@ export default function Home() {
   const needed = Math.max(0, limit - confirmedStarts)
   const projPts = rosterSPs.reduce((a, p) => a + (p.projFpts || 0), 0)
 
+  useEffect(() => {
+    fetch('/api/config')
+      .then(r => r.json())
+      .then(data => {
+        if (data.teamId) setTeamId(String(data.teamId))
+        if (data.defaultLimit) setLimit(data.defaultLimit)
+      })
+      .catch(() => {})
+  }, [])
+
   const goStep = (n: Step) => {
     if (n > maxStep) return
     setStep(n)
