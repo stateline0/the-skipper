@@ -1,10 +1,7 @@
 {
   "functions": {
-    "api/espn.py": {
-      "runtime": "vercel-python@4.3.1"
-    },
-    "api/analyze.py": {
-      "runtime": "vercel-python@4.3.1"
+    "api/**/*.py": {
+      "maxDuration": 30
     }
   }
 }
