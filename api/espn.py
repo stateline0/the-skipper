@@ -126,7 +126,8 @@ def get_league_data(team_id: int, week: int) -> dict:
         else:
             player_stats = player.get("stats", [])
             scheduled_starts = count_projected_starts(player_stats, current_week)
-            if scheduled_starts == 0 and 14 in eligible_slots:
+            # Only apply fallback for pitchers with SP eligibility (slot 14), not pure RPs
+            if scheduled_starts == 0 and lineup_slot == 14:
                 scheduled_starts = 2
 
         roster_sps.append({
