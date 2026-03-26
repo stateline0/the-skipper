@@ -183,10 +183,23 @@ def get_league_data(team_id: int, week: int) -> dict:
                 "checked": entry.get("percentOwned", 0) >= 15,
             })
 
+        # Get matchup period dates from settings
+    calendar = data.get("settings", {}).get("scheduleSettings", {}).get("matchupPeriodDates", {})
+    period_dates = calendar.get(str(current_week), [])
+    week_start = ""
+    week_end = ""
+    if len(period_dates) >= 2:
+        from datetime import datetime
+        fmt = lambda ts: datetime.utcfromtimestamp(ts/1000).strftime("%b %-d")
+        week_start = fmt(period_dates[0])
+        week_end = fmt(period_dates[-1])
+
     return {
         "ok": True,
         "teamName": team_name.strip(),
         "currentWeek": current_week,
+        "weekStart": week_start,
+        "weekEnd": week_end,
         "rosterSPs": roster_sps,
         "freeAgentSPs": sorted(free_agents, key=lambda x: x["percentOwned"], reverse=True),
     }
