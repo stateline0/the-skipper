@@ -138,11 +138,11 @@ export default function Home() {
       if (!data.ok) throw new Error(data.error)
 
       setLeague(data)
-      // Merge proj data — ESPN API gives us ownership/proj points
+      if (data.defaultLimit) setLimit(data.defaultLimit)
       const roster: RosterSP[] = data.rosterSPs.map((p: any) => ({
         ...p,
-        starts: p.projectedStartsThisWeek || 2,
-        projFpts: p.projPoints || Math.round(Math.random() * 20 + 12),
+        starts: p.starts || 2,
+        projFpts: p.projFpts || Math.round(Math.random() * 20 + 12),
       }))
       setRosterSPs(roster)
       const sched = roster.reduce((a: number, p: RosterSP) => a + p.starts, 0)
@@ -150,9 +150,9 @@ export default function Home() {
 
       const fas: FreeSP[] = data.freeAgentSPs.map((p: any) => ({
         ...p,
-        starts: 2,
-        projFpts: p.projPoints || Math.round(Math.random() * 18 + 8),
-        opps: '',
+        starts: p.starts || 2,
+        projFpts: p.projFpts || Math.round(Math.random() * 18 + 8),
+        opps: p.opps || '',
         checked: p.percentOwned >= 15,
       }))
       setFreeSPs(fas)
