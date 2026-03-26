@@ -21,16 +21,6 @@ PRO_TEAM_MAP = {
     31: "CWS", 32: "FA"
 }
 
-# ESPN lineup slot ID to display label
-SLOT_MAP = {
-    14: "SP",
-    15: "P",
-    16: "IL",
-    17: "IL",
-    13: "RP",
-    12: "BN",
-}
-
 
 def get_headers_and_cookies():
     espn_s2 = os.environ.get("ESPN_S2", "").strip()
@@ -48,7 +38,6 @@ def count_projected_starts(player_stats: list, scoring_period: int) -> int:
     """
     Count probable starts for a pitcher this scoring period.
     ESPN stat ID 36 = Games Started (GS).
-    We find the projected weekly stat entry and read GS directly.
     """
     for stat_entry in player_stats:
         stat_source = stat_entry.get("statSourceId", -1)
@@ -69,7 +58,6 @@ def get_slot_label(lineup_slot_id: int, eligible_slots: set) -> str:
         return "IL"
     if lineup_slot_id == 14:
         return "SP"
-    # Slot 15 = P (pitcher util) — distinguish SP vs RP by eligibility
     if 14 in eligible_slots:
         return "SP"
     if 13 in eligible_slots:
@@ -230,18 +218,3 @@ class handler(BaseHTTPRequestHandler):
         self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Access-Control-Allow-Methods", "GET, OPTIONS")
         self.end_headers()
-```
-
-PR title:
-```
-fix: team abbreviations, slot labels, and IL status display on roster screen
-```
-
-PR description:
-```
-- Adds PRO_TEAM_MAP to convert ESPN proTeamId integers to team abbreviations (e.g. 2 → BOS)
-- Adds SLOT_MAP and get_slot_label() to correctly show SP, RP, or IL instead of generic P
-- Adds get_status() to derive status from lineupSlotId — players in IL slots now correctly 
-  show "IL" regardless of their injuryStatus field value
-- Starts count fallback (2) still applies for early season when projections aren't populated,
-  but IL-slotted players correctly get 0 starts
