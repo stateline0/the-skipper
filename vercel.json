@@ -1,27 +1,10 @@
 {
-  "version": 2,
-  "builds": [
-    {
-      "src": "api/*.py",
-      "use": "@vercel/python"
+  "functions": {
+    "api/espn.py": {
+      "runtime": "vercel-python@3.0.7"
     },
-    {
-      "src": "package.json",
-      "use": "@vercel/next"
+    "api/analyze.py": {
+      "runtime": "vercel-python@3.0.7"
     }
-  ],
-  "routes": [
-    {
-      "src": "/api/espn",
-      "dest": "/api/espn.py"
-    },
-    {
-      "src": "/api/analyze",
-      "dest": "/api/analyze.py"
-    },
-    {
-      "src": "/(.*)",
-      "dest": "/$1"
-    }
-  ]
+  }
 }
