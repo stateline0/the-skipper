@@ -418,8 +418,8 @@ export default function Home() {
                     <input
                       type="number"
                       value={limit}
-                      onChange={e => setLimit(parseInt(e.target.value) || 12)}
-                      min={1} max={20}
+                      onChange={e => setLimit(parseInt(e.target.value) || 0)}
+                      min={1} max={30}
                       style={{ maxWidth:80 }}
                     />
                   </div>
@@ -547,7 +547,7 @@ export default function Home() {
                     type="number"
                     value={confirmedStarts}
                     onChange={e => setConfirmedStarts(parseInt(e.target.value) || 0)}
-                    min={0} max={20}
+                    min={0} max={30}
                     style={{ maxWidth:80 }}
                   />
                   <span style={{ fontSize:13, color:'var(--ink-3)' }}>confirmed starts from your current roster</span>
