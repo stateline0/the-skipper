@@ -138,7 +138,6 @@ export default function Home() {
       if (!data.ok) throw new Error(data.error)
 
       setLeague(data)
-      if (data.defaultLimit) setLimit(data.defaultLimit)
       const roster: RosterSP[] = data.rosterSPs.map((p: any) => ({
         ...p,
         starts: p.starts || 2,
