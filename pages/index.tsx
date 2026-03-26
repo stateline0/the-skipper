@@ -18,7 +18,8 @@ interface LeagueData {
 type Step = 0 | 1 | 2 | 3
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
-function getWeekRange() {
+function getWeekRange(start?: string, end?: string) {
+  if (start && end) return `${start} – ${end}`
   const today = new Date()
   const dow = today.getDay()
   const mon = new Date(today); mon.setDate(today.getDate() - ((dow + 6) % 7))
@@ -109,9 +110,11 @@ export default function Home() {
   const [freeSPs, setFreeSPs] = useState<FreeSP[]>([])
   const [confirmedStarts, setConfirmedStarts] = useState(0)
   const [analysis, setAnalysis] = useState('')
+  const [weekStart, setWeekStart] = useState('')
+  const [weekEnd, setWeekEnd] = useState('')
 
   // Derived
-  const weekLabel = getWeekRange()
+  const weekLabel = getWeekRange(weekStart, weekEnd)
   const todayName = DAY_NAMES[new Date().getDay()]
   const needed = Math.max(0, limit - confirmedStarts)
   const projPts = rosterSPs.reduce((a, p) => a + (p.projFpts || 0), 0)
@@ -148,6 +151,8 @@ export default function Home() {
       if (!data.ok) throw new Error(data.error)
 
       setLeague(data)
+      if (data.weekStart) setWeekStart(data.weekStart)
+      if (data.weekEnd) setWeekEnd(data.weekEnd)
       const roster: RosterSP[] = data.rosterSPs.map((p: any) => ({
         ...p,
         starts: p.starts || 2,
@@ -527,17 +532,24 @@ export default function Home() {
                       </tr>
                     </thead>
                     <tbody>
-                      {rosterSPs.map((p, i) => (
+                      {[...rosterSPs].sort((a, b) => {
+                        const slotOrder = (s: string) => s === 'SP' ? 0 : s === 'RP' ? 1 : 2
+                        if (slotOrder(a.slot) !== slotOrder(b.slot)) return slotOrder(a.slot) - slotOrder(b.slot)
+                        if (b.starts !== a.starts) return b.starts - a.starts
+                        return b.projFpts - a.projFpts
+                      }).map((p, i) => (
                         <tr key={i}>
                           <td style={{ fontWeight:600 }}>{p.name}</td>
                           <td><span style={{ fontFamily:'var(--mono)', fontSize:12 }}>{p.team}</span></td>
-                          <td><Badge label={p.slot} color="blue" /></td>
+                          <td><Badge label={p.slot} color={p.slot === 'IL' ? 'red' : p.slot === 'RP' ? 'amber' : 'blue'} /></td>
                           <td style={{ textAlign:'center', fontFamily:'var(--mono)', fontWeight:600 }}>{p.starts}</td>
-                          <td style={{ textAlign:'center', fontFamily:'var(--mono)', fontWeight:600, color:'var(--green)' }}>{p.projFpts}</td>
+                          <td style={{ textAlign:'center', fontFamily:'var(--mono)', fontWeight:600, color:'var(--green)' }}>{p.projFpts.toFixed(1)}</td>
                           <td>
-                            {p.injuryStatus
-                              ? <Badge label={p.injuryStatus} color="amber" />
-                              : <Badge label="Active" color="green" />}
+                            {p.injuryStatus === 'Active'
+                              ? <Badge label="Active" color="green" />
+                              : p.injuryStatus === 'IL'
+                              ? <Badge label="IL" color="red" />
+                              : <Badge label={p.injuryStatus || 'Active'} color="amber" />}
                           </td>
                         </tr>
                       ))}
