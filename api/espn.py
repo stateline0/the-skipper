@@ -1,14 +1,13 @@
 """
 /api/espn.py  — Vercel Python serverless function
 Fetches roster + free agents from ESPN Fantasy Baseball API.
-Counts probable starts (PP) per pitcher using ESPN's per-day projected stats.
 """
 import json
 import os
 import requests
 from http.server import BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs
-
+from datetime import datetime, timezone
 
 # ESPN pro team ID to abbreviation mapping
 PRO_TEAM_MAP = {
@@ -34,39 +33,17 @@ def get_headers_and_cookies():
     return headers, cookies
 
 
-def count_projected_starts(player_stats: list, scoring_period: int) -> int:
-    """
-    Count probable starts for a pitcher this scoring period.
-    ESPN stat ID 36 = Games Started (GS).
-    """
-    for stat_entry in player_stats:
-        stat_source = stat_entry.get("statSourceId", -1)
-        period = stat_entry.get("scoringPeriodId", -1)
-
-        if stat_source == 1 and period == scoring_period:
-            stats = stat_entry.get("stats", {})
-            gs = stats.get("36", stats.get(36, 0))
-            if gs:
-                return int(round(float(gs)))
-
-    return 0
-
-
 def get_slot_label(lineup_slot_id: int, eligible_slots: set) -> str:
-    """Return a human-readable slot label."""
     if lineup_slot_id in (16, 17):
         return "IL"
-    if lineup_slot_id == 14:
-        return "SP"
     if 14 in eligible_slots:
         return "SP"
-    if 13 in eligible_slots:
+    if 13 in eligible_slots and 14 not in eligible_slots:
         return "RP"
     return "P"
 
 
 def get_status(lineup_slot_id: int, inj_status: str) -> str:
-    """Determine display status from slot and injury status."""
     if lineup_slot_id in (16, 17):
         return "IL"
     if inj_status and inj_status not in ("ACTIVE", "NORMAL", ""):
@@ -75,19 +52,21 @@ def get_status(lineup_slot_id: int, inj_status: str) -> str:
 
 
 def get_league_data(team_id: int, week: int) -> dict:
-    """Fetch league data directly via requests."""
     league_id = os.environ["ESPN_LEAGUE_ID"]
     year = os.environ.get("ESPN_SEASON", "2026")
     headers, cookies = get_headers_and_cookies()
-
     base = f"https://lm-api-reads.fantasy.espn.com/apis/v3/games/flb/seasons/{year}/segments/0/leagues/{league_id}"
 
+    # Fetch roster, team info, settings, and per-period stats in one call
     r = requests.get(
         base,
-        params={
-            "view": ["mRoster", "mTeam"],
-            "scoringPeriodId": week,
-        },
+        params=[
+            ("view", "mRoster"),
+            ("view", "mTeam"),
+            ("view", "mSettings"),
+            ("view", "mStandings"),
+            ("scoringPeriodId", week),
+        ],
         cookies=cookies,
         headers=headers,
         timeout=15
@@ -98,37 +77,93 @@ def get_league_data(team_id: int, week: int) -> dict:
     data = r.json()
     teams = data.get("teams", [])
     my_team = next((t for t in teams if t.get("id") == team_id), teams[0] if teams else {})
-    team_name = my_team.get("location", "") + " " + my_team.get("nickname", "")
+    team_name = (my_team.get("location", "") + " " + my_team.get("nickname", "")).strip()
     current_week = data.get("scoringPeriodId", week)
 
+    # Get matchup period dates
+    schedule_settings = data.get("settings", {}).get("scheduleSettings", {})
+    matchup_dates = schedule_settings.get("matchupPeriodDates", {})
+    period_dates = matchup_dates.get(str(current_week), [])
+    week_start = ""
+    week_end = ""
+    if len(period_dates) >= 2:
+        def fmt_ts(ts):
+            return datetime.fromtimestamp(ts / 1000, tz=timezone.utc).strftime("%b %-d")
+        week_start = fmt_ts(period_dates[0])
+        week_end = fmt_ts(period_dates[-1])
+
+    # Fetch per-player projected stats for this scoring period separately
+    # using kona_player_info which returns richer stat data
+    xff_roster = json.dumps({
+        "players": {
+            "filterIds": {"value": [
+                e.get("playerId") for e in my_team.get("roster", {}).get("entries", [])
+                if e.get("playerId")
+            ]},
+            "filterStatsForCurrentSeasonScoringPeriodId": {"value": [current_week]},
+        }
+    })
+    stats_r = requests.get(
+        base,
+        params=[("view", "kona_player_info"), ("scoringPeriodId", current_week)],
+        cookies=cookies,
+        headers={**headers, "x-fantasy-filter": xff_roster},
+        timeout=15
+    )
+    # Build lookup of playerId -> projected starts this week
+    starts_by_player = {}
+    proj_fpts_by_player = {}
+    if stats_r.status_code == 200:
+        stats_data = stats_r.json()
+        for p in stats_data.get("players", []):
+            pid = p.get("id")
+            player_obj = p.get("playerPoolEntry", {}).get("player", {})
+            for stat_entry in player_obj.get("stats", []):
+                src = stat_entry.get("statSourceId")
+                period = stat_entry.get("scoringPeriodId")
+                split = stat_entry.get("statSplitTypeId")
+                if src == 1 and period == current_week:
+                    stats = stat_entry.get("stats", {})
+                    # Stat 36 = GS, stat 48 = projected points in some schemas
+                    gs = float(stats.get("36", stats.get(36, 0)) or 0)
+                    if gs > 0:
+                        starts_by_player[pid] = int(round(gs))
+                    # Total projected points for the period
+                    proj = p.get("playerPoolEntry", {}).get("appliedStatTotal", 0)
+                    proj_fpts_by_player[pid] = round(float(proj or 0), 1)
+
+    # Parse roster
     roster_entries = my_team.get("roster", {}).get("entries", [])
     roster_sps = []
-    SP_SLOT_IDS = {14, 15}
-    IL_SLOT_IDS = {16, 17}
+    SP_ELIGIBLE = {14}
+    RP_ELIGIBLE = {13}
+    IL_SLOTS = {16, 17}
 
     for entry in roster_entries:
         pool_entry = entry.get("playerPoolEntry", {})
         player = pool_entry.get("player", {})
         eligible_slots = set(player.get("eligibleSlots", []))
+        player_id = entry.get("playerId")
 
-        if not (eligible_slots & SP_SLOT_IDS):
+        # Include SP-eligible and RP-eligible pitchers
+        if not (eligible_slots & SP_ELIGIBLE) and not (eligible_slots & RP_ELIGIBLE):
             continue
 
         lineup_slot = entry.get("lineupSlotId", 0)
         inj_status = pool_entry.get("injuryStatus", "")
-        print(f"PLAYER: {player.get('fullName')} | lineupSlot: {lineup_slot} | eligible: {sorted(eligible_slots)} | stats_count: {len(player.get('stats', []))}")
         slot_label = get_slot_label(lineup_slot, eligible_slots)
         status_label = get_status(lineup_slot, inj_status)
         pro_team_id = player.get("proTeamId", 0)
         team_abbrev = PRO_TEAM_MAP.get(pro_team_id, str(pro_team_id))
 
-        if lineup_slot in IL_SLOT_IDS or inj_status in ("IL", "IL10", "IL15", "IL60", "SUSP"):
+        if lineup_slot in IL_SLOTS or inj_status in ("IL", "IL10", "IL15", "IL60", "SUSP"):
             scheduled_starts = 0
+            proj_fpts = 0.0
         else:
-            player_stats = player.get("stats", [])
-            scheduled_starts = count_projected_starts(player_stats, current_week)
-            # Only apply fallback for pitchers with SP eligibility (slot 14), not pure RPs
-            if scheduled_starts == 0 and lineup_slot == 14:
+            scheduled_starts = starts_by_player.get(player_id, 0)
+            proj_fpts = proj_fpts_by_player.get(player_id, round(float(pool_entry.get("appliedStatTotal", 0)), 1))
+            # Fallback for SP-eligible only (not RPs)
+            if scheduled_starts == 0 and 14 in eligible_slots:
                 scheduled_starts = 2
 
         roster_sps.append({
@@ -137,27 +172,29 @@ def get_league_data(team_id: int, week: int) -> dict:
             "slot": slot_label,
             "injuryStatus": status_label,
             "starts": scheduled_starts,
-            "projFpts": round(pool_entry.get("appliedStatTotal", 0), 1),
+            "projFpts": proj_fpts,
             "percentOwned": round(pool_entry.get("percentOwned", 100), 1),
         })
 
-    xff = json.dumps({
+    # Sort: SP first, then RP, then IL; then starts desc, then fpts desc
+    slot_order = {"SP": 0, "RP": 1, "IL": 2, "P": 1}
+    roster_sps.sort(key=lambda x: (slot_order.get(x["slot"], 1), -x["starts"], -x["projFpts"]))
+
+    # Fetch free agents
+    xff_fa = json.dumps({
         "players": {
             "filterStatus": {"value": ["FREEAGENT", "WAIVERS"]},
-            "filterSlotIds": {"value": [14, 15]},
+            "filterSlotIds": {"value": [13, 14]},
             "limit": 30,
             "sortPercOwned": {"sortPriority": 1, "sortAsc": False},
-            "filterStatsForTopScoringPeriodIDs": {
-                "value": 1,
-                "additionalValue": [f"11{current_week}", f"00{year}"]
-            }
+            "filterStatsForCurrentSeasonScoringPeriodId": {"value": [current_week]},
         }
     })
     fa_r = requests.get(
         base,
-        params={"view": "kona_player_info", "scoringPeriodId": current_week},
+        params=[("view", "kona_player_info"), ("scoringPeriodId", current_week)],
         cookies=cookies,
-        headers={**headers, "x-fantasy-filter": xff},
+        headers={**headers, "x-fantasy-filter": xff_fa},
         timeout=15
     )
     free_agents = []
@@ -166,11 +203,13 @@ def get_league_data(team_id: int, week: int) -> dict:
         for p in fa_data.get("players", []):
             entry = p.get("playerPoolEntry", {})
             player = entry.get("player", {})
+            if not player.get("fullName"):
+                continue
             eligible_slots = set(player.get("eligibleSlots", []))
             pro_team_id = player.get("proTeamId", 0)
             team_abbrev = PRO_TEAM_MAP.get(pro_team_id, str(pro_team_id))
-            player_stats = player.get("stats", [])
-            starts = count_projected_starts(player_stats, current_week)
+            pid = p.get("id")
+            starts = starts_by_player.get(pid, 0)
             if starts == 0 and 14 in eligible_slots:
                 starts = 2
             free_agents.append({
@@ -178,57 +217,26 @@ def get_league_data(team_id: int, week: int) -> dict:
                 "team": team_abbrev,
                 "injuryStatus": entry.get("injuryStatus", ""),
                 "percentOwned": round(entry.get("percentOwned", 0), 1),
-                "projFpts": round(entry.get("appliedStatTotal", 0), 1),
+                "projFpts": round(float(entry.get("appliedStatTotal", 0) or 0), 1),
                 "starts": starts,
                 "opps": "",
                 "checked": entry.get("percentOwned", 0) >= 15,
             })
 
-        # Get matchup period dates from settings
-    calendar = data.get("settings", {}).get("scheduleSettings", {}).get("matchupPeriodDates", {})
-    period_dates = calendar.get(str(current_week), [])
-    week_start = ""
-    week_end = ""
-    if len(period_dates) >= 2:
-        from datetime import datetime
-        fmt = lambda ts: datetime.utcfromtimestamp(ts/1000).strftime("%b %-d")
-        week_start = fmt(period_dates[0])
-        week_end = fmt(period_dates[-1])
-
-    # DEBUG — remove after diagnosing starts issue
-    debug_info = []
-    for entry in roster_entries:
-        pool_entry = entry.get("playerPoolEntry", {})
-        player = pool_entry.get("player", {})
-        eligible_slots = set(player.get("eligibleSlots", []))
-        if not (eligible_slots & SP_SLOT_IDS):
-            continue
-        lineup_slot = entry.get("lineupSlotId", 0)
-        stats = player.get("stats", [])
-        debug_info.append({
-            "name": player.get("fullName"),
-            "lineupSlot": lineup_slot,
-            "eligibleSlots": sorted(list(eligible_slots)),
-            "statsCount": len(stats),
-            "statIds": [{"sourceId": s.get("statSourceId"), "period": s.get("scoringPeriodId"), "gs": s.get("stats", {}).get("36", s.get("stats", {}).get(36, 0))} for s in stats]
-        })
-
     return {
         "ok": True,
-        "teamName": team_name.strip(),
+        "teamName": team_name,
         "currentWeek": current_week,
         "weekStart": week_start,
         "weekEnd": week_end,
         "rosterSPs": roster_sps,
-        "freeAgentSPs": sorted(free_agents, key=lambda x: x["percentOwned"], reverse=True),
-        "debug": debug_info,
+        "freeAgentSPs": free_agents,
     }
 
 
 class handler(BaseHTTPRequestHandler):
     def do_GET(self):
         qs = parse_qs(urlparse(self.path).query)
-
         env_team_id = os.environ.get("ESPN_TEAM_ID", "")
         team_id = int(env_team_id) if env_team_id else int(qs.get("teamId", ["1"])[0])
         week = int(qs.get("week", ["1"])[0])
