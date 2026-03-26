@@ -195,6 +195,24 @@ def get_league_data(team_id: int, week: int) -> dict:
         week_start = fmt(period_dates[0])
         week_end = fmt(period_dates[-1])
 
+    # DEBUG — remove after diagnosing starts issue
+    debug_info = []
+    for entry in roster_entries:
+        pool_entry = entry.get("playerPoolEntry", {})
+        player = pool_entry.get("player", {})
+        eligible_slots = set(player.get("eligibleSlots", []))
+        if not (eligible_slots & SP_SLOT_IDS):
+            continue
+        lineup_slot = entry.get("lineupSlotId", 0)
+        stats = player.get("stats", [])
+        debug_info.append({
+            "name": player.get("fullName"),
+            "lineupSlot": lineup_slot,
+            "eligibleSlots": sorted(list(eligible_slots)),
+            "statsCount": len(stats),
+            "statIds": [{"sourceId": s.get("statSourceId"), "period": s.get("scoringPeriodId"), "gs": s.get("stats", {}).get("36", s.get("stats", {}).get(36, 0))} for s in stats]
+        })
+
     return {
         "ok": True,
         "teamName": team_name.strip(),
@@ -203,6 +221,7 @@ def get_league_data(team_id: int, week: int) -> dict:
         "weekEnd": week_end,
         "rosterSPs": roster_sps,
         "freeAgentSPs": sorted(free_agents, key=lambda x: x["percentOwned"], reverse=True),
+        "debug": debug_info,
     }
 
 
