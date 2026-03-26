@@ -6,7 +6,6 @@ const COOKIE_NAME = 'skipper_auth'
 export function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl
 
-  // Always allow login page, auth API, and static assets
   if (
     PUBLIC_PATHS.some(p => pathname.startsWith(p)) ||
     pathname.startsWith('/_next') ||
