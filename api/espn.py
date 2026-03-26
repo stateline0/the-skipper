@@ -10,6 +10,28 @@ from http.server import BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs
 
 
+# ESPN pro team ID to abbreviation mapping
+PRO_TEAM_MAP = {
+    1: "ATL", 2: "BOS", 3: "CHC", 4: "CIN", 5: "CLE",
+    6: "COL", 7: "DET", 8: "HOU", 9: "KC", 10: "LAA",
+    11: "LAD", 12: "MIA", 13: "MIL", 14: "MIN", 15: "NYM",
+    16: "NYY", 17: "OAK", 18: "PHI", 19: "PIT", 20: "SD",
+    21: "SEA", 22: "SF", 23: "STL", 24: "TB", 25: "TEX",
+    26: "TOR", 27: "WSH", 28: "ARI", 29: "ATH", 30: "BAL",
+    31: "CWS", 32: "FA"
+}
+
+# ESPN lineup slot ID to display label
+SLOT_MAP = {
+    14: "SP",
+    15: "P",
+    16: "IL",
+    17: "IL",
+    13: "RP",
+    12: "BN",
+}
+
+
 def get_headers_and_cookies():
     espn_s2 = os.environ.get("ESPN_S2", "").strip()
     swid = os.environ.get("ESPN_SWID", "").strip()
@@ -25,29 +47,43 @@ def get_headers_and_cookies():
 def count_projected_starts(player_stats: list, scoring_period: int) -> int:
     """
     Count probable starts for a pitcher this scoring period.
-
-    ESPN stat entries have:
-    - statSourceId: 0=actual, 1=projection
-    - statSplitTypeId: 0=season, 1=scoring period (week)
-    - scoringPeriodId: the period number
-
-    ESPN baseball stat ID 36 = Games Started (GS).
-    We find the projected weekly stat entry for this scoring period
-    and read the GS value directly.
+    ESPN stat ID 36 = Games Started (GS).
+    We find the projected weekly stat entry and read GS directly.
     """
     for stat_entry in player_stats:
         stat_source = stat_entry.get("statSourceId", -1)
         period = stat_entry.get("scoringPeriodId", -1)
 
-        # Projected (1) stats for this specific scoring period
         if stat_source == 1 and period == scoring_period:
             stats = stat_entry.get("stats", {})
-            # Stat 36 = Games Started in ESPN baseball
             gs = stats.get("36", stats.get(36, 0))
             if gs:
                 return int(round(float(gs)))
 
     return 0
+
+
+def get_slot_label(lineup_slot_id: int, eligible_slots: set) -> str:
+    """Return a human-readable slot label."""
+    if lineup_slot_id in (16, 17):
+        return "IL"
+    if lineup_slot_id == 14:
+        return "SP"
+    # Slot 15 = P (pitcher util) — distinguish SP vs RP by eligibility
+    if 14 in eligible_slots:
+        return "SP"
+    if 13 in eligible_slots:
+        return "RP"
+    return "P"
+
+
+def get_status(lineup_slot_id: int, inj_status: str) -> str:
+    """Determine display status from slot and injury status."""
+    if lineup_slot_id in (16, 17):
+        return "IL"
+    if inj_status and inj_status not in ("ACTIVE", "NORMAL", ""):
+        return inj_status
+    return "Active"
 
 
 def get_league_data(team_id: int, week: int) -> dict:
@@ -58,7 +94,6 @@ def get_league_data(team_id: int, week: int) -> dict:
 
     base = f"https://lm-api-reads.fantasy.espn.com/apis/v3/games/flb/seasons/{year}/segments/0/leagues/{league_id}"
 
-    # Fetch roster with player stats for current scoring period
     r = requests.get(
         base,
         params={
@@ -78,7 +113,6 @@ def get_league_data(team_id: int, week: int) -> dict:
     team_name = my_team.get("location", "") + " " + my_team.get("nickname", "")
     current_week = data.get("scoringPeriodId", week)
 
-    # Parse roster entries
     roster_entries = my_team.get("roster", {}).get("entries", [])
     roster_sps = []
     SP_SLOT_IDS = {14, 15}
@@ -94,27 +128,29 @@ def get_league_data(team_id: int, week: int) -> dict:
 
         lineup_slot = entry.get("lineupSlotId", 0)
         inj_status = pool_entry.get("injuryStatus", "")
+        slot_label = get_slot_label(lineup_slot, eligible_slots)
+        status_label = get_status(lineup_slot, inj_status)
+        pro_team_id = player.get("proTeamId", 0)
+        team_abbrev = PRO_TEAM_MAP.get(pro_team_id, str(pro_team_id))
 
         if lineup_slot in IL_SLOT_IDS or inj_status in ("IL", "IL10", "IL15", "IL60", "SUSP"):
             scheduled_starts = 0
         else:
             player_stats = player.get("stats", [])
             scheduled_starts = count_projected_starts(player_stats, current_week)
-            # Fallback for confirmed SPs with no projection data yet
             if scheduled_starts == 0 and 14 in eligible_slots:
                 scheduled_starts = 2
 
         roster_sps.append({
             "name": player.get("fullName", "Unknown"),
-            "team": player.get("proTeamId", "?"),
-            "slot": "SP" if lineup_slot == 14 else ("IL" if lineup_slot in IL_SLOT_IDS else "P"),
-            "injuryStatus": inj_status,
+            "team": team_abbrev,
+            "slot": slot_label,
+            "injuryStatus": status_label,
             "starts": scheduled_starts,
             "projFpts": round(pool_entry.get("appliedStatTotal", 0), 1),
             "percentOwned": round(pool_entry.get("percentOwned", 100), 1),
         })
 
-    # Fetch free agents with projected stats
     xff = json.dumps({
         "players": {
             "filterStatus": {"value": ["FREEAGENT", "WAIVERS"]},
@@ -141,13 +177,15 @@ def get_league_data(team_id: int, week: int) -> dict:
             entry = p.get("playerPoolEntry", {})
             player = entry.get("player", {})
             eligible_slots = set(player.get("eligibleSlots", []))
+            pro_team_id = player.get("proTeamId", 0)
+            team_abbrev = PRO_TEAM_MAP.get(pro_team_id, str(pro_team_id))
             player_stats = player.get("stats", [])
             starts = count_projected_starts(player_stats, current_week)
             if starts == 0 and 14 in eligible_slots:
                 starts = 2
             free_agents.append({
                 "name": player.get("fullName", "Unknown"),
-                "team": str(player.get("proTeamId", "?")),
+                "team": team_abbrev,
                 "injuryStatus": entry.get("injuryStatus", ""),
                 "percentOwned": round(entry.get("percentOwned", 0), 1),
                 "projFpts": round(entry.get("appliedStatTotal", 0), 1),
@@ -192,3 +230,18 @@ class handler(BaseHTTPRequestHandler):
         self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Access-Control-Allow-Methods", "GET, OPTIONS")
         self.end_headers()
+```
+
+PR title:
+```
+fix: team abbreviations, slot labels, and IL status display on roster screen
+```
+
+PR description:
+```
+- Adds PRO_TEAM_MAP to convert ESPN proTeamId integers to team abbreviations (e.g. 2 → BOS)
+- Adds SLOT_MAP and get_slot_label() to correctly show SP, RP, or IL instead of generic P
+- Adds get_status() to derive status from lineupSlotId — players in IL slots now correctly 
+  show "IL" regardless of their injuryStatus field value
+- Starts count fallback (2) still applies for early season when projections aren't populated,
+  but IL-slotted players correctly get 0 starts
