@@ -213,9 +213,8 @@ def get_league_data(team_id: int, week: int) -> dict:
             pro_team_id = player.get("proTeamId", 0)
             team_abbrev = PRO_TEAM_MAP.get(pro_team_id, str(pro_team_id))
             pid = p.get("id")
-            starts = starts_by_player.get(pid, 0)
-            if starts == 0 and 14 in eligible_slots:
-                starts = 2
+
+         starts = 1 if 14 in eligible_slots else 0
             free_agents.append({
                 "name": player.get("fullName", "Unknown"),
                 "team": team_abbrev,
