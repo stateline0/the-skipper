@@ -197,11 +197,6 @@ def get_league_data(team_id: int, week: int) -> dict:
         timeout=15
     )
     free_agents = []
-    if fa_r.status_code != 200:
-        raise Exception(f"FA request failed: {fa_r.status_code} - {fa_r.text[:200]}")
-    fa_player_count_debug = len(fa_r.json().get("players", []))
-    if fa_player_count_debug == 0:
-        raise Exception(f"FA returned 0 players. Headers sent: {xff_fa[:200]}")
     if fa_r.status_code == 200:
         fa_data = fa_r.json()
         for p in fa_data.get("players", []):
