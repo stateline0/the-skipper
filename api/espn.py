@@ -205,8 +205,8 @@ def get_league_data(team_id: int, week: int) -> dict:
     if fa_r.status_code == 200:
         fa_data = fa_r.json()
         for p in fa_data.get("players", []):
-            entry = p.get("playerPoolEntry", {})
-            player = entry.get("player", {})
+            entry = p
+            player = p.get("player", {})
             if not player.get("fullName"):
                 continue
             eligible_slots = set(player.get("eligibleSlots", []))
@@ -224,9 +224,9 @@ def get_league_data(team_id: int, week: int) -> dict:
             free_agents.append({
                 "name": player.get("fullName", "Unknown"),
                 "team": team_abbrev,
-                "injuryStatus": entry.get("injuryStatus", ""),
-                "percentOwned": round(entry.get("percentOwned", 0), 1),
-                "projFpts": round(float(entry.get("appliedStatTotal", 0) or 0), 1),
+                "injuryStatus": player.get("injuryStatus", "ACTIVE"),
+                "percentOwned": round(player.get("ownership", {}).get("percentOwned", 0), 1),
+                "projFpts": 0.0,
                 "starts": starts,
                 "opps": "",
                 "checked": entry.get("percentOwned", 0) >= 15,
