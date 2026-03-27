@@ -64,7 +64,7 @@ def get_league_data(team_id: int, week: int) -> dict:
             ("view", "mRoster"),
             ("view", "mTeam"),
             ("view", "mSettings"),
-            ("view", "mStandings"),
+            ("view", "mMatchupScore"),
             ("scoringPeriodId", week),
         ],
         cookies=cookies,
@@ -77,7 +77,7 @@ def get_league_data(team_id: int, week: int) -> dict:
     data = r.json()
     teams = data.get("teams", [])
     my_team = next((t for t in teams if t.get("id") == team_id), teams[0] if teams else {})
-    team_name = (my_team.get("location", "") + " " + my_team.get("nickname", "")).strip()
+    team_name = my_team.get("name", "").strip()
     current_week = data.get("scoringPeriodId", week)
 
     # Get matchup period dates
@@ -184,8 +184,7 @@ def get_league_data(team_id: int, week: int) -> dict:
     xff_fa = json.dumps({
         "players": {
             "filterStatus": {"value": ["FREEAGENT", "WAIVERS"]},
-            "filterSlotIds": {"value": [13, 14]},
-            "limit": 30,
+            "limit": 100,
             "sortPercOwned": {"sortPriority": 1, "sortAsc": False},
             "filterStatsForCurrentSeasonScoringPeriodId": {"value": [current_week]},
         }
@@ -206,6 +205,11 @@ def get_league_data(team_id: int, week: int) -> dict:
             if not player.get("fullName"):
                 continue
             eligible_slots = set(player.get("eligibleSlots", []))
+
+            # Only include SP-eligible pitchers for free agent analysis
+            if 14 not in eligible_slots:
+                continue
+
             pro_team_id = player.get("proTeamId", 0)
             team_abbrev = PRO_TEAM_MAP.get(pro_team_id, str(pro_team_id))
             pid = p.get("id")
@@ -232,7 +236,6 @@ def get_league_data(team_id: int, week: int) -> dict:
         "rosterSPs": roster_sps,
         "freeAgentSPs": free_agents,
     }
-
 
 class handler(BaseHTTPRequestHandler):
     def do_GET(self):
