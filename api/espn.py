@@ -224,7 +224,14 @@ def get_league_data(team_id: int, week: int) -> dict:
             free_agents.append({
                 "name": player.get("fullName", "Unknown"),
                 "team": team_abbrev,
-                "injuryStatus": player.get("injuryStatus", "ACTIVE"),
+                "injuryStatus": {
+                    "ACTIVE": "Active",
+                    "NORMAL": "Active",
+                    "FIFTEEN_DAY_DL": "IL15",
+                    "SIXTY_DAY_DL": "IL60",
+                    "DAY_TO_DAY": "DTD",
+                    "SUSPENSION": "SUSP",
+                }.get(player.get("injuryStatus", "ACTIVE"), player.get("injuryStatus", "Active")),
                 "percentOwned": round(player.get("ownership", {}).get("percentOwned", 0), 1),
                 "projFpts": 0.0,
                 "starts": starts,
