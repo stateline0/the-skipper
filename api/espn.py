@@ -280,8 +280,8 @@ def get_league_data(team_id: int, week: int) -> dict:
             fa_name = player.get("fullName", "")
             if fa_name in probable_pitchers:
                 starts = len(probable_pitchers[fa_name])
-            elif starts == 0 and 14 in eligible_slots:
-                starts = 1  # Conservative fallback
+            else:
+                starts = 1 if 14 in eligible_slots else 0
             free_agents.append({
                 "name": player.get("fullName", "Unknown"),
                 "team": team_abbrev,
