@@ -18,7 +18,7 @@ from http.server import BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs
 from urllib.request import urlopen, Request
 from urllib.error import URLError
-from datetime import datetime
+from datetime import datetime, timedelta
 from html.parser import HTMLParser
 
 # ---------------------------------------------------------------------------
@@ -28,161 +28,89 @@ from html.parser import HTMLParser
 # FantasyPros — it matches the matchup period number directly.
 # ---------------------------------------------------------------------------
 MATCHUP_PERIODS = {
-    1:  {"start": "2026-03-25", "end": "2026-04-05", "limit": 21, "fp_daterange": 1},
-    2:  {"start": "2026-04-06", "end": "2026-04-12", "limit": 12, "fp_daterange": 2},
-    3:  {"start": "2026-04-13", "end": "2026-04-19", "limit": 12, "fp_daterange": 3},
-    4:  {"start": "2026-04-20", "end": "2026-04-26", "limit": 12, "fp_daterange": 4},
-    5:  {"start": "2026-04-27", "end": "2026-05-03", "limit": 12, "fp_daterange": 5},
-    6:  {"start": "2026-05-04", "end": "2026-05-10", "limit": 12, "fp_daterange": 6},
-    7:  {"start": "2026-05-11", "end": "2026-05-17", "limit": 12, "fp_daterange": 7},
-    8:  {"start": "2026-05-18", "end": "2026-05-24", "limit": 12, "fp_daterange": 8},
-    9:  {"start": "2026-05-25", "end": "2026-05-31", "limit": 12, "fp_daterange": 9},
-    10: {"start": "2026-06-01", "end": "2026-06-07", "limit": 12, "fp_daterange": 10},
-    11: {"start": "2026-06-08", "end": "2026-06-14", "limit": 12, "fp_daterange": 11},
-    12: {"start": "2026-06-15", "end": "2026-06-21", "limit": 12, "fp_daterange": 12},
-    13: {"start": "2026-06-22", "end": "2026-06-28", "limit": 12, "fp_daterange": 13},
-    14: {"start": "2026-06-29", "end": "2026-07-05", "limit": 12, "fp_daterange": 14},
-    15: {"start": "2026-07-06", "end": "2026-07-19", "limit": 19, "fp_daterange": 15},
-    16: {"start": "2026-07-20", "end": "2026-07-26", "limit": 12, "fp_daterange": 16},
-    17: {"start": "2026-07-27", "end": "2026-08-02", "limit": 12, "fp_daterange": 17},
-    18: {"start": "2026-08-03", "end": "2026-08-09", "limit": 12, "fp_daterange": 18},
-    19: {"start": "2026-08-10", "end": "2026-08-16", "limit": 12, "fp_daterange": 19},
-    20: {"start": "2026-08-17", "end": "2026-08-23", "limit": 12, "fp_daterange": 20},
-    21: {"start": "2026-08-24", "end": "2026-08-30", "limit": 12, "fp_daterange": 21},
-    22: {"start": "2026-08-31", "end": "2026-09-06", "limit": 12, "fp_daterange": 22},
+    1:  {"start": "2026-03-25", "end": "2026-04-05", "limit": 21},
+    2:  {"start": "2026-04-06", "end": "2026-04-12", "limit": 12},
+    3:  {"start": "2026-04-13", "end": "2026-04-19", "limit": 12},
+    4:  {"start": "2026-04-20", "end": "2026-04-26", "limit": 12},
+    5:  {"start": "2026-04-27", "end": "2026-05-03", "limit": 12},
+    6:  {"start": "2026-05-04", "end": "2026-05-10", "limit": 12},
+    7:  {"start": "2026-05-11", "end": "2026-05-17", "limit": 12},
+    8:  {"start": "2026-05-18", "end": "2026-05-24", "limit": 12},
+    9:  {"start": "2026-05-25", "end": "2026-05-31", "limit": 12},
+    10: {"start": "2026-06-01", "end": "2026-06-07", "limit": 12},
+    11: {"start": "2026-06-08", "end": "2026-06-14", "limit": 12},
+    12: {"start": "2026-06-15", "end": "2026-06-21", "limit": 12},
+    13: {"start": "2026-06-22", "end": "2026-06-28", "limit": 12},
+    14: {"start": "2026-06-29", "end": "2026-07-05", "limit": 12},
+    15: {"start": "2026-07-06", "end": "2026-07-19", "limit": 19},
+    16: {"start": "2026-07-20", "end": "2026-07-26", "limit": 12},
+    17: {"start": "2026-07-27", "end": "2026-08-02", "limit": 12},
+    18: {"start": "2026-08-03", "end": "2026-08-09", "limit": 12},
+    19: {"start": "2026-08-10", "end": "2026-08-16", "limit": 12},
+    20: {"start": "2026-08-17", "end": "2026-08-23", "limit": 12},
+    21: {"start": "2026-08-24", "end": "2026-08-30", "limit": 12},
+    22: {"start": "2026-08-31", "end": "2026-09-06", "limit": 12},
 }
 
 # ---------------------------------------------------------------------------
-# FantasyPros HTML parser
+# ESPN Scoreboard API
 #
-# FantasyPros renders a table where each row = one MLB team, each column =
-# one game date, and each cell contains the projected starter (e.g. "L. Severino").
-# We use Python's built-in HTMLParser — no extra dependencies needed.
+# ESPN's public scoreboard API returns probable starters per game per day,
+# up to ~7 days out. No auth required. One request per day in the period.
 #
-# Output: { "severino": ["2026-03-27", "2026-04-01"], "gallen": [...], ... }
-# Keys are lowercased last names for matching against ESPN full names.
+# Endpoint: site.api.espn.com/apis/site/v2/sports/baseball/mlb/scoreboard
+# Param: dates=YYYYMMDD
+#
+# Returns { "crochet": ["2026-03-27", "2026-04-01"], ... }
+# Keys are lowercased last names for matching against ESPN fantasy names.
 # ---------------------------------------------------------------------------
 
-class ProbablesTableParser(HTMLParser):
-    def __init__(self, col_dates):
-        super().__init__()
-        self.col_dates = col_dates
-        self.in_table = False
-        self.in_tbody = False
-        self.in_td = False
-        self.in_link = False
-        self.current_row_cells = []
-        self.current_cell_text = ""
-        self.current_link_text = ""
-        self.result = {}
-
-    def handle_starttag(self, tag, attrs):
-        if tag == "table":
-            self.in_table = True
-        if not self.in_table:
-            return
-        if tag == "tbody":
-            self.in_tbody = True
-        if tag == "tr":
-            self.current_row_cells = []
-        if tag in ("td", "th"):
-            self.in_td = True
-            self.current_cell_text = ""
-        if tag == "a":
-            self.in_link = True
-            self.current_link_text = ""
-
-    def handle_endtag(self, tag):
-        if tag == "table":
-            self.in_table = False
-            self.in_tbody = False
-        if tag == "tbody":
-            self.in_tbody = False
-        if tag == "a":
-            self.in_link = False
-            if self.in_td and self.current_link_text.strip():
-                self.current_cell_text = self.current_link_text.strip()
-        if tag in ("td", "th"):
-            self.in_td = False
-            self.current_row_cells.append(self.current_cell_text.strip())
-        if tag == "tr" and self.in_tbody:
-            # Row complete. cells[0] = team name, cells[1:] = one per game day
-            cells = self.current_row_cells
-            if len(cells) > 1:
-                for i, cell in enumerate(cells[1:]):
-                    if cell and i < len(self.col_dates):
-                        # Cell text is like "L. Severino" — grab the last name
-                        parts = cell.split()
-                        if len(parts) >= 2:
-                            last_name = parts[-1].lower()
-                            # Skip suffix-only keys like "jr." or "sr."
-                            if last_name in ("jr.", "sr.", "ii", "iii"):
-                                last_name = parts[-2].lower()
-                            date = self.col_dates[i]
-                            self.result.setdefault(last_name, [])
-                            if date not in self.result[last_name]:
-                                self.result[last_name].append(date)
-
-    def handle_data(self, data):
-        if self.in_link:
-            self.current_link_text += data
-        elif self.in_td:
-            self.current_cell_text += data
-
-
-def parse_fp_date_headers(html_text):
+def fetch_espn_probables(period_start, period_end):
     """
-    Pull the column date headers out of the FantasyPros HTML.
-    They look like: <th ...>Thu Mar 26</th>
-    Returns a list of YYYY-MM-DD strings, one per data column.
+    Fetch probable pitchers from ESPN scoreboard API for each day in the range.
+    Returns { "crochet": ["2026-03-27", ...], ... }
     """
-    pattern = r'<th[^>]*>\s*(?:\w{3}\s+)?(\w{3}\s+\d{1,2})\s*</th>'
-    matches = re.findall(pattern, html_text)
-    dates = []
-    now = datetime.now()
-    for m in matches:
+    start_dt = datetime.strptime(period_start, "%Y-%m-%d")
+    end_dt = datetime.strptime(period_end, "%Y-%m-%d")
+
+    result = {}
+    current = start_dt
+
+    while current <= end_dt:
+        date_str = current.strftime("%Y%m%d")       # ESPN wants YYYYMMDD format
+        iso_date = current.strftime("%Y-%m-%d")     # We store dates as YYYY-MM-DD
+
+        url = (
+            f"https://site.api.espn.com/apis/site/v2/sports/baseball/mlb/scoreboard"
+            f"?dates={date_str}&limit=50"
+        )
         try:
-            dt = datetime.strptime(f"{m} {now.year}", "%b %d %Y")
-            # Handle year rollover (e.g. Dec projections viewed in Nov)
-            if dt.month < now.month - 3:
-                dt = dt.replace(year=now.year + 1)
-            dates.append(dt.strftime("%Y-%m-%d"))
-        except ValueError:
-            pass
-    return dates
+            r = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
+            data = r.json()
 
+            for event in data.get("events", []):
+                for competitor in event.get("competitions", [{}])[0].get("competitors", []):
+                    for probable in competitor.get("probables", []):
+                        if probable.get("name") != "probableStartingPitcher":
+                            continue
+                        athlete = probable.get("athlete", {})
+                        full_name = athlete.get("fullName", "")
+                        if full_name:
+                            last_name = full_name.split()[-1].lower()
+                            # Skip suffixes like "Jr." — use second-to-last name instead
+                            if last_name in ("jr.", "sr.", "ii", "iii", "iv"):
+                                parts = full_name.split()
+                                last_name = parts[-2].lower() if len(parts) >= 2 else last_name
+                            result.setdefault(last_name, [])
+                            if iso_date not in result[last_name]:
+                                result[last_name].append(iso_date)
+        except Exception as e:
+            print(f"[mlb.py] ESPN scoreboard fetch failed for {date_str}: {e}")
 
-def fetch_fantasypros(fp_daterange):
-    """
-    Fetch the FantasyPros probables grid for the given week index.
-    Returns { "severino": ["2026-03-27", ...], ... } or {} on failure.
-    """
-    url = f"https://www.fantasypros.com/mlb/probable-pitchers.php?daterange={fp_daterange}"
-    try:
-        resp = requests.get(url, headers={
-            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-            "Accept-Language": "en-US,en;q=0.5",
-            "Referer": "https://www.fantasypros.com/mlb/",
-        }, timeout=10)
-        print(f"[mlb.py] FantasyPros status: {resp.status_code}, len: {len(resp.text)}")
-        print(f"[mlb.py] FantasyPros HTML snippet: {resp.text[5000:6000]}")
-        html = resp.text
-    except Exception as e:
-        print(f"[mlb.py] FantasyPros fetch failed: {e}")
-        return {}
+        current += timedelta(days=1)
 
-    col_dates = parse_fp_date_headers(html)
-    print(f"[mlb.py] FantasyPros col_dates found: {col_dates}")
-
-    if not col_dates:
-        print("[mlb.py] FantasyPros: could not parse date headers")
-        return {}
-
-    parser = ProbablesTableParser(col_dates)
-    parser.feed(html)
-    print(f"[mlb.py] FantasyPros parsed {len(parser.result)} pitchers")
-    return parser.result
+    print(f"[mlb.py] ESPN scoreboard: {len(result)} pitchers across {(end_dt - start_dt).days + 1} days")
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -288,7 +216,7 @@ def get_starts_for_players(player_names, matchup_period):
 
     mp = MATCHUP_PERIODS[matchup_period]
     mlb_data = fetch_mlb_probables(mp["start"], mp["end"])
-    fp_data = fetch_fantasypros(mp["fp_daterange"])
+    fp_data = fetch_espn_probables(mp["start"], mp["end"])
     pitcher_starts = build_pitcher_starts(mlb_data, fp_data, mp["start"], mp["end"])
 
     result = {}
@@ -317,7 +245,7 @@ class handler(BaseHTTPRequestHandler):
 
         mp = MATCHUP_PERIODS[period]
         mlb_data = fetch_mlb_probables(mp["start"], mp["end"])
-        fp_data = fetch_fantasypros(mp["fp_daterange"])
+        fp_data = fetch_espn_probables(mp["start"], mp["end"])
         pitcher_starts = build_pitcher_starts(mlb_data, fp_data, mp["start"], mp["end"])
 
         start_dt = datetime.strptime(mp["start"], "%Y-%m-%d")
