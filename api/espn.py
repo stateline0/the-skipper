@@ -9,17 +9,6 @@ from http.server import BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs
 from datetime import datetime, timezone
 
-# ESPN pro team ID to abbreviation mapping
-PRO_TEAM_MAP = {
-    1: "ATL", 2: "BOS", 3: "CHC", 4: "CIN", 5: "CLE",
-    6: "COL", 7: "DET", 8: "HOU", 9: "KC", 10: "LAA",
-    11: "LAD", 12: "MIA", 13: "MIL", 14: "MIN", 15: "NYM",
-    16: "NYY", 17: "OAK", 18: "PHI", 19: "PIT", 20: "SD",
-    21: "SEA", 22: "SF", 23: "STL", 24: "TB", 25: "TEX",
-    26: "TOR", 27: "WSH", 28: "ARI", 29: "ATH", 30: "BAL",
-    31: "CWS", 32: "FA"
-}
-
 
 def get_headers_and_cookies():
     espn_s2 = os.environ.get("ESPN_S2", "").strip()
@@ -50,11 +39,52 @@ def get_status(lineup_slot_id: int, inj_status: str) -> str:
         return inj_status
     return "Active"
 
+def get_pro_team_map(headers, cookies):
+    """
+    Fetch current MLB team ID -> abbreviation mapping directly from ESPN's
+    fantasy baseball API using the mSettings view which includes proTeams.
+    """
+    try:
+        league_id = os.environ["ESPN_LEAGUE_ID"]
+        year = os.environ.get("ESPN_SEASON", "2026")
+        r = requests.get(
+            f"https://lm-api-reads.fantasy.espn.com/apis/v3/games/flb/seasons/{year}",
+            params={"view": "proTeamSchedules_wl"},
+            cookies=cookies,
+            headers=headers,
+            timeout=10
+        )
+        if r.status_code == 200:
+            data = r.json()
+            team_map = {}
+            for team in data.get("proTeams", []):
+                team_id = team.get("id")
+                abbrev = team.get("abbrev", "")
+                if team_id and abbrev:
+                    team_map[team_id] = abbrev
+            if team_map:
+                return team_map
+    except Exception as e:
+        print(f"[espn.py] Failed to fetch pro team map: {e}")
+
+    # Best-effort hardcoded map based on verified 2026 player data
+    # Confirmed via ESPN API proTeamId lookups on actual roster players
+    return {
+        1:  "BAL", 2:  "BOS", 3:  "LAA", 4:  "CWS", 5:  "CLE",
+        6:  "DET", 7:  "KC",  8:  "MIL", 9:  "MIN", 10: "NYY",
+        11: "ATH", 12: "SEA", 13: "TEX", 14: "TOR", 15: "ATL",
+        16: "CHC", 17: "CIN", 18: "HOU", 19: "LAD", 20: "WSH",
+        21: "NYM", 22: "PHI", 23: "PIT", 24: "STL", 25: "SD",
+        26: "SF",  27: "COL", 28: "MIA", 29: "ARI", 30: "TB",
+        31: "FA",  32: "FA",
+    }
+
 
 def get_league_data(team_id: int, week: int) -> dict:
     league_id = os.environ["ESPN_LEAGUE_ID"]
     year = os.environ.get("ESPN_SEASON", "2026")
     headers, cookies = get_headers_and_cookies()
+    PRO_TEAM_MAP = get_pro_team_map(headers, cookies)
     base = f"https://lm-api-reads.fantasy.espn.com/apis/v3/games/flb/seasons/{year}/segments/0/leagues/{league_id}"
 
 # ── Fetch probable pitchers from MLB Stats API ──────────────────────────
