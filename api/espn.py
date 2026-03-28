@@ -45,8 +45,11 @@ def get_pro_team_map(headers, cookies):
     fantasy baseball pro teams endpoint.
     """
     try:
+        league_id = os.environ["ESPN_LEAGUE_ID"]
+        year = os.environ.get("ESPN_SEASON", "2026")
         r = requests.get(
-            "https://lm-api-reads.fantasy.espn.com/apis/v3/games/flb/proTeams",
+            f"https://lm-api-reads.fantasy.espn.com/apis/v3/games/flb/seasons/{year}/segments/0/leagues/{league_id}",
+            params={"view": "proTeamSchedules_wl"},
             cookies=cookies,
             headers=headers,
             timeout=10
