@@ -166,6 +166,7 @@ def fetch_fantasypros(fp_daterange):
             "Referer": "https://www.fantasypros.com/mlb/",
         }, timeout=10)
         print(f"[mlb.py] FantasyPros status: {resp.status_code}, len: {len(resp.text)}")
+        print(f"[mlb.py] FantasyPros HTML snippet: {resp.text[5000:6000]}")
         html = resp.text
     except Exception as e:
         print(f"[mlb.py] FantasyPros fetch failed: {e}")
