@@ -97,7 +97,6 @@ def fetch_espn_probables(period_start, period_end):
                         full_name = athlete.get("fullName", "")
                         if full_name:
                             last_name = full_name.split()[-1].lower()
-                            # Skip suffixes like "Jr." — use second-to-last name instead
                             if last_name in ("jr.", "sr.", "ii", "iii", "iv"):
                                 parts = full_name.split()
                                 last_name = parts[-2].lower() if len(parts) >= 2 else last_name
@@ -147,6 +146,9 @@ def fetch_mlb_probables(start_date, end_date):
                     full_name = pitcher.get("fullName", "")
                     if full_name:
                         last_name = full_name.split()[-1].lower()
+                        if last_name in ("jr.", "sr.", "ii", "iii", "iv"):
+                            parts = full_name.split()
+                            last_name = parts[-2].lower() if len(parts) >= 2 else last_name
                         result.setdefault(last_name, [])
                         if game_date not in result[last_name]:
                             result[last_name].append(game_date)
