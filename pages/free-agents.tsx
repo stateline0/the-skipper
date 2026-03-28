@@ -9,10 +9,16 @@ interface FreeSP {
   opps?: string; checked: boolean
 }
 
+interface MatchupPeriod {
+  period: number; label: string; start: string; end: string; limit: number
+}
+
 // ─── Main component ───────────────────────────────────────────────────────────
 export default function FreeAgents() {
   const router = useRouter()
   const [loading, setLoading] = useState(false)
+  const [matchupPeriods, setMatchupPeriods] = useState<MatchupPeriod[]>([])
+  const [selectedPeriod, setSelectedPeriod] = useState(1)
   const [error, setError] = useState('')
   const [freeSPs, setFreeSPs] = useState<FreeSP[]>([])
   const [currentWeek, setCurrentWeek] = useState(1)
@@ -24,12 +30,15 @@ export default function FreeAgents() {
       setFreeSPs(JSON.parse(cached))
     }
 
-    // Also pull currentWeek from the roster cache if available
-    const rosterCache = sessionStorage.getItem('skipper_roster')
-    if (rosterCache) {
-      const data = JSON.parse(rosterCache)
-      if (data.currentWeek) setCurrentWeek(data.currentWeek)
-    }
+    // Pull selected period from sessionStorage so both pages stay in sync
+    const savedPeriod = sessionStorage.getItem('skipper_selected_period')
+    if (savedPeriod) setSelectedPeriod(parseInt(savedPeriod))
+
+    // Load matchup periods from config
+    fetch('/api/config')
+      .then(r => r.json())
+      .then(data => { if (data.matchupPeriods) setMatchupPeriods(data.matchupPeriods) })
+      .catch(() => {})
   }, [])
 
   const fetchFreeAgents = useCallback(async () => {
@@ -40,7 +49,8 @@ export default function FreeAgents() {
       const config = await configRes.json()
       const teamId = config.teamId || '1'
 
-      const res = await fetch(`/api/espn?teamId=${teamId}&week=${currentWeek}`)
+      sessionStorage.setItem('skipper_selected_period', String(selectedPeriod))
+      const res = await fetch(`/api/espn?teamId=${teamId}&week=${selectedPeriod}`)
       const data = await res.json()
       if (!data.ok) throw new Error(data.error || 'Failed to load ESPN data')
 
@@ -59,7 +69,7 @@ export default function FreeAgents() {
     } finally {
       setLoading(false)
     }
-  }, [currentWeek])
+  }, [selectedPeriod])
 
   function toggleCheck(index: number) {
     const updated = [...freeSPs]
@@ -102,6 +112,25 @@ export default function FreeAgents() {
               Available SPs in your league — check the ones to include in your analysis
             </p>
           </div>
+          {matchupPeriods.length > 0 && (
+            <select
+              value={selectedPeriod}
+              onChange={e => setSelectedPeriod(parseInt(e.target.value))}
+              style={{
+                fontFamily: 'var(--mono)', fontSize: 12,
+                padding: '8px 12px', borderRadius: 'var(--radius)',
+                border: '1.5px solid var(--border-strong)',
+                background: 'var(--white)', color: 'var(--ink)',
+                cursor: 'pointer', outline: 'none',
+              }}
+            >
+              {matchupPeriods.map(p => (
+                <option key={p.period} value={p.period}>
+                  {p.label} · {p.start}–{p.end}
+                </option>
+              ))}
+            </select>
+          )}
           <button
             onClick={fetchFreeAgents}
             disabled={loading}

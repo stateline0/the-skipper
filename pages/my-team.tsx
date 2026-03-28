@@ -5,7 +5,11 @@ import { useRouter } from 'next/router'
 // ─── Types ────────────────────────────────────────────────────────────────────
 interface RosterSP {
   name: string; team: string; slot: string; injuryStatus: string
-  starts: number; projFpts: number; percentOwned: number
+  starts: number; projFpts: number; percentOwned: number; startDates?: any[]
+}
+
+interface MatchupPeriod {
+  period: number; label: string; start: string; end: string; limit: number
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -81,6 +85,8 @@ export default function MyTeam() {
   const [weekEnd, setWeekEnd] = useState('')
   const [teamName, setTeamName] = useState('')
   const [currentWeek, setCurrentWeek] = useState(1)
+  const [matchupPeriods, setMatchupPeriods] = useState<MatchupPeriod[]>([])
+  const [selectedPeriod, setSelectedPeriod] = useState(1)
 
   const weekLabel = getWeekRange(weekStart, weekEnd)
   const needed = Math.max(0, limit - confirmedStarts)
@@ -91,6 +97,13 @@ export default function MyTeam() {
       .then(r => r.json())
       .then(data => {
         if (data.defaultLimit) setLimit(data.defaultLimit)
+        if (data.matchupPeriods) {
+          setMatchupPeriods(data.matchupPeriods)
+          // Auto-select current period from sessionStorage if available,
+          // otherwise default to period 1
+          const cached = sessionStorage.getItem('skipper_selected_period')
+          if (cached) setSelectedPeriod(parseInt(cached))
+        }
       })
       .catch(() => {})
   }, [])
@@ -110,6 +123,12 @@ export default function MyTeam() {
     }
   }, [])
 
+  // When period changes, update the starts limit to match that period's limit
+  useEffect(() => {
+    const period = matchupPeriods.find(p => p.period === selectedPeriod)
+    if (period) setLimit(period.limit)
+  }, [selectedPeriod, matchupPeriods])
+
   const fetchRoster = useCallback(async () => {
     setLoading(true)
     setError('')
@@ -118,7 +137,8 @@ export default function MyTeam() {
       const config = await configRes.json()
       const teamId = config.teamId || '1'
 
-      const res = await fetch(`/api/espn?teamId=${teamId}&week=${currentWeek}`)
+      sessionStorage.setItem('skipper_selected_period', String(selectedPeriod))
+      const res = await fetch(`/api/espn?teamId=${teamId}&week=${selectedPeriod}`)
       const data = await res.json()
       if (!data.ok) throw new Error(data.error || 'Failed to load ESPN data')
 
@@ -152,7 +172,7 @@ export default function MyTeam() {
     } finally {
       setLoading(false)
     }
-  }, [currentWeek])
+  }, [selectedPeriod])
 
   return (
     <>
@@ -191,6 +211,26 @@ export default function MyTeam() {
               {teamName ? `${teamName} · ` : ''}{weekLabel}
             </p>
           </div>
+          {/* Period selector */}
+          {matchupPeriods.length > 0 && (
+            <select
+              value={selectedPeriod}
+              onChange={e => setSelectedPeriod(parseInt(e.target.value))}
+              style={{
+                fontFamily: 'var(--mono)', fontSize: 12,
+                padding: '8px 12px', borderRadius: 'var(--radius)',
+                border: '1.5px solid var(--border-strong)',
+                background: 'var(--white)', color: 'var(--ink)',
+                cursor: 'pointer', outline: 'none',
+              }}
+            >
+              {matchupPeriods.map(p => (
+                <option key={p.period} value={p.period}>
+                  {p.label} · {p.start}–{p.end}
+                </option>
+              ))}
+            </select>
+          )}
           <button
             onClick={fetchRoster}
             disabled={loading}
