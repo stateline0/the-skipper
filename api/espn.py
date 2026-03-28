@@ -42,30 +42,32 @@ def get_status(lineup_slot_id: int, inj_status: str) -> str:
 def get_pro_team_map(headers, cookies):
     """
     Fetch current MLB team ID -> abbreviation mapping from ESPN's
-    fantasy baseball pro teams endpoint. Falls back to hardcoded map on failure.
+    fantasy baseball pro teams endpoint.
     """
     try:
         r = requests.get(
             "https://lm-api-reads.fantasy.espn.com/apis/v3/games/flb/proTeams",
-            params={"scoringPeriodId": 1, "view": "proTeamSchedules_wl"},
             cookies=cookies,
             headers=headers,
             timeout=10
         )
+        print(f"[espn.py] proTeams status: {r.status_code}")
         if r.status_code == 200:
             data = r.json()
+            print(f"[espn.py] proTeams keys: {list(data.keys())}")
             team_map = {}
             for team in data.get("proTeams", []):
                 team_id = team.get("id")
                 abbrev = team.get("abbrev", "")
                 if team_id and abbrev:
                     team_map[team_id] = abbrev
+            print(f"[espn.py] proTeams map: {team_map}")
             if team_map:
                 return team_map
     except Exception as e:
         print(f"[espn.py] Failed to fetch pro team map: {e}")
 
-    # Hardcoded fallback — update if ESPN changes IDs
+    # Hardcoded fallback
     return {
         1: "ATL", 2: "BOS", 3: "CHC", 4: "CIN", 5: "CLE",
         6: "COL", 7: "DET", 8: "HOU", 9: "KC",  10: "LAA",
@@ -74,7 +76,7 @@ def get_pro_team_map(headers, cookies):
         21: "SEA", 22: "SF",  23: "STL", 24: "TB",  25: "TEX",
         26: "TOR", 27: "WSH", 28: "ARI", 29: "ATH", 30: "BAL",
         31: "CWS", 32: "FA",
-    }    
+    }   
 
 
 def get_league_data(team_id: int, week: int) -> dict:
