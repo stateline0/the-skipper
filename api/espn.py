@@ -54,17 +54,14 @@ def get_pro_team_map(headers, cookies):
             headers=headers,
             timeout=10
         )
-        print(f"[espn.py] proTeams status: {r.status_code}")
         if r.status_code == 200:
             data = r.json()
-            print(f"[espn.py] proTeams keys: {list(data.keys())}")
             team_map = {}
             for team in data.get("proTeams", []):
                 team_id = team.get("id")
                 abbrev = team.get("abbrev", "")
                 if team_id and abbrev:
                     team_map[team_id] = abbrev
-            print(f"[espn.py] proTeams map: {team_map}")
             if team_map:
                 return team_map
     except Exception as e:
@@ -72,12 +69,12 @@ def get_pro_team_map(headers, cookies):
 
     # Hardcoded fallback
     return {
-        1: "ATL", 2: "BOS", 3: "CHC", 4: "CIN", 5: "CLE",
-        6: "COL", 7: "DET", 8: "HOU", 9: "KC",  10: "LAA",
-        11: "LAD", 12: "MIA", 13: "MIL", 14: "MIN", 15: "NYM",
-        16: "NYY", 17: "OAK", 18: "PHI", 19: "PIT", 20: "SD",
-        21: "SEA", 22: "SF",  23: "STL", 24: "TB",  25: "TEX",
-        26: "TOR", 27: "WSH", 28: "ARI", 29: "ATH", 30: "BAL",
+        1:  "BAL", 2:  "BOS", 3:  "LAA", 4:  "CWS", 5:  "CLE",
+        6:  "COL", 7:  "DET", 8:  "KC",  9:  "MIN", 10: "NYY",
+        11: "OAK", 12: "MIA", 13: "MIL", 14: "TOR", 15: "ATL",
+        16: "CHC", 17: "CIN", 18: "HOU", 19: "LAD", 20: "WSH",
+        21: "NYM", 22: "SF",  23: "STL", 24: "PHI", 25: "SD",
+        26: "SEA", 27: "TEX", 28: "PIT", 29: "ARI", 30: "TB",
         31: "CWS", 32: "FA",
     }   
 
