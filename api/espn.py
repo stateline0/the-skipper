@@ -57,6 +57,76 @@ def get_league_data(team_id: int, week: int) -> dict:
     headers, cookies = get_headers_and_cookies()
     base = f"https://lm-api-reads.fantasy.espn.com/apis/v3/games/flb/seasons/{year}/segments/0/leagues/{league_id}"
 
+# ── Fetch probable pitchers from MLB Stats API ──────────────────────────
+    MATCHUP_PERIODS = {
+        1:  ("2026-03-25", "2026-04-05",  21),
+        2:  ("2026-04-06", "2026-04-12",  12),
+        3:  ("2026-04-13", "2026-04-19",  12),
+        4:  ("2026-04-20", "2026-04-26",  12),
+        5:  ("2026-04-27", "2026-05-03",  12),
+        6:  ("2026-05-04", "2026-05-10",  12),
+        7:  ("2026-05-11", "2026-05-17",  12),
+        8:  ("2026-05-18", "2026-05-24",  12),
+        9:  ("2026-05-25", "2026-05-31",  12),
+        10: ("2026-06-01", "2026-06-07",  12),
+        11: ("2026-06-08", "2026-06-14",  12),
+        12: ("2026-06-15", "2026-06-21",  12),
+        13: ("2026-06-22", "2026-06-28",  12),
+        14: ("2026-06-29", "2026-07-05",  12),
+        15: ("2026-07-06", "2026-07-19",  19),
+        16: ("2026-07-20", "2026-07-26",  12),
+        17: ("2026-07-27", "2026-08-02",  12),
+        18: ("2026-08-03", "2026-08-09",  12),
+        19: ("2026-08-10", "2026-08-16",  12),
+        20: ("2026-08-17", "2026-08-23",  12),
+        21: ("2026-08-24", "2026-08-30",  12),
+        22: ("2026-08-31", "2026-09-06",  12),
+    }
+
+    probable_pitchers = {}
+    week_start = ""
+    week_end = ""
+    matchup_limit = int(os.environ.get("ESPN_STARTS_LIMIT", "12"))
+
+    if week in MATCHUP_PERIODS:
+        mlb_start, mlb_end, matchup_limit = MATCHUP_PERIODS[week]
+
+        def fmt_date(d):
+            from datetime import datetime
+            return datetime.strptime(d, "%Y-%m-%d").strftime("%b %-d")
+
+        week_start = fmt_date(mlb_start)
+        week_end = fmt_date(mlb_end)
+
+        try:
+            mlb_r = requests.get(
+                "https://statsapi.mlb.com/api/v1/schedule",
+                params={
+                    "sportId": 1,
+                    "startDate": mlb_start,
+                    "endDate": mlb_end,
+                    "hydrate": "probablePitcher",
+                    "gameType": "R",
+                },
+                timeout=15
+            )
+            if mlb_r.status_code == 200:
+                mlb_data = mlb_r.json()
+                for date_obj in mlb_data.get("dates", []):
+                    date_str = date_obj.get("date", "")
+                    display_date = fmt_date(date_str) if date_str else ""
+                    for game in date_obj.get("games", []):
+                        for side in ("away", "home"):
+                            team_data = game.get("teams", {}).get(side, {})
+                            pitcher = team_data.get("probablePitcher", {})
+                            name = pitcher.get("fullName", "")
+                            if name:
+                                if name not in probable_pitchers:
+                                    probable_pitchers[name] = []
+                                probable_pitchers[name].append(display_date)
+        except Exception:
+            pass  # If MLB API fails, fall back to ESPN data
+
     # Fetch roster, team info, settings, and per-period stats in one call
     r = requests.get(
         base,
@@ -79,18 +149,6 @@ def get_league_data(team_id: int, week: int) -> dict:
     my_team = next((t for t in teams if t.get("id") == team_id), teams[0] if teams else {})
     team_name = my_team.get("name", "").strip()
     current_week = data.get("scoringPeriodId", week)
-
-    # Get matchup period dates
-    schedule_settings = data.get("settings", {}).get("scheduleSettings", {})
-    matchup_dates = schedule_settings.get("matchupPeriodDates", {})
-    period_dates = matchup_dates.get(str(current_week), [])
-    week_start = ""
-    week_end = ""
-    if len(period_dates) >= 2:
-        def fmt_ts(ts):
-            return datetime.fromtimestamp(ts / 1000, tz=timezone.utc).strftime("%b %-d")
-        week_start = fmt_ts(period_dates[0])
-        week_end = fmt_ts(period_dates[-1])
 
     # Fetch per-player projected stats for this scoring period separately
     # using kona_player_info which returns richer stat data
@@ -156,15 +214,21 @@ def get_league_data(team_id: int, week: int) -> dict:
         pro_team_id = player.get("proTeamId", 0)
         team_abbrev = PRO_TEAM_MAP.get(pro_team_id, str(pro_team_id))
 
+        player_name = player.get("fullName", "Unknown")
+
         if lineup_slot in IL_SLOTS or inj_status in ("IL", "IL10", "IL15", "IL60", "SUSP"):
             scheduled_starts = 0
             proj_fpts = 0.0
         else:
-            scheduled_starts = starts_by_player.get(player_id, 0)
+            # Use MLB Stats API probable pitcher data if available
+            if player_name in probable_pitchers:
+                scheduled_starts = len(probable_pitchers[player_name])
+            else:
+                scheduled_starts = starts_by_player.get(player_id, 0)
+                # Fallback for SP-eligible only (not RPs)
+                if scheduled_starts == 0 and 14 in eligible_slots:
+                    scheduled_starts = 1  # Conservative fallback — not yet announced
             proj_fpts = proj_fpts_by_player.get(player_id, round(float(pool_entry.get("appliedStatTotal", 0)), 1))
-            # Fallback for SP-eligible only (not RPs)
-            if scheduled_starts == 0 and 14 in eligible_slots:
-                scheduled_starts = 2
 
         roster_sps.append({
             "name": player.get("fullName", "Unknown"),
@@ -213,9 +277,11 @@ def get_league_data(team_id: int, week: int) -> dict:
             pro_team_id = player.get("proTeamId", 0)
             team_abbrev = PRO_TEAM_MAP.get(pro_team_id, str(pro_team_id))
             pid = p.get("id")
-            starts = starts_by_player.get(pid, 0)
-            if starts == 0 and 14 in eligible_slots:
-                starts = 2
+            fa_name = player.get("fullName", "")
+            if fa_name in probable_pitchers:
+                starts = len(probable_pitchers[fa_name])
+            else:
+                starts = 1 if 14 in eligible_slots else 0
             free_agents.append({
                 "name": player.get("fullName", "Unknown"),
                 "team": team_abbrev,
