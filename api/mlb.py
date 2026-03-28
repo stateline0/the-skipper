@@ -146,6 +146,8 @@ def fetch_mlb_probables(start_date, end_date):
                     full_name = pitcher.get("fullName", "")
                     if full_name:
                         last_name = full_name.split()[-1].lower()
+                        if full_name:
+                        print(f"[mlb.py] MLB pitcher: {full_name}")
                         if last_name in ("jr.", "sr.", "ii", "iii", "iv"):
                             parts = full_name.split()
                             last_name = parts[-2].lower() if len(parts) >= 2 else last_name
