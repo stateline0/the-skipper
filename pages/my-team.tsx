@@ -120,6 +120,9 @@ export default function MyTeam() {
       setWeekEnd(data.weekEnd || '')
       setTeamName(data.teamName || '')
       setCurrentWeek(data.currentWeek || 1)
+    } else {
+      // No cache — auto-fetch on first visit
+      fetchRoster()
     }
   }, [])
 
@@ -144,8 +147,8 @@ export default function MyTeam() {
 
       const roster: RosterSP[] = data.rosterSPs.map((p: any) => ({
         ...p,
-        starts: p.starts || 2,
-        projFpts: p.projFpts || Math.round(Math.random() * 20 + 12),
+        starts: p.starts ?? 0,
+        projFpts: p.projFpts ?? 0,
       }))
 
       const starts = roster.reduce((a, p) => a + p.starts, 0)
@@ -320,7 +323,7 @@ export default function MyTeam() {
                   <thead>
                     <tr>
                       <th>Pitcher</th><th>Team</th><th>Slot</th>
-                      <th>Starts</th><th>Proj FPTS</th><th>Status</th>
+                      <th>Starts</th><th>Proj FPTS</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -336,13 +339,6 @@ export default function MyTeam() {
                         <td><Badge label={p.slot} color={p.slot === 'IL' ? 'red' : p.slot === 'RP' ? 'amber' : 'blue'} /></td>
                         <td style={{ textAlign: 'center', fontFamily: 'var(--mono)', fontWeight: 600 }}>{p.starts}</td>
                         <td style={{ textAlign: 'center', fontFamily: 'var(--mono)', fontWeight: 600, color: 'var(--green)' }}>{p.projFpts.toFixed(1)}</td>
-                        <td>
-                          {p.injuryStatus === 'Active'
-                            ? <Badge label="Active" color="green" />
-                            : p.injuryStatus === 'IL'
-                            ? <Badge label="IL" color="red" />
-                            : <Badge label={p.injuryStatus || 'Active'} color="amber" />}
-                        </td>
                       </tr>
                     ))}
                   </tbody>

@@ -56,8 +56,8 @@ export default function FreeAgents() {
 
       const fas: FreeSP[] = (data.freeAgentSPs || []).map((p: any) => ({
         ...p,
-        starts: p.starts || 2,
-        projFpts: p.projFpts || Math.round(Math.random() * 18 + 8),
+        starts: p.starts ?? 0,
+        projFpts: p.projFpts ?? 0,
         opps: p.opps || '',
         checked: p.percentOwned >= 15,
       }))
