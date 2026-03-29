@@ -121,6 +121,14 @@ Last updated: March 28, 2026
 ### Free agents cache fix
 - [ ] Apply same stale cache auto-refresh logic to Free Agents page (already done on My Team)
 
+### Roster transaction lag fix
+- [ ] After the first MLB game of the day starts, ESPN locks today's roster
+- [ ] Transactions made today (adds/drops) don't appear until tomorrow's scoring period
+- [ ] Fix: detect whether any game today is `in_progress` or `final` using the schedule data we already have
+- [ ] If yes, fetch `scoringPeriodId = currentScoringPeriod + 1` from ESPN to get the post-transaction roster
+- [ ] This ensures adds made during the day show up immediately in The Skipper
+- [ ] Edge case: last day of a matchup period — tomorrow is a new period, handle gracefully
+
 ### Responsive layout (mobile)
 - [ ] Sidebar collapses on mobile
 - [ ] Top header gets hamburger menu on small screens
