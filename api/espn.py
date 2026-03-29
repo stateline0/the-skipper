@@ -246,6 +246,7 @@ def get_league_data(team_id: int, week: int) -> dict:
         team_abbrev = PRO_TEAM_MAP.get(pro_team_id, str(pro_team_id))
 
         player_name = player.get("fullName", "Unknown")
+        print(f"[DEBUG] {player_name} | lineupSlot={lineup_slot} | inj={inj_status} | eligible={eligible_slots}")
 
         if lineup_slot in IL_SLOTS:
             scheduled_starts = 0
@@ -269,6 +270,7 @@ def get_league_data(team_id: int, week: int) -> dict:
             "starts": scheduled_starts,
             "projFpts": proj_fpts,
             "percentOwned": round(pool_entry.get("percentOwned", 100), 1),
+            "lineupSlotRaw": lineup_slot,   # temporary debug field
         })
 
     # Sort: SP first, then RP, then IL; then starts desc, then fpts desc
