@@ -165,7 +165,6 @@ def get_league_data(team_id: int, week: int) -> dict:
             ("view", "mTeam"),
             ("view", "mSettings"),
             ("view", "mMatchupScore"),
-            ("scoringPeriodId", week),
             ("_", int(datetime.now().timestamp())),
         ],
         cookies=cookies,
@@ -246,8 +245,9 @@ def get_league_data(team_id: int, week: int) -> dict:
         team_abbrev = PRO_TEAM_MAP.get(pro_team_id, str(pro_team_id))
 
         player_name = player.get("fullName", "Unknown")
+        print(f"[DEBUG] {player_name} | lineupSlot={lineup_slot} | inj={inj_status} | eligible={eligible_slots}")
 
-        if lineup_slot in IL_SLOTS or inj_status in ("IL", "IL10", "IL15", "IL60", "SUSP"):
+        if lineup_slot in IL_SLOTS:
             scheduled_starts = 0
             proj_fpts = 0.0
         else:
@@ -268,7 +268,7 @@ def get_league_data(team_id: int, week: int) -> dict:
             "injuryStatus": status_label,
             "starts": scheduled_starts,
             "projFpts": proj_fpts,
-            "percentOwned": round(pool_entry.get("percentOwned", 100), 1),
+            "percentOwned": round(pool_entry.get("percentOwned", 100), 1)
         })
 
     # Sort: SP first, then RP, then IL; then starts desc, then fpts desc
