@@ -90,14 +90,19 @@ export default function MyTeam() {
     const cached = sessionStorage.getItem('skipper_roster')
     if (cached) {
       const data = JSON.parse(cached)
-      setRosterSPs(data.rosterSPs || [])
-      setConfirmedStarts(data.confirmedStarts || 0)
-      setWeekStart(data.weekStart || '')
-      setWeekEnd(data.weekEnd || '')
-      setTeamName(data.teamName || '')
-      setCurrentWeek(data.currentWeek || 1)
-      setSchedule(data.schedule || {})
-      setMatchupDates(data.matchupDates || [])
+      // If cache is missing matchupDates, it's stale — auto-fetch fresh data
+      if (!data.matchupDates || data.matchupDates.length === 0) {
+        fetchRoster()
+      } else {
+        setRosterSPs(data.rosterSPs || [])
+        setConfirmedStarts(data.confirmedStarts || 0)
+        setWeekStart(data.weekStart || '')
+        setWeekEnd(data.weekEnd || '')
+        setTeamName(data.teamName || '')
+        setCurrentWeek(data.currentWeek || 1)
+        setSchedule(data.schedule || {})
+        setMatchupDates(data.matchupDates || [])
+      }
     } else {
       fetchRoster()
     }

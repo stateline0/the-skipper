@@ -119,14 +119,16 @@ function DayCell({ pitcher, date, schedule, today }: {
     if (isStarting) {
       // They started — show opp + indicator
       // Future: actual FPTS will go here once box score data is wired up
-      const indicator = startInfo.confirmed ? '✓' : '~'
-      const color = startInfo.confirmed ? 'var(--green)' : 'var(--ink-3)'
+        const indicator = startInfo.confirmed
+            ? <span style={{ fontSize: 11, color: 'var(--green)' }}>✓</span>
+            : <span style={{ fontSize: 10, fontWeight: 700, fontFamily: 'var(--mono)', color: 'var(--blue)', background: 'var(--blue-light)', borderRadius: 99, padding: '1px 5px' }}>P</span>
+        const color = startInfo.confirmed ? 'var(--green)' : 'var(--ink-3)'
       return (
         <div style={{ textAlign: 'center' }}>
           <div style={{ fontSize: 11, fontFamily: 'var(--mono)', fontWeight: 700, color }}>
             {oppLabel}
           </div>
-          <div style={{ fontSize: 10, color, marginTop: 1 }}>{indicator}</div>
+          <div style={{ marginTop: 1 }}>{indicator}</div>
         </div>
       )
     } else {
@@ -141,7 +143,9 @@ function DayCell({ pitcher, date, schedule, today }: {
 
   // Future game
   if (isStarting) {
-    const indicator = startInfo.confirmed ? '✅' : '🕐'
+    const indicator = startInfo.confirmed
+        ? <span style={{ fontSize: 11 }}>✅</span>
+        : <span style={{ fontSize: 10, fontWeight: 700, fontFamily: 'var(--mono)', color: 'var(--blue)', background: 'var(--blue-light)', borderRadius: 99, padding: '1px 5px' }}>P</span>
     return (
       <div style={{ textAlign: 'center' }}>
         <div style={{ fontSize: 11, fontFamily: 'var(--mono)', fontWeight: 700, color: 'var(--ink)' }}>
