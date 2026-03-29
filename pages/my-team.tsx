@@ -1,6 +1,7 @@
 import Head from 'next/head'
 import { useState, useEffect, useCallback } from 'react'
 import { useRouter } from 'next/router'
+import ScheduleGrid from '../components/ScheduleGrid'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 interface RosterSP {
@@ -23,26 +24,8 @@ function getWeekRange(start?: string, end?: string) {
   return `${fmt(mon)} – ${fmt(sun)}`
 }
 
-// ─── Sub-components ───────────────────────────────────────────────────────────
-function Badge({ label, color }: { label: string; color: 'green' | 'amber' | 'red' | 'blue' | 'gray' }) {
-  const styles: Record<string, React.CSSProperties> = {
-    green: { background: 'var(--green-light)', color: 'var(--green)' },
-    amber: { background: 'var(--amber-light)', color: 'var(--amber)' },
-    red:   { background: 'var(--red-light)',   color: 'var(--red)' },
-    blue:  { background: 'var(--blue-light)',  color: 'var(--blue)' },
-    gray:  { background: 'var(--paper-2)',     color: 'var(--ink-3)' },
-  }
-  return (
-    <span style={{
-      display: 'inline-block', fontSize: 11, fontWeight: 600,
-      fontFamily: 'var(--mono)', padding: '2px 8px', borderRadius: 99,
-      letterSpacing: '0.04em', ...styles[color],
-    }}>{label}</span>
-  )
-}
-
-function MetricCard({ label, value, sub, accent }: {
-  label: string; value: string | number; sub?: string; accent?: 'ok' | 'warn' | 'bad'
+function MetricCard({ label, value, accent }: {
+  label: string; value: string | number; accent?: 'ok' | 'warn' | 'bad'
 }) {
   const accentColor = { ok: 'var(--green)', warn: '#e89020', bad: 'var(--red)' }
   return (
@@ -55,7 +38,6 @@ function MetricCard({ label, value, sub, accent }: {
         fontSize: 26, fontWeight: 700, letterSpacing: '-0.03em',
         color: accent ? accentColor[accent] : 'var(--ink)',
       }}>{value}</div>
-      {sub && <div style={{ fontSize: 11, color: 'var(--ink-3)', marginTop: 3 }}>{sub}</div>}
     </div>
   )
 }
@@ -65,10 +47,7 @@ function ProgressBar({ value, max }: { value: number; max: number }) {
   const color = pct >= 92 ? 'var(--green-mid)' : pct >= 65 ? '#e89020' : 'var(--red)'
   return (
     <div style={{ height: 6, background: 'var(--paper-3)', borderRadius: 99, overflow: 'hidden' }}>
-      <div style={{
-        height: '100%', width: `${pct}%`, borderRadius: 99,
-        background: color, transition: 'width 0.5s ease',
-      }} />
+      <div style={{ height: '100%', width: `${pct}%`, borderRadius: 99, background: color, transition: 'width 0.5s ease' }} />
     </div>
   )
 }
@@ -87,11 +66,12 @@ export default function MyTeam() {
   const [currentWeek, setCurrentWeek] = useState(1)
   const [matchupPeriods, setMatchupPeriods] = useState<MatchupPeriod[]>([])
   const [selectedPeriod, setSelectedPeriod] = useState(1)
+  const [schedule, setSchedule] = useState<Record<string, any>>({})
+  const [matchupDates, setMatchupDates] = useState<string[]>([])
 
   const weekLabel = getWeekRange(weekStart, weekEnd)
   const needed = Math.max(0, limit - confirmedStarts)
 
-  // Load config (team ID, starts limit) from env vars via /api/config
   useEffect(() => {
     fetch('/api/config')
       .then(r => r.json())
@@ -99,8 +79,6 @@ export default function MyTeam() {
         if (data.defaultLimit) setLimit(data.defaultLimit)
         if (data.matchupPeriods) {
           setMatchupPeriods(data.matchupPeriods)
-          // Auto-select current period from sessionStorage if available,
-          // otherwise default to period 1
           const cached = sessionStorage.getItem('skipper_selected_period')
           if (cached) setSelectedPeriod(parseInt(cached))
         }
@@ -108,8 +86,6 @@ export default function MyTeam() {
       .catch(() => {})
   }, [])
 
-  // On page load, check if we have cached roster data in sessionStorage
-  // sessionStorage persists across page navigations in the same tab
   useEffect(() => {
     const cached = sessionStorage.getItem('skipper_roster')
     if (cached) {
@@ -120,13 +96,13 @@ export default function MyTeam() {
       setWeekEnd(data.weekEnd || '')
       setTeamName(data.teamName || '')
       setCurrentWeek(data.currentWeek || 1)
+      setSchedule(data.schedule || {})
+      setMatchupDates(data.matchupDates || [])
     } else {
-      // No cache — auto-fetch on first visit
       fetchRoster()
     }
   }, [])
 
-  // When period changes, update the starts limit to match that period's limit
   useEffect(() => {
     const period = matchupPeriods.find(p => p.period === selectedPeriod)
     if (period) setLimit(period.limit)
@@ -146,14 +122,10 @@ export default function MyTeam() {
       if (!data.ok) throw new Error(data.error || 'Failed to load ESPN data')
 
       const roster: RosterSP[] = data.rosterSPs.map((p: any) => ({
-        ...p,
-        starts: p.starts ?? 0,
-        projFpts: p.projFpts ?? 0,
+        ...p, starts: p.starts ?? 0, projFpts: p.projFpts ?? 0,
       }))
-
       const starts = roster.reduce((a, p) => a + p.starts, 0)
 
-      // Save to sessionStorage so Free Agents and Recommendations pages can use it
       const toCache = {
         rosterSPs: roster,
         confirmedStarts: starts,
@@ -161,6 +133,8 @@ export default function MyTeam() {
         weekEnd: data.weekEnd || '',
         teamName: data.teamName || '',
         currentWeek: data.currentWeek || currentWeek,
+        schedule: data.schedule || {},
+        matchupDates: data.matchupDates || [],
       }
       sessionStorage.setItem('skipper_roster', JSON.stringify(toCache))
 
@@ -170,6 +144,8 @@ export default function MyTeam() {
       setWeekEnd(data.weekEnd || '')
       setTeamName(data.teamName || '')
       setCurrentWeek(data.currentWeek || currentWeek)
+      setSchedule(data.schedule || {})
+      setMatchupDates(data.matchupDates || [])
     } catch (e: any) {
       setError(e.message || 'Failed to load roster')
     } finally {
@@ -179,19 +155,9 @@ export default function MyTeam() {
 
   return (
     <>
-      <Head>
-        <title>My Team · The Skipper</title>
-      </Head>
+      <Head><title>My Team · The Skipper</title></Head>
 
       <style>{`
-        table { border-collapse: collapse; width: 100%; }
-        th {
-          text-align: left; font-size: 11px; font-family: var(--mono);
-          font-weight: 500; color: var(--ink-3); letter-spacing: 0.05em;
-          padding: 8px 10px; border-bottom: 1px solid var(--border); white-space: nowrap;
-        }
-        td { padding: 10px 10px; font-size: 13px; border-bottom: 1px solid var(--border); vertical-align: middle; }
-        tr:last-child td { border-bottom: none; }
         input[type=number] {
           font-family: var(--mono); font-size: 13px;
           background: var(--white); border: 1px solid var(--border-strong);
@@ -202,55 +168,48 @@ export default function MyTeam() {
         }
       `}</style>
 
-      <div style={{ maxWidth: 860 }}>
+      <div style={{ maxWidth: 1100 }}>
 
         {/* Page header */}
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 24 }}>
           <div>
-            <h1 style={{ fontSize: 22, fontWeight: 700, letterSpacing: '-0.03em', margin: 0, marginBottom: 6 }}>
-              My Team
-            </h1>
+            <h1 style={{ fontSize: 22, fontWeight: 700, letterSpacing: '-0.03em', margin: 0, marginBottom: 6 }}>My Team</h1>
             <p style={{ fontSize: 13, color: 'var(--ink-3)', margin: 0 }}>
               {teamName ? `${teamName} · ` : ''}{weekLabel}
             </p>
           </div>
-          {/* Period selector */}
-          {matchupPeriods.length > 0 && (
-            <select
-              value={selectedPeriod}
-              onChange={e => setSelectedPeriod(parseInt(e.target.value))}
+          <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+            {matchupPeriods.length > 0 && (
+              <select
+                value={selectedPeriod}
+                onChange={e => setSelectedPeriod(parseInt(e.target.value))}
+                style={{
+                  fontFamily: 'var(--mono)', fontSize: 12, padding: '8px 12px',
+                  borderRadius: 'var(--radius)', border: '1.5px solid var(--border-strong)',
+                  background: 'var(--white)', color: 'var(--ink)', cursor: 'pointer', outline: 'none',
+                }}
+              >
+                {matchupPeriods.map(p => (
+                  <option key={p.period} value={p.period}>{p.label} · {p.start}–{p.end}</option>
+                ))}
+              </select>
+            )}
+            <button
+              onClick={fetchRoster} disabled={loading}
               style={{
-                fontFamily: 'var(--mono)', fontSize: 12,
-                padding: '8px 12px', borderRadius: 'var(--radius)',
+                fontFamily: 'var(--sans)', fontSize: 13, fontWeight: 600,
+                padding: '9px 18px', borderRadius: 'var(--radius)',
+                cursor: loading ? 'not-allowed' : 'pointer',
                 border: '1.5px solid var(--border-strong)',
-                background: 'var(--white)', color: 'var(--ink)',
-                cursor: 'pointer', outline: 'none',
+                background: 'transparent', color: 'var(--ink)',
+                opacity: loading ? 0.5 : 1, transition: 'all 0.15s',
               }}
             >
-              {matchupPeriods.map(p => (
-                <option key={p.period} value={p.period}>
-                  {p.label} · {p.start}–{p.end}
-                </option>
-              ))}
-            </select>
-          )}
-          <button
-            onClick={fetchRoster}
-            disabled={loading}
-            style={{
-              fontFamily: 'var(--sans)', fontSize: 13, fontWeight: 600,
-              padding: '9px 18px', borderRadius: 'var(--radius)',
-              cursor: loading ? 'not-allowed' : 'pointer',
-              border: '1.5px solid var(--border-strong)',
-              background: 'transparent', color: 'var(--ink)',
-              opacity: loading ? 0.5 : 1, transition: 'all 0.15s',
-            }}
-          >
-            {loading ? 'Refreshing...' : '↻ Refresh'}
-          </button>
+              {loading ? 'Refreshing...' : '↻ Refresh'}
+            </button>
+          </div>
         </div>
 
-        {/* Error banner */}
         {error && (
           <div style={{
             background: 'var(--red-light)', border: '1px solid var(--red)',
@@ -260,7 +219,6 @@ export default function MyTeam() {
         )}
 
         {rosterSPs.length === 0 && !loading ? (
-          // Empty state — no data loaded yet
           <div style={{
             background: 'var(--white)', border: '1px solid var(--border)',
             borderRadius: 'var(--radius-lg)', padding: '40px 24px',
@@ -271,43 +229,32 @@ export default function MyTeam() {
             <div style={{ fontSize: 13, color: 'var(--ink-3)', marginBottom: 20 }}>
               Connect to ESPN from the Dashboard to load your team.
             </div>
-            <button
-              onClick={() => router.push('/dashboard')}
-              style={{
-                fontFamily: 'var(--sans)', fontSize: 13, fontWeight: 600,
-                padding: '9px 18px', borderRadius: 'var(--radius)',
-                cursor: 'pointer', border: 'none',
-                background: 'var(--ink)', color: 'var(--white)',
-              }}
-            >
-              Go to Dashboard →
-            </button>
+            <button onClick={() => router.push('/dashboard')} style={{
+              fontFamily: 'var(--sans)', fontSize: 13, fontWeight: 600,
+              padding: '9px 18px', borderRadius: 'var(--radius)',
+              cursor: 'pointer', border: 'none', background: 'var(--ink)', color: 'var(--white)',
+            }}>Go to Dashboard →</button>
           </div>
         ) : (
           <>
-            {/* Metrics row */}
+            {/* Metrics */}
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 12, marginBottom: 16 }}>
               <MetricCard label="STARTS LIMIT" value={limit} />
-              <MetricCard
-                label="SCHEDULED" value={confirmedStarts}
-                accent={confirmedStarts >= limit ? 'ok' : confirmedStarts >= limit * 0.7 ? 'warn' : 'bad'}
-              />
-              <MetricCard
-                label="STILL NEEDED" value={needed}
-                accent={needed === 0 ? 'ok' : needed <= 3 ? 'warn' : 'bad'}
-              />
+              <MetricCard label="SCHEDULED" value={confirmedStarts}
+                accent={confirmedStarts >= limit ? 'ok' : confirmedStarts >= limit * 0.7 ? 'warn' : 'bad'} />
+              <MetricCard label="STILL NEEDED" value={needed}
+                accent={needed === 0 ? 'ok' : needed <= 3 ? 'warn' : 'bad'} />
               <MetricCard label="ROSTERED SPs" value={rosterSPs.length} />
             </div>
 
             {/* Progress bar */}
             <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, fontFamily: 'var(--mono)', color: 'var(--ink-3)', marginBottom: 4 }}>
-              <span>Starts utilization</span>
-              <span>{confirmedStarts} / {limit}</span>
+              <span>Starts utilization</span><span>{confirmedStarts} / {limit}</span>
             </div>
             <ProgressBar value={confirmedStarts} max={limit} />
             <div style={{ marginBottom: 16 }} />
 
-            {/* Roster table */}
+            {/* Schedule grid */}
             <div style={{
               background: 'var(--white)', border: '1px solid var(--border)',
               borderRadius: 'var(--radius-lg)', padding: '20px 24px',
@@ -318,35 +265,14 @@ export default function MyTeam() {
                 letterSpacing: '0.1em', color: 'var(--ink-3)',
                 textTransform: 'uppercase', marginBottom: 12,
               }}>Your starting pitchers</div>
-              <div style={{ overflowX: 'auto' }}>
-                <table>
-                  <thead>
-                    <tr>
-                      <th>Pitcher</th><th>Team</th><th>Slot</th>
-                      <th>Starts</th><th>Proj FPTS</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {[...rosterSPs].sort((a, b) => {
-                      const order = (s: string) => s === 'SP' ? 0 : s === 'RP' ? 1 : 2
-                      if (order(a.slot) !== order(b.slot)) return order(a.slot) - order(b.slot)
-                      if (b.starts !== a.starts) return b.starts - a.starts
-                      return b.projFpts - a.projFpts
-                    }).map((p, i) => (
-                      <tr key={i}>
-                        <td style={{ fontWeight: 600 }}>{p.name}</td>
-                        <td><span style={{ fontFamily: 'var(--mono)', fontSize: 12 }}>{p.team}</span></td>
-                        <td><Badge label={p.slot} color={p.slot === 'IL' ? 'red' : p.slot === 'RP' ? 'amber' : 'blue'} /></td>
-                        <td style={{ textAlign: 'center', fontFamily: 'var(--mono)', fontWeight: 600 }}>{p.starts}</td>
-                        <td style={{ textAlign: 'center', fontFamily: 'var(--mono)', fontWeight: 600, color: 'var(--green)' }}>{p.projFpts.toFixed(1)}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+              <ScheduleGrid
+                pitchers={rosterSPs}
+                schedule={schedule}
+                matchupDates={matchupDates}
+              />
             </div>
 
-            {/* Starts limit editor */}
+            {/* Starts editor */}
             <div style={{
               background: 'var(--white)', border: '1px solid var(--border)',
               borderRadius: 'var(--radius-lg)', padding: '20px 24px',
@@ -360,37 +286,24 @@ export default function MyTeam() {
               <div style={{ display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                   <label style={{ fontSize: 13, color: 'var(--ink-2)' }}>Starts limit:</label>
-                  <input
-                    type="number" value={limit} min={1} max={30}
-                    onChange={e => setLimit(parseInt(e.target.value) || 0)}
-                    style={{ width: 70 }}
-                  />
+                  <input type="number" value={limit} min={1} max={30}
+                    onChange={e => setLimit(parseInt(e.target.value) || 0)} style={{ width: 70 }} />
                 </div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                   <label style={{ fontSize: 13, color: 'var(--ink-2)' }}>Confirmed starts:</label>
-                  <input
-                    type="number" value={confirmedStarts} min={0} max={30}
-                    onChange={e => setConfirmedStarts(parseInt(e.target.value) || 0)}
-                    style={{ width: 70 }}
-                  />
+                  <input type="number" value={confirmedStarts} min={0} max={30}
+                    onChange={e => setConfirmedStarts(parseInt(e.target.value) || 0)} style={{ width: 70 }} />
                 </div>
               </div>
             </div>
 
-            {/* Navigation */}
             <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-              <button
-                onClick={() => router.push('/free-agents')}
-                style={{
-                  fontFamily: 'var(--sans)', fontSize: 13, fontWeight: 600,
-                  padding: '9px 18px', borderRadius: 'var(--radius)',
-                  cursor: 'pointer', border: 'none',
-                  background: 'var(--ink)', color: 'var(--white)',
-                  transition: 'all 0.15s',
-                }}
-              >
-                View free agents →
-              </button>
+              <button onClick={() => router.push('/free-agents')} style={{
+                fontFamily: 'var(--sans)', fontSize: 13, fontWeight: 600,
+                padding: '9px 18px', borderRadius: 'var(--radius)',
+                cursor: 'pointer', border: 'none',
+                background: 'var(--ink)', color: 'var(--white)',
+              }}>View free agents →</button>
             </div>
           </>
         )}
