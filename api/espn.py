@@ -165,7 +165,6 @@ def get_league_data(team_id: int, week: int) -> dict:
             ("view", "mTeam"),
             ("view", "mSettings"),
             ("view", "mMatchupScore"),
-            ("scoringPeriodId", week),
             ("_", int(datetime.now().timestamp())),
         ],
         cookies=cookies,
