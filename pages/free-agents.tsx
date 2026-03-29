@@ -1,19 +1,18 @@
 import Head from 'next/head'
 import { useState, useEffect, useCallback } from 'react'
 import { useRouter } from 'next/router'
+import ScheduleGrid from '../components/ScheduleGrid'
 
-// ─── Types ────────────────────────────────────────────────────────────────────
 interface FreeSP {
-  name: string; team: string; injuryStatus: string
+  name: string; team: string; slot: string; injuryStatus: string
   percentOwned: number; projFpts: number; starts: number
-  opps?: string; checked: boolean
+  opps?: string; checked: boolean; startDates?: any[]
 }
 
 interface MatchupPeriod {
   period: number; label: string; start: string; end: string; limit: number
 }
 
-// ─── Main component ───────────────────────────────────────────────────────────
 export default function FreeAgents() {
   const router = useRouter()
   const [loading, setLoading] = useState(false)
@@ -21,20 +20,19 @@ export default function FreeAgents() {
   const [selectedPeriod, setSelectedPeriod] = useState(1)
   const [error, setError] = useState('')
   const [freeSPs, setFreeSPs] = useState<FreeSP[]>([])
-  const [currentWeek, setCurrentWeek] = useState(1)
+  const [schedule, setSchedule] = useState<Record<string, any>>({})
+  const [matchupDates, setMatchupDates] = useState<string[]>([])
 
-  // On page load, check sessionStorage for cached free agent data
   useEffect(() => {
     const cached = sessionStorage.getItem('skipper_free_agents')
     if (cached) {
-      setFreeSPs(JSON.parse(cached))
+      const data = JSON.parse(cached)
+      setFreeSPs(data.freeSPs || [])
+      setSchedule(data.schedule || {})
+      setMatchupDates(data.matchupDates || [])
     }
-
-    // Pull selected period from sessionStorage so both pages stay in sync
     const savedPeriod = sessionStorage.getItem('skipper_selected_period')
     if (savedPeriod) setSelectedPeriod(parseInt(savedPeriod))
-
-    // Load matchup periods from config
     fetch('/api/config')
       .then(r => r.json())
       .then(data => { if (data.matchupPeriods) setMatchupPeriods(data.matchupPeriods) })
@@ -56,14 +54,22 @@ export default function FreeAgents() {
 
       const fas: FreeSP[] = (data.freeAgentSPs || []).map((p: any) => ({
         ...p,
+        slot: p.slot || 'SP',
         starts: p.starts ?? 0,
         projFpts: p.projFpts ?? 0,
         opps: p.opps || '',
         checked: p.percentOwned >= 15,
       }))
 
-      sessionStorage.setItem('skipper_free_agents', JSON.stringify(fas))
+      const toCache = {
+        freeSPs: fas,
+        schedule: data.schedule || {},
+        matchupDates: data.matchupDates || [],
+      }
+      sessionStorage.setItem('skipper_free_agents', JSON.stringify(toCache))
       setFreeSPs(fas)
+      setSchedule(data.schedule || {})
+      setMatchupDates(data.matchupDates || [])
     } catch (e: any) {
       setError(e.message || 'Failed to load free agents')
     } finally {
@@ -75,79 +81,58 @@ export default function FreeAgents() {
     const updated = [...freeSPs]
     updated[index] = { ...updated[index], checked: !updated[index].checked }
     setFreeSPs(updated)
-    sessionStorage.setItem('skipper_free_agents', JSON.stringify(updated))
+    const cached = JSON.parse(sessionStorage.getItem('skipper_free_agents') || '{}')
+    sessionStorage.setItem('skipper_free_agents', JSON.stringify({ ...cached, freeSPs: updated }))
   }
 
   const selectedCount = freeSPs.filter(p => p.checked).length
 
   return (
     <>
-      <Head>
-        <title>Free Agents · The Skipper</title>
-      </Head>
+      <Head><title>Free Agents · The Skipper</title></Head>
 
       <style>{`
-        table { border-collapse: collapse; width: 100%; }
-        th {
-          text-align: left; font-size: 11px; font-family: var(--mono);
-          font-weight: 500; color: var(--ink-3); letter-spacing: 0.05em;
-          padding: 8px 10px; border-bottom: 1px solid var(--border); white-space: nowrap;
-        }
-        td { padding: 10px; font-size: 13px; border-bottom: 1px solid var(--border); vertical-align: middle; }
-        tr:last-child td { border-bottom: none; }
-        .check-row { cursor: pointer; }
-        .check-row:hover td { background: var(--paper-2); }
         input[type=checkbox] { width: 16px; height: 16px; accent-color: var(--green-mid); cursor: pointer; }
       `}</style>
 
-      <div style={{ maxWidth: 860 }}>
+      <div style={{ maxWidth: 1100 }}>
 
-        {/* Page header */}
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 24 }}>
           <div>
-            <h1 style={{ fontSize: 22, fontWeight: 700, letterSpacing: '-0.03em', margin: 0, marginBottom: 6 }}>
-              Free Agents
-            </h1>
+            <h1 style={{ fontSize: 22, fontWeight: 700, letterSpacing: '-0.03em', margin: 0, marginBottom: 6 }}>Free Agents</h1>
             <p style={{ fontSize: 13, color: 'var(--ink-3)', margin: 0 }}>
-              Available SPs in your league — check the ones to include in your analysis
+              Available SPs — check the ones to include in your analysis
             </p>
           </div>
-          {matchupPeriods.length > 0 && (
-            <select
-              value={selectedPeriod}
-              onChange={e => setSelectedPeriod(parseInt(e.target.value))}
-              style={{
-                fontFamily: 'var(--mono)', fontSize: 12,
-                padding: '8px 12px', borderRadius: 'var(--radius)',
-                border: '1.5px solid var(--border-strong)',
-                background: 'var(--white)', color: 'var(--ink)',
-                cursor: 'pointer', outline: 'none',
-              }}
-            >
-              {matchupPeriods.map(p => (
-                <option key={p.period} value={p.period}>
-                  {p.label} · {p.start}–{p.end}
-                </option>
-              ))}
-            </select>
-          )}
-          <button
-            onClick={fetchFreeAgents}
-            disabled={loading}
-            style={{
+          <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+            {matchupPeriods.length > 0 && (
+              <select
+                value={selectedPeriod}
+                onChange={e => setSelectedPeriod(parseInt(e.target.value))}
+                style={{
+                  fontFamily: 'var(--mono)', fontSize: 12, padding: '8px 12px',
+                  borderRadius: 'var(--radius)', border: '1.5px solid var(--border-strong)',
+                  background: 'var(--white)', color: 'var(--ink)', cursor: 'pointer', outline: 'none',
+                }}
+              >
+                {matchupPeriods.map(p => (
+                  <option key={p.period} value={p.period}>{p.label} · {p.start}–{p.end}</option>
+                ))}
+              </select>
+            )}
+            <button onClick={fetchFreeAgents} disabled={loading} style={{
               fontFamily: 'var(--sans)', fontSize: 13, fontWeight: 600,
               padding: '9px 18px', borderRadius: 'var(--radius)',
               cursor: loading ? 'not-allowed' : 'pointer',
               border: '1.5px solid var(--border-strong)',
               background: 'transparent', color: 'var(--ink)',
-              opacity: loading ? 0.5 : 1, transition: 'all 0.15s',
-            }}
-          >
-            {loading ? 'Refreshing...' : '↻ Refresh'}
-          </button>
+              opacity: loading ? 0.5 : 1,
+            }}>
+              {loading ? 'Refreshing...' : '↻ Refresh'}
+            </button>
+          </div>
         </div>
 
-        {/* Error banner */}
         {error && (
           <div style={{
             background: 'var(--red-light)', border: '1px solid var(--red)',
@@ -157,7 +142,6 @@ export default function FreeAgents() {
         )}
 
         {freeSPs.length === 0 && !loading ? (
-          // Empty state
           <div style={{
             background: 'var(--white)', border: '1px solid var(--border)',
             borderRadius: 'var(--radius-lg)', padding: '40px 24px',
@@ -166,23 +150,16 @@ export default function FreeAgents() {
             <div style={{ fontSize: 32, marginBottom: 12 }}>🔍</div>
             <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 8 }}>No free agents loaded</div>
             <div style={{ fontSize: 13, color: 'var(--ink-3)', marginBottom: 20 }}>
-              Load your roster first, then come back here to see available pitchers.
+              Click Refresh to load available pitchers.
             </div>
-            <button
-              onClick={fetchFreeAgents}
-              style={{
-                fontFamily: 'var(--sans)', fontSize: 13, fontWeight: 600,
-                padding: '9px 18px', borderRadius: 'var(--radius)',
-                cursor: 'pointer', border: 'none',
-                background: 'var(--ink)', color: 'var(--white)',
-              }}
-            >
-              Load free agents →
-            </button>
+            <button onClick={fetchFreeAgents} style={{
+              fontFamily: 'var(--sans)', fontSize: 13, fontWeight: 600,
+              padding: '9px 18px', borderRadius: 'var(--radius)',
+              cursor: 'pointer', border: 'none', background: 'var(--ink)', color: 'var(--white)',
+            }}>Load free agents →</button>
           </div>
         ) : (
           <>
-            {/* Info banner */}
             <div style={{
               background: 'var(--blue-light)', border: '1px solid rgba(26,95,168,0.2)',
               borderRadius: 'var(--radius)', padding: '10px 14px',
@@ -191,69 +168,43 @@ export default function FreeAgents() {
               Top available SPs by ownership %. Check the ones you want Claude to consider for adds.
             </div>
 
-            {/* Free agents table */}
             <div style={{
               background: 'var(--white)', border: '1px solid var(--border)',
               borderRadius: 'var(--radius-lg)', padding: '20px 24px',
               boxShadow: 'var(--shadow)', marginBottom: 16,
             }}>
-              <div style={{ overflowX: 'auto' }}>
-                <table>
-                  <thead>
-                    <tr>
-                      <th></th>
-                      <th>Pitcher</th>
-                      <th>Team</th>
-                      <th>Own%</th>
-                      <th>Proj FPTS</th>
-                      <th>Starts</th>
-                      <th>Opponent(s)</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {freeSPs.map((p, i) => (
-                      <tr
-                        key={i}
-                        className="check-row"
-                        onClick={() => toggleCheck(i)}
-                      >
-                        <td onClick={e => e.stopPropagation()}>
-                          <input
-                            type="checkbox"
-                            checked={p.checked}
-                            onChange={() => toggleCheck(i)}
-                          />
-                        </td>
-                        <td style={{ fontWeight: 600 }}>{p.name}</td>
-                        <td><span style={{ fontFamily: 'var(--mono)', fontSize: 12 }}>{p.team}</span></td>
-                        <td style={{ fontFamily: 'var(--mono)', fontSize: 12 }}>{p.percentOwned}%</td>
-                        <td style={{ fontFamily: 'var(--mono)', fontWeight: 600, color: 'var(--green)' }}>{p.projFpts}</td>
-                        <td style={{ textAlign: 'center', fontFamily: 'var(--mono)' }}>{p.starts}</td>
-                        <td style={{ fontSize: 12, color: 'var(--ink-3)' }}>{p.opps || '—'}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+              <ScheduleGrid
+                pitchers={freeSPs}
+                schedule={schedule}
+                matchupDates={matchupDates}
+                prefixHeaders={<th style={{ padding: '8px 6px', fontSize: 10, fontFamily: 'var(--mono)', fontWeight: 500, color: 'var(--ink-3)', borderBottom: '1px solid var(--border)', minWidth: 32 }}></th>}
+                suffixHeaders={<th style={{ padding: '8px 6px', fontSize: 10, fontFamily: 'var(--mono)', fontWeight: 500, color: 'var(--ink-3)', borderBottom: '1px solid var(--border)', minWidth: 52, whiteSpace: 'nowrap' }}>Own%</th>}
+                renderPrefix={(pitcher, i) => (
+                  <td style={{ padding: '8px 6px', borderBottom: '1px solid var(--border)', verticalAlign: 'middle', textAlign: 'center' }}
+                    onClick={e => { e.stopPropagation(); toggleCheck(i) }}>
+                    <input type="checkbox" checked={(pitcher as FreeSP).checked || false}
+                      onChange={() => toggleCheck(i)} />
+                  </td>
+                )}
+                renderSuffix={(pitcher) => (
+                  <td style={{ padding: '8px 6px', borderBottom: '1px solid var(--border)', verticalAlign: 'middle', textAlign: 'center', fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--ink-3)' }}>
+                    {(pitcher as FreeSP).percentOwned ?? 0}%
+                  </td>
+                )}
+                onRowClick={toggleCheck}
+              />
             </div>
 
-            {/* Footer: count + navigation */}
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <span style={{ fontSize: 13, color: 'var(--ink-3)' }}>
                 {selectedCount} pitcher{selectedCount !== 1 ? 's' : ''} selected for analysis
               </span>
-              <button
-                onClick={() => router.push('/recommendations')}
-                style={{
-                  fontFamily: 'var(--sans)', fontSize: 13, fontWeight: 600,
-                  padding: '9px 18px', borderRadius: 'var(--radius)',
-                  cursor: 'pointer', border: 'none',
-                  background: 'var(--green)', color: 'var(--white)',
-                  transition: 'all 0.15s',
-                }}
-              >
-                Generate recommendations →
-              </button>
+              <button onClick={() => router.push('/recommendations')} style={{
+                fontFamily: 'var(--sans)', fontSize: 13, fontWeight: 600,
+                padding: '9px 18px', borderRadius: 'var(--radius)',
+                cursor: 'pointer', border: 'none',
+                background: 'var(--green)', color: 'var(--white)',
+              }}>Generate recommendations →</button>
             </div>
           </>
         )}

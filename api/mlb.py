@@ -67,18 +67,35 @@ MATCHUP_PERIODS = {
 
 def fetch_espn_probables(period_start, period_end):
     """
-    Fetch probable pitchers from ESPN scoreboard API for each day in the range.
-    Returns { "crochet": ["2026-03-27", ...], ... }
+    Fetch probable pitchers AND full game schedule from ESPN scoreboard API
+    for each day in the range.
+
+    Returns a tuple:
+      - pitchers: { "crochet": ["2026-03-27", ...], ... }
+      - schedule: {
+          "2026-03-27": {
+            "BOS": {"opponent": "CIN", "is_home": False, "status": "scheduled"},
+            "CIN": {"opponent": "BOS", "is_home": True,  "status": "scheduled"},
+          },
+          ...
+        }
+
+    schedule status values:
+      "scheduled" — game hasn't started yet
+      "in_progress" — game is live right now
+      "final" — game is finished
     """
     start_dt = datetime.strptime(period_start, "%Y-%m-%d")
-    end_dt = datetime.strptime(period_end, "%Y-%m-%d")
+    end_dt   = datetime.strptime(period_end,   "%Y-%m-%d")
 
-    result = {}
+    pitchers = {}   # last_name -> [dates]
+    schedule = {}   # date -> { team_abbrev -> {opponent, is_home, status} }
+
     current = start_dt
 
     while current <= end_dt:
-        date_str = current.strftime("%Y%m%d")       # ESPN wants YYYYMMDD format
-        iso_date = current.strftime("%Y-%m-%d")     # We store dates as YYYY-MM-DD
+        date_str = current.strftime("%Y%m%d")   # ESPN wants YYYYMMDD
+        iso_date = current.strftime("%Y-%m-%d") # We store YYYY-MM-DD
 
         url = (
             f"https://site.api.espn.com/apis/site/v2/sports/baseball/mlb/scoreboard"
@@ -88,28 +105,86 @@ def fetch_espn_probables(period_start, period_end):
             r = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
             data = r.json()
 
+            schedule[iso_date] = {}
+
             for event in data.get("events", []):
-                for competitor in event.get("competitions", [{}])[0].get("competitors", []):
-                    for probable in competitor.get("probables", []):
+                # ── Game status ──────────────────────────────────────────
+                status_obj  = event.get("status", {}).get("type", {})
+                status_name = status_obj.get("name", "STATUS_SCHEDULED")
+                if status_name == "STATUS_FINAL":
+                    game_status = "final"
+                elif status_name in ("STATUS_IN_PROGRESS", "STATUS_MIDDLE_INNING",
+                                     "STATUS_END_INNING"):
+                    game_status = "in_progress"
+                else:
+                    game_status = "scheduled"
+
+                competition = event.get("competitions", [{}])[0]
+                competitors = competition.get("competitors", [])
+
+                # ── Team abbreviations for both sides ─────────────────────
+                # ESPN competitor homeAway: "home" or "away"
+                teams_in_game = {}  # "home"/"away" -> abbrev
+                for comp in competitors:
+                    side   = comp.get("homeAway", "")        # "home" or "away"
+                    abbrev = comp.get("team", {}).get("abbreviation", "")
+                    if side and abbrev:
+                        teams_in_game[side] = abbrev
+
+                home_abbrev = teams_in_game.get("home", "")
+                away_abbrev = teams_in_game.get("away", "")
+
+                # Normalize ESPN Scoreboard abbreviations to match our PRO_TEAM_MAP
+                ABBREV_MAP = {
+                    "CHW": "CWS",  # Chicago White Sox
+                    "KCR": "KC",   # Kansas City Royals
+                    "TBR": "TB",   # Tampa Bay Rays
+                    "SDP": "SD",   # San Diego Padres
+                    "SFG": "SF",   # San Francisco Giants
+                    "WSN": "WSH",  # Washington Nationals
+                    "NYM": "NYM",  # already correct
+                }
+                home_abbrev = ABBREV_MAP.get(home_abbrev, home_abbrev)
+                away_abbrev = ABBREV_MAP.get(away_abbrev, away_abbrev)
+
+                # ── Record game in schedule dict ──────────────────────────
+                if home_abbrev and away_abbrev:
+                    schedule[iso_date][home_abbrev] = {
+                        "opponent": away_abbrev,
+                        "is_home":  True,
+                        "status":   game_status,
+                    }
+                    schedule[iso_date][away_abbrev] = {
+                        "opponent": home_abbrev,
+                        "is_home":  False,
+                        "status":   game_status,
+                    }
+
+                # ── Probable pitchers (same logic as before) ──────────────
+                for comp in competitors:
+                    for probable in comp.get("probables", []):
                         if probable.get("name") != "probableStartingPitcher":
                             continue
-                        athlete = probable.get("athlete", {})
+                        athlete  = probable.get("athlete", {})
                         full_name = athlete.get("fullName", "")
                         if full_name:
                             last_name = full_name.split()[-1].lower()
                             if last_name in ("jr.", "sr.", "ii", "iii", "iv"):
-                                parts = full_name.split()
+                                parts     = full_name.split()
                                 last_name = parts[-2].lower() if len(parts) >= 2 else last_name
-                            result.setdefault(last_name, [])
-                            if iso_date not in result[last_name]:
-                                result[last_name].append(iso_date)
+                            pitchers.setdefault(last_name, [])
+                            if iso_date not in pitchers[last_name]:
+                                pitchers[last_name].append(iso_date)
+
         except Exception as e:
             print(f"[mlb.py] ESPN scoreboard fetch failed for {date_str}: {e}")
 
         current += timedelta(days=1)
 
-    print(f"[mlb.py] ESPN scoreboard: {len(result)} pitchers across {(end_dt - start_dt).days + 1} days")
-    return result
+    print(f"[mlb.py] ESPN scoreboard: {len(pitchers)} pitchers, "
+          f"{sum(len(v) for v in schedule.values())} team-days across "
+          f"{len(schedule)} days")
+    return pitchers, schedule
 
 
 # ---------------------------------------------------------------------------
@@ -213,22 +288,35 @@ def build_pitcher_starts(mlb_data, fp_data, period_start, period_end):
 # ---------------------------------------------------------------------------
 
 def get_starts_for_players(player_names, matchup_period):
+    """
+    Given a list of full player names and a matchup period number,
+    returns a tuple:
+      - starts_map:  { "Garrett Crochet": {"starts": 2, "startDates": [...]} }
+      - schedule:    { "2026-03-26": { "BOS": {opponent, is_home, status}, ... } }
+    """
     if matchup_period not in MATCHUP_PERIODS:
-        return {}
+        return {}, {}
 
-    mp = MATCHUP_PERIODS[matchup_period]
+    mp       = MATCHUP_PERIODS[matchup_period]
     mlb_data = fetch_mlb_probables(mp["start"], mp["end"])
-    fp_data = fetch_espn_probables(mp["start"], mp["end"])
+
+    # fetch_espn_probables now returns (pitchers, schedule)
+    fp_data, schedule = fetch_espn_probables(mp["start"], mp["end"])
+
     pitcher_starts = build_pitcher_starts(mlb_data, fp_data, mp["start"], mp["end"])
 
     result = {}
     for full_name in player_names:
         last_name = full_name.split()[-1].lower()
+        if last_name in ("jr.", "sr.", "ii", "iii", "iv"):
+            parts     = full_name.split()
+            last_name = parts[-2].lower() if len(parts) >= 2 else last_name
         if last_name in pitcher_starts:
             result[full_name] = pitcher_starts[last_name]
         else:
             result[full_name] = {"starts": 0, "startDates": []}
-    return result
+
+    return result, schedule
 
 
 # ---------------------------------------------------------------------------
@@ -247,25 +335,26 @@ class handler(BaseHTTPRequestHandler):
 
         mp = MATCHUP_PERIODS[period]
         mlb_data = fetch_mlb_probables(mp["start"], mp["end"])
-        fp_data = fetch_espn_probables(mp["start"], mp["end"])
+        fp_data, schedule = fetch_espn_probables(mp["start"], mp["end"])
         pitcher_starts = build_pitcher_starts(mlb_data, fp_data, mp["start"], mp["end"])
 
         start_dt = datetime.strptime(mp["start"], "%Y-%m-%d")
         end_dt = datetime.strptime(mp["end"], "%Y-%m-%d")
 
         self._respond(200, {
-            "ok": True,
-            "matchupPeriod": period,
-            "weekStart": start_dt.strftime("%b %-d"),
-            "weekEnd": end_dt.strftime("%b %-d"),
-            "startsLimit": mp["limit"],
-            "probablePitchers": pitcher_starts,
-            "totalPitchers": len(pitcher_starts),
-            "sources": {
-                "mlbConfirmedPitchers": len(mlb_data),
-                "fpProjectedPitchers": len(fp_data),
-            },
-        })
+        "ok": True,
+        "matchupPeriod": period,
+        "weekStart": start_dt.strftime("%b %-d"),
+        "weekEnd": end_dt.strftime("%b %-d"),
+        "startsLimit": mp["limit"],
+        "probablePitchers": pitcher_starts,
+        "schedule": schedule,
+        "totalPitchers": len(pitcher_starts),
+        "sources": {
+            "mlbConfirmedPitchers": len(mlb_data),
+            "fpProjectedPitchers": len(fp_data),
+        },
+    })
 
     def _respond(self, status, body):
         self.send_response(status)
