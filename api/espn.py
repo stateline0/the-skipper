@@ -230,6 +230,7 @@ def get_league_data(team_id: int, week: int) -> dict:
     for entry in roster_entries:
         pool_entry = entry.get("playerPoolEntry", {})
         player = pool_entry.get("player", {})
+        print(f"[DEBUG] {player.get('fullName')} lineup_slot={entry.get('lineupSlotId')} inj={pool_entry.get('injuryStatus')} eligible={set(player.get('eligibleSlots', []))}")
         eligible_slots = set(player.get("eligibleSlots", []))
         player_id = entry.get("playerId")
 
