@@ -134,6 +134,19 @@ def fetch_espn_probables(period_start, period_end):
                 home_abbrev = teams_in_game.get("home", "")
                 away_abbrev = teams_in_game.get("away", "")
 
+                # Normalize ESPN Scoreboard abbreviations to match our PRO_TEAM_MAP
+                ABBREV_MAP = {
+                    "CHW": "CWS",  # Chicago White Sox
+                    "KCR": "KC",   # Kansas City Royals
+                    "TBR": "TB",   # Tampa Bay Rays
+                    "SDP": "SD",   # San Diego Padres
+                    "SFG": "SF",   # San Francisco Giants
+                    "WSN": "WSH",  # Washington Nationals
+                    "NYM": "NYM",  # already correct
+                }
+                home_abbrev = ABBREV_MAP.get(home_abbrev, home_abbrev)
+                away_abbrev = ABBREV_MAP.get(away_abbrev, away_abbrev)
+
                 # ── Record game in schedule dict ──────────────────────────
                 if home_abbrev and away_abbrev:
                     schedule[iso_date][home_abbrev] = {
