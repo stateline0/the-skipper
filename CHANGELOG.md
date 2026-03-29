@@ -2,6 +2,35 @@
 
 ---
 
+## Session 4 — March 28, 2026 (evening)
+
+Schedule grid, roster fixes, and backend refactor. One PR shipped.
+
+### Key learnings this session
+- ESPN's `scoringPeriodId` is a daily counter (day 1 of season = 1, day 2 = 2, etc.) — not the matchup period number. Passing the matchup period number was returning stale rosters from early in the season. Removing it entirely lets ESPN default to today's live roster.
+- ESPN Scoreboard API uses `CHW` for the White Sox; our PRO_TEAM_MAP uses `CWS`. An abbreviation normalization map is required to bridge the two systems. Other potential mismatches (KCR, TBR, SDP, SFG, WSN) added preemptively.
+- Last-name-only pitcher matching is fragile for common surnames like "Smith" — full name or player ID matching will be needed for a robust fix.
+- `espn.py` was duplicating the MLB Stats API call that `mlb.py` already handles better. Importing `get_starts_for_players` from `mlb.py` eliminates the duplication and keeps probable pitcher logic in one place.
+- sessionStorage cache shape needs a version check — old cached data missing new fields (like `matchupDates`) causes silent failures on page load. Auto-fetching when key fields are missing is the right defensive pattern.
+
+### PR #21 — Schedule grid
+Replaced simple roster table with a full day-by-day schedule grid on both My Team and Free Agents.
+- `components/ScheduleGrid.tsx` — new shared component, used by both pages
+- Day columns inserted between Slot and Starts, dynamic length based on matchup period
+- ✅ for MLB-confirmed starts, blue P badge for ESPN-projected starts, ✓ for past confirmed starts
+- Non-start game days show `vs OPP` / `@OPP` in gray; no-game days show `—`
+- Today's column: bold header, green underline, highlighted background + "TODAY" label
+- IL players grayed out at 50% opacity
+- `mlb.py` `fetch_espn_probables` expanded to return full game schedule (all teams, all days) alongside probable pitchers — no additional API calls required
+- `espn.py` refactored to import from `mlb.py` via `get_starts_for_players` — eliminates duplicate MLB Stats API block
+- `schedule` and `matchupDates` added to ESPN API response and persisted in sessionStorage
+- Stale cache auto-refresh: if cached data missing `matchupDates`, auto-fetch instead of rendering empty grid
+- Abbreviation normalization map added to `mlb.py` (CHW→CWS and other ESPN Scoreboard variants)
+- Fix: removed `scoringPeriodId` from roster fetch — was pinning roster to day 1 of season
+- Fix: IL classification now uses lineup slot only, not `injuryStatus` field
+
+---
+
 ## Session 3 — March 28, 2026
 
 Probable pitcher data integration, matchup period dropdown, roster data fixes, and ESPN team map rebuild. Two PRs shipped.

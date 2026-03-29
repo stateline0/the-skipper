@@ -4,7 +4,31 @@ Last updated: March 28, 2026
 
 ---
 
-## ✅ Completed (session March 28, 2026)
+## ✅ Completed (session March 28, 2026 — evening)
+
+### Schedule grid (PR #21)
+- [x] New `components/ScheduleGrid.tsx` — shared component used by both My Team and Free Agents
+- [x] Day-by-day columns showing opponent per pitcher per day, inserted between Slot and Starts
+- [x] ✅ for MLB-confirmed probable starts, blue P badge for ESPN-projected starts
+- [x] ✓ for past confirmed starts, blue P for past projected starts
+- [x] Non-start game days show `vs OPP` / `@OPP` in gray
+- [x] No-game days show `—`
+- [x] Today's column: bold header + green underline + highlighted background
+- [x] IL players grayed out (opacity 0.5)
+- [x] Columns are dynamic — built from matchupDates range, handles any period length
+- [x] `espn.py` refactored to import `get_starts_for_players` from `mlb.py` — eliminates duplicate MLB Stats API call
+- [x] `mlb.py` `fetch_espn_probables` now returns full game schedule alongside probables
+- [x] `schedule` and `matchupDates` added to ESPN API response and persisted in sessionStorage
+- [x] Stale cache auto-refresh when cached data is missing `matchupDates`
+- [x] Fix: normalize ESPN Scoreboard abbreviations to match PRO_TEAM_MAP (CHW→CWS, etc.)
+
+### Roster fixes (same session)
+- [x] Fix: remove `scoringPeriodId` from roster fetch — was returning stale roster after transactions
+- [x] Fix: IL classification uses lineup slot only, not `injuryStatus` field
+
+---
+
+## ✅ Completed (session March 28, 2026 — earlier)
 
 ### Probable pitcher integration (PR #18)
 - [x] Replace hardcoded starts=2 with dual-source probable pitcher system
@@ -74,30 +98,28 @@ Last updated: March 28, 2026
 
 ## 🔜 Next session priorities
 
+### Actual FPTS in past/live cells
+- [ ] Wire up ESPN Fantasy matchup box score API to pull actual FPTS earned per pitcher per day
+- [ ] Past start cells show real points earned (e.g. `@CIN ✓ 26.0`)
+- [ ] Live cells show in-progress points with a live indicator
+- [ ] Distinguish final vs. in-progress game status
+- [ ] Today's column: bold + highlighted (already done) — live scores update on refresh
+
+### Dropped players section
+- [ ] Players who started this matchup period but were subsequently dropped should still appear on My Team
+- [ ] Show in a separate table below the main roster, labeled "Dropped this period"
+- [ ] Slot badge shows gray "Dropped" label
+- [ ] Stats and points earned still visible
+- [ ] Points earned should match ESPN's matchup scoring summary
+
 ### Dashboard "at a glance" component
 - [ ] "This week at a glance" tile — projected starts vs. weekly limit with visual progress
 - [ ] Designed as a tile/component system so new features can be added over time
 - [ ] Quick links to My Team and Free Agents
 - [ ] Show current matchup period dates and opponent
 
-### Schedule grid table (major upcoming feature)
-Replaces the current simple roster table on My Team and Free Agents. Target design:
-
-| Pitcher | Team | Slot | Mar 26 | Mar 27 | Mar 28 | ... | Expected Starts | Proj FPTS |
-|---|---|---|---|---|---|---|---|---|
-| Garrett Crochet | BOS | SP | @CIN ✅ 18.5 | -- | CIN ✅ 22.0 | ... | 2 | 40.5 |
-
-**Cell logic:**
-- ✅ confirmed probable (MLB Stats API): show `OPP · ✅ · XX.X pts`
-- 🕐 projected starter (ESPN Scoreboard): show `OPP · 🕐 · XX.X pts`
-- Pitcher's team plays but not projected to start: show `vs OPP`
-- No game that day: show `--`
-- Home game: `CIN`, Away game: `@CIN`
-
-**Column behavior:**
-- Columns are dynamic based on matchup length (7 days standard, up to 12+ for extended weeks)
-- Sort: SP first → RP → IL, then Expected Starts desc, then Proj FPTS desc
-- IL players show 0 starts, grayed out
+### Free agents cache fix
+- [ ] Apply same stale cache auto-refresh logic to Free Agents page (already done on My Team)
 
 ### Responsive layout (mobile)
 - [ ] Sidebar collapses on mobile
@@ -135,8 +157,8 @@ Currently `projFpts` shows 0.0 for all pitchers. ESPN's `appliedStatTotal` is no
 ## 🐛 Known bugs (current version)
 
 - [ ] `projFpts` showing 0.0 for all pitchers — ESPN's `appliedStatTotal` not populated early season. Will be fixed by Option B model.
-- [ ] Shane Smith (CWS SP) not showing on roster — ESPN API returning stale roster cache after recent add. Resolves automatically within a few hours of a transaction. Not a code bug.
-- [ ] David Peterson showing as IL slot — ESPN API has him in IL slot despite being on bench. Edge case in ESPN's slot data, low priority.
+- [ ] Shane Smith (CWS SP) probable pitcher matching not working — last name `"smith"` is likely colliding with another Smith in the ESPN Scoreboard or MLB Stats API data. His schedule cells now populate correctly (abbreviation fix resolved that), but his starts aren't being detected. Needs a more robust name matching strategy (full name or player ID) rather than last-name-only lookup.
+- [ ] Shane Smith (CWS SP) showing as IL slot — ESPN API has him in lineup slot 16 (IL10) despite being active. ESPN API/UI out of sync. Resolves automatically, not a code bug.
 - [ ] Dropdown label shows "Period N · dates" instead of matchup opponent — needs ESPN schedule API integration.
 - [ ] `vercel dev` does not serve Python API routes locally (known issue with Vercel CLI v50+). Workaround: test against production URL `https://the-skipper-iota.vercel.app`.
 
