@@ -246,7 +246,7 @@ def get_league_data(team_id: int, week: int) -> dict:
 
         player_name = player.get("fullName", "Unknown")
 
-        if lineup_slot in IL_SLOTS or inj_status in ("IL", "IL10", "IL15", "IL60", "SUSP"):
+        if lineup_slot in IL_SLOTS:
             scheduled_starts = 0
             proj_fpts = 0.0
         else:
