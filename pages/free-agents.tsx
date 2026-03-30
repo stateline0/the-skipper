@@ -24,15 +24,22 @@ export default function FreeAgents() {
   const [matchupDates, setMatchupDates] = useState<string[]>([])
 
   useEffect(() => {
+    const savedPeriod = sessionStorage.getItem('skipper_selected_period')
+    if (savedPeriod) setSelectedPeriod(parseInt(savedPeriod))
+
     const cached = sessionStorage.getItem('skipper_free_agents')
     if (cached) {
       const data = JSON.parse(cached)
-      setFreeSPs(data.freeSPs || [])
-      setSchedule(data.schedule || {})
-      setMatchupDates(data.matchupDates || [])
+      // If cache is missing matchupDates, it's stale — auto-fetch fresh data
+      if (!data.matchupDates || data.matchupDates.length === 0) {
+        fetchFreeAgents()
+      } else {
+        setFreeSPs(data.freeSPs || [])
+        setSchedule(data.schedule || {})
+        setMatchupDates(data.matchupDates || [])
+      }
     }
-    const savedPeriod = sessionStorage.getItem('skipper_selected_period')
-    if (savedPeriod) setSelectedPeriod(parseInt(savedPeriod))
+
     fetch('/api/config')
       .then(r => r.json())
       .then(data => { if (data.matchupPeriods) setMatchupPeriods(data.matchupPeriods) })
