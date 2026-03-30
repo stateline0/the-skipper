@@ -68,6 +68,7 @@ export default function MyTeam() {
   const [selectedPeriod, setSelectedPeriod] = useState(1)
   const [schedule, setSchedule] = useState<Record<string, any>>({})
   const [matchupDates, setMatchupDates] = useState<string[]>([])
+  const [actualFpts, setActualFpts] = useState<Record<string, Record<string, number>>>({})
 
   const weekLabel = getWeekRange(weekStart, weekEnd)
   const needed = Math.max(0, limit - confirmedStarts)
@@ -102,6 +103,7 @@ export default function MyTeam() {
         setCurrentWeek(data.currentWeek || 1)
         setSchedule(data.schedule || {})
         setMatchupDates(data.matchupDates || [])
+        setActualFpts(data.actualFpts || {})
       }
     } else {
       fetchRoster()
@@ -140,6 +142,7 @@ export default function MyTeam() {
         currentWeek: data.currentWeek || currentWeek,
         schedule: data.schedule || {},
         matchupDates: data.matchupDates || [],
+        actualFpts: data.actualFpts || {},
       }
       sessionStorage.setItem('skipper_roster', JSON.stringify(toCache))
 
@@ -151,6 +154,7 @@ export default function MyTeam() {
       setCurrentWeek(data.currentWeek || currentWeek)
       setSchedule(data.schedule || {})
       setMatchupDates(data.matchupDates || [])
+      setActualFpts(data.actualFpts || {})
     } catch (e: any) {
       setError(e.message || 'Failed to load roster')
     } finally {
@@ -274,6 +278,7 @@ export default function MyTeam() {
                 pitchers={rosterSPs}
                 schedule={schedule}
                 matchupDates={matchupDates}
+                actualFpts={actualFpts}
               />
             </div>
 

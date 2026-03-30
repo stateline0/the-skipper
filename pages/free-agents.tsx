@@ -22,6 +22,7 @@ export default function FreeAgents() {
   const [freeSPs, setFreeSPs] = useState<FreeSP[]>([])
   const [schedule, setSchedule] = useState<Record<string, any>>({})
   const [matchupDates, setMatchupDates] = useState<string[]>([])
+  const [actualFpts, setActualFpts] = useState<Record<string, Record<string, number>>>({})
 
   useEffect(() => {
     const savedPeriod = sessionStorage.getItem('skipper_selected_period')
@@ -37,6 +38,7 @@ export default function FreeAgents() {
         setFreeSPs(data.freeSPs || [])
         setSchedule(data.schedule || {})
         setMatchupDates(data.matchupDates || [])
+        setActualFpts(data.actualFpts || {})
       }
     }
 
@@ -72,11 +74,13 @@ export default function FreeAgents() {
         freeSPs: fas,
         schedule: data.schedule || {},
         matchupDates: data.matchupDates || [],
+        actualFpts: data.actualFpts || {},
       }
       sessionStorage.setItem('skipper_free_agents', JSON.stringify(toCache))
       setFreeSPs(fas)
       setSchedule(data.schedule || {})
       setMatchupDates(data.matchupDates || [])
+      setActualFpts(data.actualFpts || {})
     } catch (e: any) {
       setError(e.message || 'Failed to load free agents')
     } finally {
@@ -184,6 +188,7 @@ export default function FreeAgents() {
                 pitchers={freeSPs}
                 schedule={schedule}
                 matchupDates={matchupDates}
+                actualFpts={actualFpts}
                 prefixHeaders={<th style={{ padding: '8px 6px', fontSize: 10, fontFamily: 'var(--mono)', fontWeight: 500, color: 'var(--ink-3)', borderBottom: '1px solid var(--border)', minWidth: 32 }}></th>}
                 suffixHeaders={<th style={{ padding: '8px 6px', fontSize: 10, fontFamily: 'var(--mono)', fontWeight: 500, color: 'var(--ink-3)', borderBottom: '1px solid var(--border)', minWidth: 52, whiteSpace: 'nowrap' }}>Own%</th>}
                 renderPrefix={(pitcher, i) => (
