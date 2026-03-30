@@ -45,6 +45,8 @@ interface Props {
   prefixHeaders?: React.ReactNode
   suffixHeaders?: React.ReactNode
   onRowClick?: (index: number) => void
+  // Actual FPTS earned per pitcher per day: { "Garrett Crochet": { "2026-03-26": 26.0 } }
+  actualFpts?: Record<string, Record<string, number>>
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -93,11 +95,12 @@ function todayISO(): string {
 // ─── Cell renderer ────────────────────────────────────────────────────────────
 // Returns what to show in a single pitcher × day cell.
 
-function DayCell({ pitcher, date, schedule, today }: {
+function DayCell({ pitcher, date, schedule, today, actualFpts }: {
   pitcher: Pitcher
   date: string
   schedule: Schedule
   today: string
+  actualFpts?: Record<string, Record<string, number>>
 }) {
   const isPast   = date < today
   const isToday  = date === today
@@ -117,18 +120,28 @@ function DayCell({ pitcher, date, schedule, today }: {
   // Past or live game
   if (isPast || isToday) {
     if (isStarting) {
-      // They started — show opp + indicator
-      // Future: actual FPTS will go here once box score data is wired up
-        const indicator = startInfo.confirmed
-            ? <span style={{ fontSize: 11, color: 'var(--green)' }}>✓</span>
-            : <span style={{ fontSize: 10, fontWeight: 700, fontFamily: 'var(--mono)', color: 'var(--blue)', background: 'var(--blue-light)', borderRadius: 99, padding: '1px 5px' }}>P</span>
-        const color = startInfo.confirmed ? 'var(--green)' : 'var(--ink-3)'
+      // They started — show opp + indicator + actual FPTS if available
+      const indicator = startInfo.confirmed
+          ? <span style={{ fontSize: 11, color: 'var(--green)' }}>✓</span>
+          : <span style={{ fontSize: 10, fontWeight: 700, fontFamily: 'var(--mono)', color: 'var(--blue)', background: 'var(--blue-light)', borderRadius: 99, padding: '1px 5px' }}>P</span>
+      const color = startInfo.confirmed ? 'var(--green)' : 'var(--ink-3)'
+      const fpts = actualFpts?.[pitcher.name]?.[date]
+      const hasFpts = fpts !== undefined && fpts !== 0
       return (
         <div style={{ textAlign: 'center' }}>
           <div style={{ fontSize: 11, fontFamily: 'var(--mono)', fontWeight: 700, color }}>
             {oppLabel}
           </div>
           <div style={{ marginTop: 1 }}>{indicator}</div>
+          {hasFpts && (
+            <div style={{
+              fontSize: 10, fontFamily: 'var(--mono)', fontWeight: 700,
+              color: fpts > 0 ? 'var(--green)' : 'var(--red)',
+              marginTop: 1,
+            }}>
+              {fpts > 0 ? '+' : ''}{fpts.toFixed(1)}
+            </div>
+          )}
         </div>
       )
     } else {
@@ -171,6 +184,7 @@ export default function ScheduleGrid({
   renderPrefix, renderSuffix,
   prefixHeaders, suffixHeaders,
   onRowClick,
+  actualFpts,
 }: Props) {
   const today = todayISO()
 
@@ -290,6 +304,7 @@ export default function ScheduleGrid({
                         date={date}
                         schedule={schedule}
                         today={today}
+                        actualFpts={actualFpts}
                       />
                     </td>
                   )
