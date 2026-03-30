@@ -7,14 +7,16 @@ import json
 import os
 import sys
 import requests
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from http.server import BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
-# Import our own mlb.py module which lives in the same /api directory.
-# We add /var/task/api to the path so Python can find it on Vercel.
 sys.path.insert(0, os.path.join(os.path.dirname(__file__)))
 from mlb import get_starts_for_players, MATCHUP_PERIODS
+
+
+SEASON_START = datetime(2026, 3, 25)
 
 
 def get_headers_and_cookies():
@@ -29,9 +31,16 @@ def get_headers_and_cookies():
     return headers, cookies
 
 
-def get_slot_label(lineup_slot_id: int, eligible_slots: set) -> str:
-    if lineup_slot_id in (16, 17):
+def get_slot_label(lineup_slot_id: int, eligible_slots: set, inj_status: str) -> str:
+    # Slot 16 = IL slot, slot 17 = bench slot
+    if lineup_slot_id == 16:
         return "IL"
+    if lineup_slot_id == 17:
+        # Bench — classify by position eligibility
+        if 14 in eligible_slots:
+            return "SP"
+        if 13 in eligible_slots:
+            return "RP"
     if 14 in eligible_slots:
         return "SP"
     if 13 in eligible_slots and 14 not in eligible_slots:
@@ -40,8 +49,10 @@ def get_slot_label(lineup_slot_id: int, eligible_slots: set) -> str:
 
 
 def get_status(lineup_slot_id: int, inj_status: str) -> str:
-    if lineup_slot_id in (16, 17):
+    if lineup_slot_id == 16:
         return "IL"
+    if lineup_slot_id == 17:
+        return "Bench"
     if inj_status and inj_status not in ("ACTIVE", "NORMAL", ""):
         return inj_status
     return "Active"
@@ -85,14 +96,11 @@ def get_pro_team_map(headers, cookies):
     }
 
 
-from concurrent.futures import ThreadPoolExecutor, as_completed
-
-SEASON_START = datetime(2026, 3, 25)  # Scoring period 1 = March 25
-
 def date_to_scoring_period(date_str: str) -> int:
     """Convert a YYYY-MM-DD date string to ESPN's daily scoring period ID."""
     d = datetime.strptime(date_str, "%Y-%m-%d")
     return (d - SEASON_START).days + 1
+
 
 def get_actual_fpts(past_dates: list, player_names: set, headers: dict, cookies: dict) -> dict:
     """
@@ -107,11 +115,9 @@ def get_actual_fpts(past_dates: list, player_names: set, headers: dict, cookies:
         f"/seasons/{year}/segments/0/leagues/{league_id}"
     )
 
-    # Result dict: player_name -> { date_str -> fpts }
     result = {name: {} for name in player_names}
 
     def fetch_one_day(date_str: str):
-        """Fetch stats for a single scoring period. Returns (date_str, data)."""
         scoring_period = date_to_scoring_period(date_str)
         try:
             r = requests.get(
@@ -128,7 +134,6 @@ def get_actual_fpts(past_dates: list, player_names: set, headers: dict, cookies:
             print(f"[espn.py] Failed to fetch scoring period {scoring_period}: {e}")
             return date_str, {}
 
-    # Fire all requests in parallel — much faster than sequential
     with ThreadPoolExecutor(max_workers=6) as executor:
         futures = {executor.submit(fetch_one_day, d): d for d in past_dates}
         for future in as_completed(futures):
@@ -136,15 +141,12 @@ def get_actual_fpts(past_dates: list, player_names: set, headers: dict, cookies:
             if not data:
                 continue
             scoring_period = date_to_scoring_period(date_str)
-
-            # Walk every team's roster looking for our players
             for team in data.get("teams", []):
                 for entry in team.get("roster", {}).get("entries", []):
                     player = entry.get("playerPoolEntry", {}).get("player", {})
                     name   = player.get("fullName", "")
                     if name not in player_names:
                         continue
-                    # Find the per-game stat entry for this scoring period
                     for stat in player.get("stats", []):
                         if (stat.get("statSplitTypeId") == 5 and
                                 stat.get("scoringPeriodId") == scoring_period):
@@ -166,9 +168,9 @@ def get_league_data(team_id: int, week: int) -> dict:
     )
 
     # ── Matchup period metadata ──────────────────────────────────────────
-    mp         = MATCHUP_PERIODS.get(week, {})
-    week_start = ""
-    week_end   = ""
+    mp            = MATCHUP_PERIODS.get(week, {})
+    week_start    = ""
+    week_end      = ""
     matchup_limit = int(os.environ.get("ESPN_STARTS_LIMIT", "12"))
 
     if mp:
@@ -178,7 +180,7 @@ def get_league_data(team_id: int, week: int) -> dict:
         week_end      = fmt(mp["end"])
         matchup_limit = mp["limit"]
 
-    # ── Fetch roster (no scoringPeriodId — ESPN defaults to today's roster) ──
+    # ── Fetch roster ─────────────────────────────────────────────────────
     r = requests.get(
         base,
         params=[
@@ -201,7 +203,7 @@ def get_league_data(team_id: int, week: int) -> dict:
     team_name    = my_team.get("name", "").strip()
     current_week = data.get("scoringPeriodId", week)
 
-    # ── Fetch per-player projected stats ────────────────────────────────
+    # ── Fetch per-player projected stats ─────────────────────────────────
     xff_roster = json.dumps({
         "players": {
             "filterIds": {"value": [
@@ -226,23 +228,20 @@ def get_league_data(team_id: int, week: int) -> dict:
             proj = p.get("playerPoolEntry", {}).get("appliedStatTotal", 0)
             proj_fpts_by_player[pid] = round(float(proj or 0), 1)
 
-    # ── Fetch probable pitchers + full game schedule from mlb.py ────────
-    roster_entries = my_team.get("roster", {}).get("entries", [])
+    # ── Fetch probable pitchers + full game schedule ──────────────────────
+    roster_entries   = my_team.get("roster", {}).get("entries", [])
     all_player_names = [
         e.get("playerPoolEntry", {}).get("player", {}).get("fullName", "")
         for e in roster_entries
         if e.get("playerPoolEntry", {}).get("player", {}).get("fullName")
     ]
-    # get_starts_for_players returns (starts_map, schedule)
-    # starts_map: { "Garrett Crochet": {"starts": 2, "startDates": [...]} }
-    # schedule:   { "2026-03-26": { "BOS": {opponent, is_home, status} } }
     starts_map, schedule = get_starts_for_players(all_player_names, week)
 
-    # ── Parse roster ────────────────────────────────────────────────────
-    roster_sps = []
+    # ── Parse roster ──────────────────────────────────────────────────────
+    roster_sps  = []
     SP_ELIGIBLE = {14}
     RP_ELIGIBLE = {13}
-    IL_SLOTS    = {16, 17}
+    today_str   = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
     for entry in roster_entries:
         pool_entry     = entry.get("playerPoolEntry", {})
@@ -255,16 +254,19 @@ def get_league_data(team_id: int, week: int) -> dict:
 
         lineup_slot  = entry.get("lineupSlotId", 0)
         inj_status   = pool_entry.get("injuryStatus", "")
-        slot_label   = get_slot_label(lineup_slot, eligible_slots)
+        slot_label   = get_slot_label(lineup_slot, eligible_slots, inj_status)
         status_label = get_status(lineup_slot, inj_status)
         pro_team_id  = player.get("proTeamId", 0)
         team_abbrev  = PRO_TEAM_MAP.get(pro_team_id, str(pro_team_id))
         player_name  = player.get("fullName", "Unknown")
 
-        if lineup_slot in IL_SLOTS:
+        if lineup_slot in (16, 17):
+            # IL or Bench — zero out future projections but keep past start history
+            pitcher_data     = starts_map.get(player_name, {"starts": 0, "startDates": []})
+            past_start_dates = [s for s in pitcher_data["startDates"] if s["date"] < today_str]
             scheduled_starts = 0
             proj_fpts        = 0.0
-            start_dates      = []
+            start_dates      = past_start_dates
         else:
             pitcher_data     = starts_map.get(player_name, {"starts": 0, "startDates": []})
             scheduled_starts = pitcher_data["starts"]
@@ -272,20 +274,20 @@ def get_league_data(team_id: int, week: int) -> dict:
             proj_fpts        = proj_fpts_by_player.get(player_id, 0.0)
 
         roster_sps.append({
-            "name":          player_name,
-            "team":          team_abbrev,
-            "slot":          slot_label,
-            "injuryStatus":  status_label,
-            "starts":        scheduled_starts,
-            "startDates":    start_dates,   # [{date, confirmed}, ...]
-            "projFpts":      proj_fpts,
-            "percentOwned":  round(pool_entry.get("percentOwned", 100), 1),
+            "name":         player_name,
+            "team":         team_abbrev,
+            "slot":         slot_label,
+            "injuryStatus": status_label,
+            "starts":       scheduled_starts,
+            "startDates":   start_dates,
+            "projFpts":     proj_fpts,
+            "percentOwned": round(pool_entry.get("percentOwned", 100), 1),
         })
 
-    slot_order = {"SP": 0, "RP": 1, "IL": 2, "P": 1}
+    slot_order = {"SP": 0, "RP": 1, "IL": 2, "Bench": 3, "P": 1}
     roster_sps.sort(key=lambda x: (slot_order.get(x["slot"], 1), -x["starts"], -x["projFpts"]))
 
-    # ── Fetch free agents ────────────────────────────────────────────────
+    # ── Fetch free agents ─────────────────────────────────────────────────
     xff_fa = json.dumps({
         "players": {
             "filterStatus": {"value": ["FREEAGENT", "WAIVERS"]},
@@ -303,7 +305,7 @@ def get_league_data(team_id: int, week: int) -> dict:
     )
     free_agents = []
     if fa_r.status_code == 200:
-        fa_names = []
+        fa_names      = []
         fa_players_raw = []
         for p in fa_r.json().get("players", []):
             player = p.get("player", {})
@@ -315,8 +317,6 @@ def get_league_data(team_id: int, week: int) -> dict:
             fa_names.append(player["fullName"])
             fa_players_raw.append(p)
 
-        # Get starts + schedule for free agents (schedule already fetched above,
-        # but get_starts_for_players is cheap to call again for FA names)
         fa_starts_map, _ = get_starts_for_players(fa_names, week)
 
         inj_label_map = {
@@ -325,12 +325,12 @@ def get_league_data(team_id: int, week: int) -> dict:
             "DAY_TO_DAY": "DTD", "SUSPENSION": "SUSP",
         }
         for p in fa_players_raw:
-            player         = p.get("player", {})
-            fa_name        = player.get("fullName", "Unknown")
-            pro_team_id    = player.get("proTeamId", 0)
-            team_abbrev    = PRO_TEAM_MAP.get(pro_team_id, str(pro_team_id))
-            raw_inj        = player.get("injuryStatus", "ACTIVE")
-            pitcher_data   = fa_starts_map.get(fa_name, {"starts": 0, "startDates": []})
+            player       = p.get("player", {})
+            fa_name      = player.get("fullName", "Unknown")
+            pro_team_id  = player.get("proTeamId", 0)
+            team_abbrev  = PRO_TEAM_MAP.get(pro_team_id, str(pro_team_id))
+            raw_inj      = player.get("injuryStatus", "ACTIVE")
+            pitcher_data = fa_starts_map.get(fa_name, {"starts": 0, "startDates": []})
 
             free_agents.append({
                 "name":         fa_name,
@@ -344,11 +344,10 @@ def get_league_data(team_id: int, week: int) -> dict:
                 "checked":      player.get("ownership", {}).get("percentOwned", 0) >= 15,
             })
 
-    # ── Fetch actual FPTS for past starts ───────────────────────────────
+    # ── Fetch actual FPTS for past dates ──────────────────────────────────
     today     = datetime.now(timezone.utc).date()
     all_dates = []
     if mp:
-        from datetime import timedelta
         start = datetime.strptime(mp["start"], "%Y-%m-%d").date()
         end   = datetime.strptime(mp["end"], "%Y-%m-%d").date()
         d     = start
@@ -356,9 +355,7 @@ def get_league_data(team_id: int, week: int) -> dict:
             all_dates.append(d.strftime("%Y-%m-%d"))
             d += timedelta(days=1)
 
-    all_pitcher_names = set(
-        p["name"] for p in roster_sps
-    )
+    all_pitcher_names = set(p["name"] for p in roster_sps)
     actual_fpts = {}
     if all_dates:
         actual_fpts = get_actual_fpts(all_dates, all_pitcher_names, headers, cookies)
@@ -375,6 +372,7 @@ def get_league_data(team_id: int, week: int) -> dict:
         "matchupDates": [mp["start"], mp["end"]] if mp else [],
         "actualFpts":   actual_fpts,
     }
+
 
 class handler(BaseHTTPRequestHandler):
     def do_GET(self):
