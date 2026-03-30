@@ -32,10 +32,11 @@ def get_headers_and_cookies():
 
 
 def get_slot_label(lineup_slot_id: int, eligible_slots: set, inj_status: str) -> str:
-    # Slot 16 = IL slot, slot 17 = bench slot
-    if lineup_slot_id == 16:
-        return "IL"
+    # Slot 17 = true IL (injured players)
+    # Slot 16 = bench (healthy players parked there)
     if lineup_slot_id == 17:
+        return "IL"
+    if lineup_slot_id == 16:
         # Bench — classify by position eligibility
         if 14 in eligible_slots:
             return "SP"
@@ -49,9 +50,9 @@ def get_slot_label(lineup_slot_id: int, eligible_slots: set, inj_status: str) ->
 
 
 def get_status(lineup_slot_id: int, inj_status: str) -> str:
-    if lineup_slot_id == 16:
-        return "IL"
     if lineup_slot_id == 17:
+        return "IL"
+    if lineup_slot_id == 16:
         return "Bench"
     if inj_status and inj_status not in ("ACTIVE", "NORMAL", ""):
         return inj_status
