@@ -85,6 +85,76 @@ def get_pro_team_map(headers, cookies):
     }
 
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
+SEASON_START = datetime(2026, 3, 25)  # Scoring period 1 = March 25
+
+def date_to_scoring_period(date_str: str) -> int:
+    """Convert a YYYY-MM-DD date string to ESPN's daily scoring period ID."""
+    d = datetime.strptime(date_str, "%Y-%m-%d")
+    return (d - SEASON_START).days + 1
+
+def get_actual_fpts(past_dates: list, player_names: set, headers: dict, cookies: dict) -> dict:
+    """
+    Fetch actual fantasy points earned per pitcher per day for all past dates.
+    Fires one ESPN API request per date, in parallel.
+    Returns: { "Garrett Crochet": { "2026-03-26": 26.0, ... }, ... }
+    """
+    league_id = os.environ["ESPN_LEAGUE_ID"]
+    year      = os.environ.get("ESPN_SEASON", "2026")
+    base      = (
+        f"https://lm-api-reads.fantasy.espn.com/apis/v3/games/flb"
+        f"/seasons/{year}/segments/0/leagues/{league_id}"
+    )
+
+    # Result dict: player_name -> { date_str -> fpts }
+    result = {name: {} for name in player_names}
+
+    def fetch_one_day(date_str: str):
+        """Fetch stats for a single scoring period. Returns (date_str, data)."""
+        scoring_period = date_to_scoring_period(date_str)
+        try:
+            r = requests.get(
+                base,
+                params=[("view", "mRoster"), ("scoringPeriodId", scoring_period)],
+                cookies=cookies,
+                headers=headers,
+                timeout=15
+            )
+            if r.status_code != 200:
+                return date_str, {}
+            return date_str, r.json()
+        except Exception as e:
+            print(f"[espn.py] Failed to fetch scoring period {scoring_period}: {e}")
+            return date_str, {}
+
+    # Fire all requests in parallel — much faster than sequential
+    with ThreadPoolExecutor(max_workers=6) as executor:
+        futures = {executor.submit(fetch_one_day, d): d for d in past_dates}
+        for future in as_completed(futures):
+            date_str, data = future.result()
+            if not data:
+                continue
+            scoring_period = date_to_scoring_period(date_str)
+
+            # Walk every team's roster looking for our players
+            for team in data.get("teams", []):
+                for entry in team.get("roster", {}).get("entries", []):
+                    player = entry.get("playerPoolEntry", {}).get("player", {})
+                    name   = player.get("fullName", "")
+                    if name not in player_names:
+                        continue
+                    # Find the per-game stat entry for this scoring period
+                    for stat in player.get("stats", []):
+                        if (stat.get("statSplitTypeId") == 5 and
+                                stat.get("scoringPeriodId") == scoring_period):
+                            fpts = stat.get("appliedTotal", 0.0)
+                            result[name][date_str] = round(float(fpts), 1)
+                            break
+
+    return result
+
+
 def get_league_data(team_id: int, week: int) -> dict:
     league_id = os.environ["ESPN_LEAGUE_ID"]
     year      = os.environ.get("ESPN_SEASON", "2026")
@@ -274,6 +344,25 @@ def get_league_data(team_id: int, week: int) -> dict:
                 "checked":      player.get("ownership", {}).get("percentOwned", 0) >= 15,
             })
 
+    # ── Fetch actual FPTS for past starts ───────────────────────────────
+    today     = datetime.now(timezone.utc).date()
+    all_dates = []
+    if mp:
+        from datetime import timedelta
+        start = datetime.strptime(mp["start"], "%Y-%m-%d").date()
+        end   = datetime.strptime(mp["end"], "%Y-%m-%d").date()
+        d     = start
+        while d < today and d <= end:
+            all_dates.append(d.strftime("%Y-%m-%d"))
+            d += timedelta(days=1)
+
+    all_pitcher_names = set(
+        p["name"] for p in roster_sps
+    )
+    actual_fpts = {}
+    if all_dates:
+        actual_fpts = get_actual_fpts(all_dates, all_pitcher_names, headers, cookies)
+
     return {
         "ok":           True,
         "teamName":     team_name,
@@ -284,8 +373,8 @@ def get_league_data(team_id: int, week: int) -> dict:
         "freeAgentSPs": free_agents,
         "schedule":     schedule,
         "matchupDates": [mp["start"], mp["end"]] if mp else [],
+        "actualFpts":   actual_fpts,
     }
-
 
 class handler(BaseHTTPRequestHandler):
     def do_GET(self):
