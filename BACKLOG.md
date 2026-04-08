@@ -1,6 +1,40 @@
 # The Skipper — Backlog
 
-Last updated: March 30, 2026
+Last updated: April 7, 2026
+
+---
+
+## ✅ Completed (session April 7, 2026)
+
+### Relievers section on My Team
+- [x] Separate "Your Relievers" grid below the starters grid using `ScheduleGrid` component
+- [x] Day-by-day matchup cells for RPs — same layout as starters
+- [x] Actual FPTS shown on appearance days (not just start days) — fixed `DayCell` to render points for non-start appearances
+- [x] Saves tracking: ESPN stat ID 57 captured per player per day in `get_actual_fpts()`
+- [x] 🔒 emoji on days a save occurred
+- [x] "X team SV this period" badge in relievers section header
+- [x] Saves column replaces Starts column in relievers grid (`savesData` prop on `ScheduleGrid`)
+- [x] Bench-day strikethrough: FPTS earned while on bench shown in gray strikethrough
+- [x] `actualSaves` and `benchDays` added to ESPN API response and persisted in sessionStorage
+- [x] `ScheduleGrid` now accepts `savesData`, `actualSaves`, `benchDays` props
+
+### Period dropdown — current period default + auto-fetch
+- [x] `api/config.py` now returns `currentPeriod` — calculated by comparing today's date against the period table
+- [x] Dropdown defaults to current period on fresh load (was always defaulting to Period 1)
+- [x] Changing the dropdown now auto-fetches without requiring a manual Refresh click
+- [x] `useRef` pattern used to distinguish first render from user-triggered period changes
+- [x] Applied to both `my-team.tsx` and `free-agents.tsx`
+
+### Config date format fix
+- [x] `api/config.py` MATCHUP_PERIODS table converted from human-readable strings ("Apr 6") to full ISO dates ("2026-04-06")
+- [x] Dropdown option labels formatted in frontend with a `fmt()` helper
+- [x] Consistent with `mlb.py` date format — single source of truth now properly structured
+
+### Cache version system
+- [x] `CACHE_VERSION = 2` constant in `my-team.tsx` and `free-agents.tsx`
+- [x] Version written to sessionStorage on every cache save
+- [x] Version checked on cache load — mismatch triggers auto-fetch instead of loading stale data
+- [x] Eliminates need to manually clear browser storage when API response shape changes
 
 ---
 
@@ -80,18 +114,6 @@ Last updated: March 30, 2026
 ---
 
 ## 🔜 Next session priorities
-
-### Relievers section on My Team (highest priority)
-- [ ] Add a separate "My Relievers" table below the starters grid
-- [ ] Shows RP-slot players (Jeff Hoffman, Edwin Diaz, David Bednar, etc.)
-- [ ] Simpler display than the starters grid — summed actual FPTS for the period
-- [ ] If an RP has a confirmed or actual start this period, promote them into the starters section
-- [ ] Explore tracking Saves — either per-player or as a group total (ESPN stat ID 57 = saves, confirmed in raw API data)
-- [ ] Bench players (slot 16) should appear here, not in the IL section
-
-### Reliever actual FPTS — known gap
-- [ ] `actualFpts` is fetched for all `roster_sps` names — RPs are included but need to verify points are displaying correctly in the new Relievers section
-- [ ] Jeff Hoffman showed 9.0 pts on Mar 27 and Mar 29 in the raw data — confirm this surfaces in the UI
 
 ### Dashboard "at a glance" component
 - [ ] "This week at a glance" tile — projected starts vs. weekly limit with visual progress bar
@@ -216,6 +238,8 @@ https://lm-api-reads.fantasy.espn.com/apis/v3/games/flb/seasons/{year}/segments/
 - `statSplitTypeId=5` = per-game log entries
 - One entry per game, keyed by `scoringPeriodId`
 - `appliedTotal` = actual fantasy points earned that game
+- `stats` dict within each entry contains raw stat values keyed by stat ID
+- Stat ID 57 = saves — confirmed in raw API data
 - Must fetch with the specific day's `scoringPeriodId` to get that day's stats
 - No single call returns full history — use parallel fetching via `ThreadPoolExecutor`
 
@@ -246,7 +270,6 @@ https://lm-api-reads.fantasy.espn.com/apis/v3/games/flb/seasons/{year}/segments/
 20=WSH, 21=NYM, 22=PHI, 23=PIT, 24=STL, 25=SD, 26=SF, 27=COL, 28=MIA,
 29=ARI, 30=TB, 31=FA, 32=FA
 ```
-
 ---
 
 ## 📚 MLB Stats API reference
