@@ -254,6 +254,7 @@ def get_projected_fpts(player_starts: list) -> tuple:
         # RPs reach full trust at 20 IP (~20 appearances, ~6 weeks).
         ip_threshold     = 20.0 if is_rp else 50.0
         this_year_weight = min(1.0, ip_26 / ip_threshold)
+        last_year_weight = 1.0 - this_year_weight
 
         avgs_26 = per_game_avgs(stat_26, gs_26)
         avgs_25 = per_game_avgs(stat_25, gs_25)
