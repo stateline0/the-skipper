@@ -156,7 +156,33 @@ function DayCell({ pitcher, date, schedule, today, actualFpts, benchDays, actual
         </div>
       )
     } else {
-      // Team played but pitcher didn't start
+      // Team played but pitcher didn't start — still show FPTS if they appeared (e.g. relievers)
+      const fpts = actualFpts?.[pitcher.name]?.[date]
+      const hasFpts = fpts !== undefined && fpts !== 0
+      const wasOnBench = benchDays?.[pitcher.name]?.includes(date) ?? false
+      const hasSave = !!actualSaves?.[pitcher.name]?.[date]
+
+      if (hasFpts) {
+        return (
+          <div style={{ textAlign: 'center' }}>
+            <span style={{ fontSize: 11, fontFamily: 'var(--mono)', color: 'var(--ink-3)' }}>
+              {oppLabel}
+            </span>
+            <div style={{
+              fontSize: 10, fontFamily: 'var(--mono)', fontWeight: 700,
+              color: wasOnBench ? 'var(--ink-3)' : fpts > 0 ? 'var(--green)' : 'var(--red)',
+              marginTop: 1,
+              textDecoration: wasOnBench ? 'line-through' : 'none',
+            }}>
+              {fpts > 0 ? '+' : ''}{fpts.toFixed(1)}
+            </div>
+            {hasSave && (
+              <div style={{ fontSize: 10, marginTop: 1 }} title="Save recorded">🔒</div>
+            )}
+          </div>
+        )
+      }
+
       return (
         <span style={{ fontSize: 11, fontFamily: 'var(--mono)', color: 'var(--ink-3)' }}>
           {oppLabel}
