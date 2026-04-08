@@ -2,6 +2,43 @@
 
 ---
 
+## Session 6 — April 7, 2026
+
+Relievers section, period dropdown fixes, cache version system.
+
+### Key learnings this session
+- `DayCell` in `ScheduleGrid` was gated behind `isStarting` — FPTS only rendered on days a pitcher had a `startDate` entry. Relievers never have `startDates`, so their points were silently swallowed. Fix: check for FPTS on non-start appearance days too and render them in the non-starting branch.
+- ESPN stat ID 57 = saves, confirmed live. Captured in the `stats` dict within each `statSplitTypeId=5` entry alongside `appliedTotal`.
+- `benchDays` requires per-day roster fetches to determine — the `lineupSlotId` for a player varies day to day as they're moved in and out of the lineup. We already fire one request per past day in `get_actual_fpts()`, so capturing slot ID there is essentially free.
+- `CACHE_VERSION` constant pattern: write it to sessionStorage on save, check it on load, discard and re-fetch on mismatch. Eliminates the need to ever manually clear browser storage when the API response shape changes. Bump the number any time new fields are added to the cached object.
+- `useRef(true)` pattern for distinguishing first render from subsequent renders in a `useEffect` — lets us auto-fetch on period change without double-fetching on initial load.
+- `config.py` date format was inconsistent with `mlb.py` — human-readable strings ("Apr 6") vs ISO ("2026-04-06"). Converted config to ISO throughout; frontend formats for display with a small `fmt()` helper.
+- ESPN credentials live entirely in Vercel env vars server-side — never in sessionStorage. Cache invalidation does not affect auth.
+
+### Relievers section
+- `api/espn.py`: `get_actual_fpts()` extended to also return `actualSaves` (stat ID 57) and `benchDays` (lineupSlotId==16 per day) — both structured as `{ player_name: { date: value } }` and `{ player_name: [dates] }` respectively
+- `api/espn.py`: `get_league_data()` unpacks the new tuple return, adds `actualSaves` and `benchDays` to API response
+- `components/ScheduleGrid.tsx`: new props `actualSaves`, `benchDays`, `savesData` — when `savesData` provided, Starts column replaced with Saves column
+- `components/ScheduleGrid.tsx`: `DayCell` now renders FPTS and 🔒 emoji on non-start appearance days (reliever appearances)
+- `components/ScheduleGrid.tsx`: bench-day FPTS shown in gray strikethrough via `benchDays` lookup
+- `pages/my-team.tsx`: roster split into `rosterStarterSPs` (slot=SP) and `rosterRelievers` (slot=RP)
+- `pages/my-team.tsx`: relievers rendered in their own card with `ScheduleGrid` + `savesData` prop + team saves badge
+
+### Period dropdown fixes
+- `api/config.py`: added `get_current_period()` — walks MATCHUP_PERIODS table, returns period containing today's date
+- `api/config.py`: `currentPeriod` added to config API response
+- `api/config.py`: MATCHUP_PERIODS dates converted from human-readable to full ISO format
+- `pages/my-team.tsx` + `pages/free-agents.tsx`: `selectedPeriod` initial state changed from `1` to `null`
+- Both pages: config `useEffect` now sets period from sessionStorage if present, otherwise uses `currentPeriod` from config
+- Both pages: `useRef(true)` pattern added — period `useEffect` skips fetch on first render if cache is valid, fires fetch on all subsequent period changes
+
+### Cache version system
+- `pages/my-team.tsx` + `pages/free-agents.tsx`: `CACHE_VERSION = 2` constant added
+- Version written into sessionStorage cache object on every save
+- Version checked on cache load — mismatch causes early return, triggering auto-fetch via period effect
+
+---
+
 ## Session 5 — March 29/30, 2026
 
 Actual FPTS in schedule grid cells, bench/IL distinction fix, and free agents cache fix.

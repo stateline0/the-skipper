@@ -1,7 +1,9 @@
 import Head from 'next/head'
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { useRouter } from 'next/router'
 import ScheduleGrid from '../components/ScheduleGrid'
+
+const CACHE_VERSION = 2 // bump this whenever the API response shape changes
 
 interface FreeSP {
   name: string; team: string; slot: string; injuryStatus: string
@@ -17,7 +19,7 @@ export default function FreeAgents() {
   const router = useRouter()
   const [loading, setLoading] = useState(false)
   const [matchupPeriods, setMatchupPeriods] = useState<MatchupPeriod[]>([])
-  const [selectedPeriod, setSelectedPeriod] = useState(1)
+  const [selectedPeriod, setSelectedPeriod] = useState<number | null>(null)
   const [error, setError] = useState('')
   const [freeSPs, setFreeSPs] = useState<FreeSP[]>([])
   const [schedule, setSchedule] = useState<Record<string, any>>({})
@@ -25,28 +27,47 @@ export default function FreeAgents() {
   const [actualFpts, setActualFpts] = useState<Record<string, Record<string, number>>>({})
 
   useEffect(() => {
-    const savedPeriod = sessionStorage.getItem('skipper_selected_period')
-    if (savedPeriod) setSelectedPeriod(parseInt(savedPeriod))
+    fetch('/api/config')
+      .then(r => r.json())
+      .then(data => {
+        if (data.matchupPeriods) setMatchupPeriods(data.matchupPeriods)
+        const saved = sessionStorage.getItem('skipper_selected_period')
+        const period = saved ? parseInt(saved) : (data.currentPeriod ?? 1)
+        setSelectedPeriod(period)
+      })
+      .catch(() => {})
 
     const cached = sessionStorage.getItem('skipper_free_agents')
     if (cached) {
       const data = JSON.parse(cached)
-      // If cache is missing matchupDates, it's stale — auto-fetch fresh data
-      if (!data.matchupDates || data.matchupDates.length === 0) {
+      if (data.version !== CACHE_VERSION) return // outdated shape — let the fetch effect handle it
+      if (!data.matchupDates || data.matchupDates.length === 0) return
+      setFreeSPs(data.freeSPs || [])
+      setSchedule(data.schedule || {})
+      setMatchupDates(data.matchupDates || [])
+      setActualFpts(data.actualFpts || {})
+    }
+  }, [])
+
+  const isFirstRender = useRef(true)
+
+  useEffect(() => {
+    if (selectedPeriod === null) return
+
+    if (isFirstRender.current) {
+      isFirstRender.current = false
+      const cached = sessionStorage.getItem('skipper_free_agents')
+      if (!cached) {
         fetchFreeAgents()
       } else {
-        setFreeSPs(data.freeSPs || [])
-        setSchedule(data.schedule || {})
-        setMatchupDates(data.matchupDates || [])
-        setActualFpts(data.actualFpts || {})
+        const data = JSON.parse(cached)
+        if (!data.matchupDates || data.matchupDates.length === 0) fetchFreeAgents()
       }
+      return
     }
 
-    fetch('/api/config')
-      .then(r => r.json())
-      .then(data => { if (data.matchupPeriods) setMatchupPeriods(data.matchupPeriods) })
-      .catch(() => {})
-  }, [])
+    fetchFreeAgents()
+  }, [selectedPeriod, matchupPeriods])
 
   const fetchFreeAgents = useCallback(async () => {
     setLoading(true)
@@ -71,6 +92,7 @@ export default function FreeAgents() {
       }))
 
       const toCache = {
+        version: CACHE_VERSION,
         freeSPs: fas,
         schedule: data.schedule || {},
         matchupDates: data.matchupDates || [],
@@ -118,7 +140,7 @@ export default function FreeAgents() {
           <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
             {matchupPeriods.length > 0 && (
               <select
-                value={selectedPeriod}
+                value={selectedPeriod ?? ''}
                 onChange={e => setSelectedPeriod(parseInt(e.target.value))}
                 style={{
                   fontFamily: 'var(--mono)', fontSize: 12, padding: '8px 12px',
@@ -126,9 +148,18 @@ export default function FreeAgents() {
                   background: 'var(--white)', color: 'var(--ink)', cursor: 'pointer', outline: 'none',
                 }}
               >
-                {matchupPeriods.map(p => (
-                  <option key={p.period} value={p.period}>{p.label} · {p.start}–{p.end}</option>
-                ))}
+                {matchupPeriods.map(p => {
+                  const fmt = (iso: string) => {
+                    const [, m, d] = iso.split('-')
+                    const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
+                    return `${months[parseInt(m)-1]} ${parseInt(d)}`
+                  }
+                  return (
+                    <option key={p.period} value={p.period}>
+                      {p.label} · {fmt(p.start)}–{fmt(p.end)}
+                    </option>
+                  )
+                })}
               </select>
             )}
             <button onClick={fetchFreeAgents} disabled={loading} style={{

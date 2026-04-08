@@ -105,9 +105,12 @@ def date_to_scoring_period(date_str: str) -> int:
 
 def get_actual_fpts(past_dates: list, player_names: set, headers: dict, cookies: dict) -> dict:
     """
-    Fetch actual fantasy points earned per pitcher per day for all past dates.
+    Fetch actual fantasy points, saves, and bench status per pitcher per day.
     Fires one ESPN API request per date, in parallel.
-    Returns: { "Garrett Crochet": { "2026-03-26": 26.0, ... }, ... }
+    Returns:
+      actualFpts:  { "Garrett Crochet": { "2026-03-26": 26.0, ... }, ... }
+      actualSaves: { "Edwin Diaz":       { "2026-03-27": 1,   ... }, ... }
+      benchDays:   { "Edwin Diaz":       ["2026-03-27", ...],       ... }
     """
     league_id = os.environ["ESPN_LEAGUE_ID"]
     year      = os.environ.get("ESPN_SEASON", "2026")
@@ -116,7 +119,9 @@ def get_actual_fpts(past_dates: list, player_names: set, headers: dict, cookies:
         f"/seasons/{year}/segments/0/leagues/{league_id}"
     )
 
-    result = {name: {} for name in player_names}
+    fpts_result  = {name: {} for name in player_names}
+    saves_result = {name: {} for name in player_names}
+    bench_result = {name: [] for name in player_names}
 
     def fetch_one_day(date_str: str):
         scoring_period = date_to_scoring_period(date_str)
@@ -144,18 +149,32 @@ def get_actual_fpts(past_dates: list, player_names: set, headers: dict, cookies:
             scoring_period = date_to_scoring_period(date_str)
             for team in data.get("teams", []):
                 for entry in team.get("roster", {}).get("entries", []):
-                    player = entry.get("playerPoolEntry", {}).get("player", {})
-                    name   = player.get("fullName", "")
+                    pool_entry = entry.get("playerPoolEntry", {})
+                    player     = pool_entry.get("player", {})
+                    name       = player.get("fullName", "")
                     if name not in player_names:
                         continue
+
+                    # Track bench status for this specific day
+                    lineup_slot = entry.get("lineupSlotId", 0)
+                    if lineup_slot == 16:
+                        bench_result[name].append(date_str)
+
+                    # Pull per-game stats for this scoring period
                     for stat in player.get("stats", []):
                         if (stat.get("statSplitTypeId") == 5 and
                                 stat.get("scoringPeriodId") == scoring_period):
                             fpts = stat.get("appliedTotal", 0.0)
-                            result[name][date_str] = round(float(fpts), 1)
+                            fpts_result[name][date_str] = round(float(fpts), 1)
+
+                            # Stat ID 57 = saves
+                            raw_stats = stat.get("stats", {})
+                            saves = raw_stats.get("57", 0)
+                            if saves:
+                                saves_result[name][date_str] = int(saves)
                             break
 
-    return result
+    return fpts_result, saves_result, bench_result
 
 
 def get_league_data(team_id: int, week: int) -> dict:
@@ -357,9 +376,13 @@ def get_league_data(team_id: int, week: int) -> dict:
             d += timedelta(days=1)
 
     all_pitcher_names = set(p["name"] for p in roster_sps)
-    actual_fpts = {}
+    actual_fpts  = {}
+    actual_saves = {}
+    bench_days   = {}
     if all_dates:
-        actual_fpts = get_actual_fpts(all_dates, all_pitcher_names, headers, cookies)
+        actual_fpts, actual_saves, bench_days = get_actual_fpts(
+            all_dates, all_pitcher_names, headers, cookies
+        )
 
     return {
         "ok":           True,
@@ -372,6 +395,8 @@ def get_league_data(team_id: int, week: int) -> dict:
         "schedule":     schedule,
         "matchupDates": [mp["start"], mp["end"]] if mp else [],
         "actualFpts":   actual_fpts,
+        "actualSaves":  actual_saves,
+        "benchDays":    bench_days,
     }
 
 

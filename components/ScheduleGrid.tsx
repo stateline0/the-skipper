@@ -45,8 +45,15 @@ interface Props {
   prefixHeaders?: React.ReactNode
   suffixHeaders?: React.ReactNode
   onRowClick?: (index: number) => void
-  // Actual FPTS earned per pitcher per day: { "Garrett Crochet": { "2026-03-26": 26.0 } }
+  // Actual // Actual FPTS earned per pitcher per day: { "Garrett Crochet": { "2026-03-26": 26.0 } }
   actualFpts?: Record<string, Record<string, number>>
+  // Days each pitcher was on bench: { "Edwin Diaz": ["2026-03-26", ...] }
+  benchDays?: Record<string, string[]>
+  // Saves per pitcher per day: { "Edwin Diaz": { "2026-03-27": 1 } }
+  // Saves per pitcher per day: { "Edwin Diaz": { "2026-03-27": 1 } }
+  actualSaves?: Record<string, Record<string, number>>
+  // When provided, replaces the Starts column with a Saves column
+  savesData?: Record<string, Record<string, number>>
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -95,13 +102,15 @@ function todayISO(): string {
 // ─── Cell renderer ────────────────────────────────────────────────────────────
 // Returns what to show in a single pitcher × day cell.
 
-function DayCell({ pitcher, date, schedule, today, actualFpts }: {
+function DayCell({ pitcher, date, schedule, today, actualFpts, benchDays, actualSaves }: {
   pitcher: Pitcher
   date: string
   schedule: Schedule
   today: string
   actualFpts?: Record<string, Record<string, number>>
-}) {
+  benchDays?: Record<string, string[]>
+  actualSaves?: Record<string, Record<string, number>>
+}){
   const isPast   = date < today
   const isToday  = date === today
   const isFuture = date > today
@@ -127,6 +136,7 @@ function DayCell({ pitcher, date, schedule, today, actualFpts }: {
       const color = startInfo.confirmed ? 'var(--green)' : 'var(--ink-3)'
       const fpts = actualFpts?.[pitcher.name]?.[date]
       const hasFpts = fpts !== undefined && fpts !== 0
+      const wasOnBench = benchDays?.[pitcher.name]?.includes(date) ?? false
       return (
         <div style={{ textAlign: 'center' }}>
           <div style={{ fontSize: 11, fontFamily: 'var(--mono)', fontWeight: 700, color }}>
@@ -136,16 +146,46 @@ function DayCell({ pitcher, date, schedule, today, actualFpts }: {
           {hasFpts && (
             <div style={{
               fontSize: 10, fontFamily: 'var(--mono)', fontWeight: 700,
-              color: fpts > 0 ? 'var(--green)' : 'var(--red)',
+              color: wasOnBench ? 'var(--ink-3)' : fpts > 0 ? 'var(--green)' : 'var(--red)',
               marginTop: 1,
+              textDecoration: wasOnBench ? 'line-through' : 'none',
             }}>
               {fpts > 0 ? '+' : ''}{fpts.toFixed(1)}
             </div>
           )}
+          {actualSaves?.[pitcher.name]?.[date] && (
+            <div style={{ fontSize: 10, marginTop: 1 }} title="Save recorded">🔒</div>
+          )}
         </div>
       )
     } else {
-      // Team played but pitcher didn't start
+      // Team played but pitcher didn't start — still show FPTS if they appeared (e.g. relievers)
+      const fpts = actualFpts?.[pitcher.name]?.[date]
+      const hasFpts = fpts !== undefined && fpts !== 0
+      const wasOnBench = benchDays?.[pitcher.name]?.includes(date) ?? false
+      const hasSave = !!actualSaves?.[pitcher.name]?.[date]
+
+      if (hasFpts) {
+        return (
+          <div style={{ textAlign: 'center' }}>
+            <span style={{ fontSize: 11, fontFamily: 'var(--mono)', color: 'var(--ink-3)' }}>
+              {oppLabel}
+            </span>
+            <div style={{
+              fontSize: 10, fontFamily: 'var(--mono)', fontWeight: 700,
+              color: wasOnBench ? 'var(--ink-3)' : fpts > 0 ? 'var(--green)' : 'var(--red)',
+              marginTop: 1,
+              textDecoration: wasOnBench ? 'line-through' : 'none',
+            }}>
+              {fpts > 0 ? '+' : ''}{fpts.toFixed(1)}
+            </div>
+            {hasSave && (
+              <div style={{ fontSize: 10, marginTop: 1 }} title="Save recorded">🔒</div>
+            )}
+          </div>
+        )
+      }
+
       return (
         <span style={{ fontSize: 11, fontFamily: 'var(--mono)', color: 'var(--ink-3)' }}>
           {oppLabel}
@@ -185,6 +225,9 @@ export default function ScheduleGrid({
   prefixHeaders, suffixHeaders,
   onRowClick,
   actualFpts,
+  benchDays,
+  actualSaves,
+  savesData,
 }: Props) {
   const today = todayISO()
 
@@ -253,7 +296,7 @@ export default function ScheduleGrid({
             })}
 
             {/* Fixed right columns */}
-            <th style={{ ...headerStyle, minWidth: 52 }}>Starts</th>
+            <th style={{ ...headerStyle, minWidth: 52 }}>{savesData ? 'Saves' : 'Starts'}</th>
             <th style={{ ...headerStyle, minWidth: 72 }}>Proj FPTS</th>
             {suffixHeaders}
           </tr>
@@ -305,14 +348,18 @@ export default function ScheduleGrid({
                         schedule={schedule}
                         today={today}
                         actualFpts={actualFpts}
+                        benchDays={benchDays}
+                        actualSaves={actualSaves}
                       />
                     </td>
                   )
                 })}
 
-                {/* Starts count */}
+                {/* Starts or Saves count */}
                 <td style={{ ...cellStyle, fontFamily: 'var(--mono)', fontWeight: 700 }}>
-                  {pitcher.starts}
+                  {savesData
+                    ? Object.values(savesData[pitcher.name] || {}).reduce((a, b) => a + b, 0)
+                    : pitcher.starts}
                 </td>
 
                 {/* Proj FPTS */}

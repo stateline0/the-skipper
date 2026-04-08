@@ -1,5 +1,6 @@
 import Head from 'next/head'
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
+const CACHE_VERSION = 2 // bump this whenever the API response shape changes
 import { useRouter } from 'next/router'
 import ScheduleGrid from '../components/ScheduleGrid'
 
@@ -65,24 +66,34 @@ export default function MyTeam() {
   const [teamName, setTeamName] = useState('')
   const [currentWeek, setCurrentWeek] = useState(1)
   const [matchupPeriods, setMatchupPeriods] = useState<MatchupPeriod[]>([])
-  const [selectedPeriod, setSelectedPeriod] = useState(1)
+  const [selectedPeriod, setSelectedPeriod] = useState<number | null>(null)
   const [schedule, setSchedule] = useState<Record<string, any>>({})
   const [matchupDates, setMatchupDates] = useState<string[]>([])
-  const [actualFpts, setActualFpts] = useState<Record<string, Record<string, number>>>({})
+  const [actualFpts, setActualFpts]   = useState<Record<string, Record<string, number>>>({})
+  const [actualSaves, setActualSaves] = useState<Record<string, Record<string, number>>>({})
+  const [benchDays, setBenchDays]     = useState<Record<string, string[]>>({})
 
   const weekLabel = getWeekRange(weekStart, weekEnd)
   const needed = Math.max(0, limit - confirmedStarts)
+
+  const rosterStarterSPs = rosterSPs.filter(p => p.slot === 'SP')
+  const rosterRelievers  = rosterSPs.filter(p => p.slot === 'RP')
+
+  const teamSavesTotal = rosterRelievers.reduce((acc, p) => {
+    const byDay = actualSaves[p.name] || {}
+    return acc + Object.values(byDay).reduce((a, b) => a + b, 0)
+  }, 0)
 
   useEffect(() => {
     fetch('/api/config')
       .then(r => r.json())
       .then(data => {
         if (data.defaultLimit) setLimit(data.defaultLimit)
-        if (data.matchupPeriods) {
-          setMatchupPeriods(data.matchupPeriods)
-          const cached = sessionStorage.getItem('skipper_selected_period')
-          if (cached) setSelectedPeriod(parseInt(cached))
-        }
+        if (data.matchupPeriods) setMatchupPeriods(data.matchupPeriods)
+        // Use sessionStorage if present, otherwise default to today's period
+        const saved = sessionStorage.getItem('skipper_selected_period')
+        const period = saved ? parseInt(saved) : (data.currentPeriod ?? 1)
+        setSelectedPeriod(period)
       })
       .catch(() => {})
   }, [])
@@ -91,28 +102,44 @@ export default function MyTeam() {
     const cached = sessionStorage.getItem('skipper_roster')
     if (cached) {
       const data = JSON.parse(cached)
-      // If cache is missing matchupDates, it's stale — auto-fetch fresh data
-      if (!data.matchupDates || data.matchupDates.length === 0) {
-        fetchRoster()
-      } else {
-        setRosterSPs(data.rosterSPs || [])
-        setConfirmedStarts(data.confirmedStarts || 0)
-        setWeekStart(data.weekStart || '')
-        setWeekEnd(data.weekEnd || '')
-        setTeamName(data.teamName || '')
-        setCurrentWeek(data.currentWeek || 1)
-        setSchedule(data.schedule || {})
-        setMatchupDates(data.matchupDates || [])
-        setActualFpts(data.actualFpts || {})
-      }
-    } else {
-      fetchRoster()
+      if (data.version !== CACHE_VERSION) return // outdated shape — let the fetch effect handle it
+      if (!data.matchupDates || data.matchupDates.length === 0) return // stale, wait for period
+      setRosterSPs(data.rosterSPs || [])
+      setConfirmedStarts(data.confirmedStarts || 0)
+      setWeekStart(data.weekStart || '')
+      setWeekEnd(data.weekEnd || '')
+      setTeamName(data.teamName || '')
+      setCurrentWeek(data.currentWeek || 1)
+      setSchedule(data.schedule || {})
+      setMatchupDates(data.matchupDates || [])
+      setActualFpts(data.actualFpts || {})
+      setActualSaves(data.actualSaves || {})
+      setBenchDays(data.benchDays || {})
     }
   }, [])
 
+  const isFirstRender = useRef(true)
+
   useEffect(() => {
+    if (selectedPeriod === null) return
     const period = matchupPeriods.find(p => p.period === selectedPeriod)
     if (period) setLimit(period.limit)
+
+    if (isFirstRender.current) {
+      // On first render: only fetch if there's no usable cache
+      isFirstRender.current = false
+      const cached = sessionStorage.getItem('skipper_roster')
+      if (!cached) {
+        fetchRoster()
+      } else {
+        const data = JSON.parse(cached)
+        if (!data.matchupDates || data.matchupDates.length === 0) fetchRoster()
+      }
+      return
+    }
+
+    // On subsequent renders (user changed the dropdown): always fetch fresh
+    fetchRoster()
   }, [selectedPeriod, matchupPeriods])
 
   const fetchRoster = useCallback(async () => {
@@ -134,6 +161,7 @@ export default function MyTeam() {
       const starts = roster.reduce((a, p) => a + p.starts, 0)
 
       const toCache = {
+        version: CACHE_VERSION,
         rosterSPs: roster,
         confirmedStarts: starts,
         weekStart: data.weekStart || '',
@@ -143,6 +171,8 @@ export default function MyTeam() {
         schedule: data.schedule || {},
         matchupDates: data.matchupDates || [],
         actualFpts: data.actualFpts || {},
+        actualSaves: data.actualSaves || {},
+        benchDays: data.benchDays || {},
       }
       sessionStorage.setItem('skipper_roster', JSON.stringify(toCache))
 
@@ -155,6 +185,8 @@ export default function MyTeam() {
       setSchedule(data.schedule || {})
       setMatchupDates(data.matchupDates || [])
       setActualFpts(data.actualFpts || {})
+      setActualSaves(data.actualSaves || {})
+      setBenchDays(data.benchDays || {})
     } catch (e: any) {
       setError(e.message || 'Failed to load roster')
     } finally {
@@ -190,7 +222,7 @@ export default function MyTeam() {
           <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
             {matchupPeriods.length > 0 && (
               <select
-                value={selectedPeriod}
+                value={selectedPeriod ?? ''}
                 onChange={e => setSelectedPeriod(parseInt(e.target.value))}
                 style={{
                   fontFamily: 'var(--mono)', fontSize: 12, padding: '8px 12px',
@@ -198,9 +230,18 @@ export default function MyTeam() {
                   background: 'var(--white)', color: 'var(--ink)', cursor: 'pointer', outline: 'none',
                 }}
               >
-                {matchupPeriods.map(p => (
-                  <option key={p.period} value={p.period}>{p.label} · {p.start}–{p.end}</option>
-                ))}
+                {matchupPeriods.map(p => {
+                  const fmt = (iso: string) => {
+                    const [, m, d] = iso.split('-')
+                    const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
+                    return `${months[parseInt(m)-1]} ${parseInt(d)}`
+                  }
+                  return (
+                    <option key={p.period} value={p.period}>
+                      {p.label} · {fmt(p.start)}–{fmt(p.end)}
+                    </option>
+                  )
+                })}
               </select>
             )}
             <button
@@ -275,12 +316,50 @@ export default function MyTeam() {
                 textTransform: 'uppercase', marginBottom: 12,
               }}>Your starting pitchers</div>
               <ScheduleGrid
-                pitchers={rosterSPs}
+                pitchers={rosterStarterSPs}
                 schedule={schedule}
                 matchupDates={matchupDates}
                 actualFpts={actualFpts}
+                benchDays={benchDays}
               />
             </div>
+
+            {/* Relievers section */}
+            {rosterRelievers.length > 0 && (
+              <div style={{
+                background: 'var(--white)', border: '1px solid var(--border)',
+                borderRadius: 'var(--radius-lg)', padding: '20px 24px',
+                boxShadow: 'var(--shadow)', marginBottom: 16,
+              }}>
+                <div style={{
+                  display: 'flex', justifyContent: 'space-between',
+                  alignItems: 'center', marginBottom: 12,
+                }}>
+                  <div style={{
+                    fontSize: 10, fontFamily: 'var(--mono)', fontWeight: 500,
+                    letterSpacing: '0.1em', color: 'var(--ink-3)', textTransform: 'uppercase',
+                  }}>Your relievers</div>
+                  {teamSavesTotal > 0 && (
+                    <div style={{
+                      fontSize: 11, fontFamily: 'var(--mono)', fontWeight: 700,
+                      color: 'var(--ink-2)', background: 'var(--paper-2)',
+                      borderRadius: 99, padding: '3px 10px',
+                    }}>
+                      🔒 {teamSavesTotal} team SV this period
+                    </div>
+                  )}
+                </div>
+                <ScheduleGrid
+                  pitchers={rosterRelievers}
+                  schedule={schedule}
+                  matchupDates={matchupDates}
+                  actualFpts={actualFpts}
+                  actualSaves={actualSaves}
+                  benchDays={benchDays}
+                  savesData={actualSaves}
+                />
+              </div>
+            )}
 
             {/* Starts editor */}
             <div style={{
