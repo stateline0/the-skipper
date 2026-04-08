@@ -2,6 +2,49 @@
 
 ---
 
+## Session 7 — April 7, 2026 (part 3)
+
+Projection model brainstorm and prioritization. No code written.
+
+### Projection model roadmap established
+- Ranked accuracy improvements by impact and buildability
+- Identified free agent projections and per-start cell display as immediate next priorities
+- Full ranking documented in backlog
+
+---
+
+## Session 7 — April 7, 2026 (part 2)
+
+Roster transaction lag fix and Option B projected FPTS model with blended 2025/2026 stats.
+
+### Key learnings this session
+- ESPN locks the current scoring period's roster once any game starts. The fix is to check the schedule for `in_progress` or `final` games and re-fetch at `scoringPeriodId + 1` when detected. One extra ESPN API call only when needed.
+- MLB Stats API season stats endpoint returns all pitchers in one call: `/api/v1/stats?stats=season&playerPool=all&group=pitching`. Fast and reliable — no auth required.
+- IP is stored as a string like "34.2" meaning 34 innings + 2 outs, not 34.2 actual innings. Must parse as `full_innings + outs/3`.
+- MLB Stats API uses accented names ("Edwin Díaz") while ESPN uses plain ASCII ("Edwin Diaz"). Must normalize both sides with `unicodedata.normalize('NFD')` + strip combining characters before comparing.
+- Blend threshold for RPs should be 20 IP, not 50 IP. At ~1 IP/appearance and 3-4 appearances/week, 50 IP takes ~13 weeks for a reliever vs ~6 weeks for a starter. Same calendar time = different IP threshold.
+- Python UnboundLocalError: if a variable is assigned in any branch of an if/elif/else block, Python treats it as local to the whole function. Must assign a default value before the block, not rely on a prior assignment being "close enough."
+- Hardcoded ESPN standard scoring formula was wrong for this league. League uses W×+5, L×-5, SV×+5 vs standard W×+2, L×-2, SV×+2. Always verify league settings before hardcoding a formula.
+- `gamesPlayed` used for RP appearance count, `gamesStarted` for SP start count — different field for the denominator depending on pitcher role.
+
+### Roster transaction lag fix
+- `api/espn.py`: new `today_has_started(schedule)` helper — checks if any game today is `in_progress` or `final`
+- `api/espn.py`: after fetching schedule, if `today_has_started()` returns True, re-fetch roster at `scoringPeriodId = current_week + 1`
+- Falls back silently to original roster if re-fetch fails or team not found in response
+
+### Option B projected FPTS model
+- `api/espn.py`: new `get_projected_fpts(player_starts)` function
+- `api/espn.py`: new `strip_accents()` helper using `unicodedata` for MLB↔ESPN name normalization
+- Fetches 2025 and 2026 MLB Stats API season stats in parallel via `ThreadPoolExecutor(max_workers=2)`
+- Blend weight: `this_year_weight = min(1.0, ip_2026 / threshold)` where threshold=50 for SP, 20 for RP
+- Per-game averages calculated from season totals, formula applied, multiplied by projected starts (SP) or estimated appearances (RP, 4/week)
+- League scoring: IP×3, K×1, H×-1, BB×-1, ER×-2, HB×-1, W×+5, L×-5, SV×+5
+- `projBlend` field added to each roster player in API response (0.0–1.0, fraction of 2026 data)
+- `components/ScheduleGrid.tsx`: blend % shown under Proj FPTS when > 0 (e.g. "29% '26")
+- `pages/my-team.tsx`: `RosterSP` interface updated with optional `projBlend` field
+
+---
+
 ## Session 6 — April 7, 2026
 
 Relievers section, period dropdown fixes, cache version system.
