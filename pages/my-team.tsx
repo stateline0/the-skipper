@@ -1,5 +1,5 @@
 import Head from 'next/head'
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { useRouter } from 'next/router'
 import ScheduleGrid from '../components/ScheduleGrid'
 
@@ -233,7 +233,7 @@ export default function MyTeam() {
   const [teamName, setTeamName] = useState('')
   const [currentWeek, setCurrentWeek] = useState(1)
   const [matchupPeriods, setMatchupPeriods] = useState<MatchupPeriod[]>([])
-  const [selectedPeriod, setSelectedPeriod] = useState(1)
+  const [selectedPeriod, setSelectedPeriod] = useState<number | null>(null)
   const [schedule, setSchedule] = useState<Record<string, any>>({})
   const [matchupDates, setMatchupDates] = useState<string[]>([])
   const [actualFpts, setActualFpts]   = useState<Record<string, Record<string, number>>>({})
@@ -251,11 +251,11 @@ export default function MyTeam() {
       .then(r => r.json())
       .then(data => {
         if (data.defaultLimit) setLimit(data.defaultLimit)
-        if (data.matchupPeriods) {
-          setMatchupPeriods(data.matchupPeriods)
-          const cached = sessionStorage.getItem('skipper_selected_period')
-          if (cached) setSelectedPeriod(parseInt(cached))
-        }
+        if (data.matchupPeriods) setMatchupPeriods(data.matchupPeriods)
+        // Use sessionStorage if present, otherwise default to today's period
+        const saved = sessionStorage.getItem('skipper_selected_period')
+        const period = saved ? parseInt(saved) : (data.currentPeriod ?? 1)
+        setSelectedPeriod(period)
       })
       .catch(() => {})
   }, [])
@@ -264,30 +264,43 @@ export default function MyTeam() {
     const cached = sessionStorage.getItem('skipper_roster')
     if (cached) {
       const data = JSON.parse(cached)
-      // If cache is missing matchupDates, it's stale — auto-fetch fresh data
-      if (!data.matchupDates || data.matchupDates.length === 0) {
-        fetchRoster()
-      } else {
-        setRosterSPs(data.rosterSPs || [])
-        setConfirmedStarts(data.confirmedStarts || 0)
-        setWeekStart(data.weekStart || '')
-        setWeekEnd(data.weekEnd || '')
-        setTeamName(data.teamName || '')
-        setCurrentWeek(data.currentWeek || 1)
-        setSchedule(data.schedule || {})
-        setMatchupDates(data.matchupDates || [])
-        setActualFpts(data.actualFpts || {})
-        setActualSaves(data.actualSaves || {})
-        setBenchDays(data.benchDays || {})
-      }
-    } else {
-      fetchRoster()
+      if (!data.matchupDates || data.matchupDates.length === 0) return // stale, wait for period
+      setRosterSPs(data.rosterSPs || [])
+      setConfirmedStarts(data.confirmedStarts || 0)
+      setWeekStart(data.weekStart || '')
+      setWeekEnd(data.weekEnd || '')
+      setTeamName(data.teamName || '')
+      setCurrentWeek(data.currentWeek || 1)
+      setSchedule(data.schedule || {})
+      setMatchupDates(data.matchupDates || [])
+      setActualFpts(data.actualFpts || {})
+      setActualSaves(data.actualSaves || {})
+      setBenchDays(data.benchDays || {})
     }
   }, [])
 
+  const isFirstRender = useRef(true)
+
   useEffect(() => {
+    if (selectedPeriod === null) return
     const period = matchupPeriods.find(p => p.period === selectedPeriod)
     if (period) setLimit(period.limit)
+
+    if (isFirstRender.current) {
+      // On first render: only fetch if there's no usable cache
+      isFirstRender.current = false
+      const cached = sessionStorage.getItem('skipper_roster')
+      if (!cached) {
+        fetchRoster()
+      } else {
+        const data = JSON.parse(cached)
+        if (!data.matchupDates || data.matchupDates.length === 0) fetchRoster()
+      }
+      return
+    }
+
+    // On subsequent renders (user changed the dropdown): always fetch fresh
+    fetchRoster()
   }, [selectedPeriod, matchupPeriods])
 
   const fetchRoster = useCallback(async () => {
@@ -369,7 +382,7 @@ export default function MyTeam() {
           <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
             {matchupPeriods.length > 0 && (
               <select
-                value={selectedPeriod}
+                value={selectedPeriod ?? ''}
                 onChange={e => setSelectedPeriod(parseInt(e.target.value))}
                 style={{
                   fontFamily: 'var(--mono)', fontSize: 12, padding: '8px 12px',
@@ -377,9 +390,18 @@ export default function MyTeam() {
                   background: 'var(--white)', color: 'var(--ink)', cursor: 'pointer', outline: 'none',
                 }}
               >
-                {matchupPeriods.map(p => (
-                  <option key={p.period} value={p.period}>{p.label} · {p.start}–{p.end}</option>
-                ))}
+                {matchupPeriods.map(p => {
+                  const fmt = (iso: string) => {
+                    const [, m, d] = iso.split('-')
+                    const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
+                    return `${months[parseInt(m)-1]} ${parseInt(d)}`
+                  }
+                  return (
+                    <option key={p.period} value={p.period}>
+                      {p.label} · {fmt(p.start)}–{fmt(p.end)}
+                    </option>
+                  )
+                })}
               </select>
             )}
             <button
