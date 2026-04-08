@@ -3,6 +3,8 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import { useRouter } from 'next/router'
 import ScheduleGrid from '../components/ScheduleGrid'
 
+const CACHE_VERSION = 2 // bump this whenever the API response shape changes
+
 interface FreeSP {
   name: string; team: string; slot: string; injuryStatus: string
   percentOwned: number; projFpts: number; starts: number
@@ -38,6 +40,7 @@ export default function FreeAgents() {
     const cached = sessionStorage.getItem('skipper_free_agents')
     if (cached) {
       const data = JSON.parse(cached)
+      if (data.version !== CACHE_VERSION) return // outdated shape — let the fetch effect handle it
       if (!data.matchupDates || data.matchupDates.length === 0) return
       setFreeSPs(data.freeSPs || [])
       setSchedule(data.schedule || {})
@@ -89,6 +92,7 @@ export default function FreeAgents() {
       }))
 
       const toCache = {
+        version: CACHE_VERSION,
         freeSPs: fas,
         schedule: data.schedule || {},
         matchupDates: data.matchupDates || [],

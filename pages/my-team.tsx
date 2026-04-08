@@ -1,5 +1,6 @@
 import Head from 'next/head'
 import { useState, useEffect, useCallback, useRef } from 'react'
+const CACHE_VERSION = 2 // bump this whenever the API response shape changes
 import { useRouter } from 'next/router'
 import ScheduleGrid from '../components/ScheduleGrid'
 
@@ -101,6 +102,7 @@ export default function MyTeam() {
     const cached = sessionStorage.getItem('skipper_roster')
     if (cached) {
       const data = JSON.parse(cached)
+      if (data.version !== CACHE_VERSION) return // outdated shape — let the fetch effect handle it
       if (!data.matchupDates || data.matchupDates.length === 0) return // stale, wait for period
       setRosterSPs(data.rosterSPs || [])
       setConfirmedStarts(data.confirmedStarts || 0)
@@ -159,6 +161,7 @@ export default function MyTeam() {
       const starts = roster.reduce((a, p) => a + p.starts, 0)
 
       const toCache = {
+        version: CACHE_VERSION,
         rosterSPs: roster,
         confirmedStarts: starts,
         weekStart: data.weekStart || '',
@@ -167,9 +170,9 @@ export default function MyTeam() {
         currentWeek: data.currentWeek || currentWeek,
         schedule: data.schedule || {},
         matchupDates: data.matchupDates || [],
-        actualFpts:  data.actualFpts  || {},
+        actualFpts: data.actualFpts || {},
         actualSaves: data.actualSaves || {},
-        benchDays:   data.benchDays   || {},
+        benchDays: data.benchDays || {},
       }
       sessionStorage.setItem('skipper_roster', JSON.stringify(toCache))
 
@@ -353,6 +356,7 @@ export default function MyTeam() {
                   actualFpts={actualFpts}
                   actualSaves={actualSaves}
                   benchDays={benchDays}
+                  savesData={actualSaves}
                 />
               </div>
             )}

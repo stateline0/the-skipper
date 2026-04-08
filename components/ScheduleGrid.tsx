@@ -50,7 +50,10 @@ interface Props {
   // Days each pitcher was on bench: { "Edwin Diaz": ["2026-03-26", ...] }
   benchDays?: Record<string, string[]>
   // Saves per pitcher per day: { "Edwin Diaz": { "2026-03-27": 1 } }
+  // Saves per pitcher per day: { "Edwin Diaz": { "2026-03-27": 1 } }
   actualSaves?: Record<string, Record<string, number>>
+  // When provided, replaces the Starts column with a Saves column
+  savesData?: Record<string, Record<string, number>>
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -224,6 +227,7 @@ export default function ScheduleGrid({
   actualFpts,
   benchDays,
   actualSaves,
+  savesData,
 }: Props) {
   const today = todayISO()
 
@@ -292,7 +296,7 @@ export default function ScheduleGrid({
             })}
 
             {/* Fixed right columns */}
-            <th style={{ ...headerStyle, minWidth: 52 }}>Starts</th>
+            <th style={{ ...headerStyle, minWidth: 52 }}>{savesData ? 'Saves' : 'Starts'}</th>
             <th style={{ ...headerStyle, minWidth: 72 }}>Proj FPTS</th>
             {suffixHeaders}
           </tr>
@@ -351,9 +355,11 @@ export default function ScheduleGrid({
                   )
                 })}
 
-                {/* Starts count */}
+                {/* Starts or Saves count */}
                 <td style={{ ...cellStyle, fontFamily: 'var(--mono)', fontWeight: 700 }}>
-                  {pitcher.starts}
+                  {savesData
+                    ? Object.values(savesData[pitcher.name] || {}).reduce((a, b) => a + b, 0)
+                    : pitcher.starts}
                 </td>
 
                 {/* Proj FPTS */}
