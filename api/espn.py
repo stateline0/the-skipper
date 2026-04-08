@@ -116,6 +116,179 @@ def today_has_started(schedule: dict) -> bool:
     )
 
 
+def get_projected_fpts(player_starts: list) -> tuple:
+    """
+    Project fantasy points per pitcher by blending 2025 and 2026 season stats.
+
+    Blend weight shifts from 100% last year to 100% this year as the pitcher
+    accumulates innings in 2026. Threshold for full trust = 50 IP.
+
+      this_year_weight = min(1.0, ip_2026 / 50)
+      last_year_weight = 1 - this_year_weight
+
+    player_starts: [{"name": "Garrett Crochet", "starts": 2, "is_rp": False}, ...]
+
+    Returns tuple:
+      proj_fpts:  { "Garrett Crochet": 34.2, ... }
+      proj_blend: { "Garrett Crochet": 0.3, ... }  ← fraction of 2026 data used
+
+    League scoring settings (Good Season Imanagas):
+      IP:  +3    H:  -1    ER: -2    BB: -1
+      HB:  -1    K:  +1    W:  +5    L:  -5    SV: +5
+    """
+    if not player_starts:
+        return {}, {}
+
+    starts_by_name = {p["name"].lower(): p for p in player_starts}
+
+    def fetch_season_stats(season: int) -> dict:
+        """Fetch season pitching stats. Returns { fullname_lower: stat_dict }"""
+        try:
+            r = requests.get(
+                "https://statsapi.mlb.com/api/v1/stats",
+                params={
+                    "stats":      "season",
+                    "playerPool": "all",
+                    "group":      "pitching",
+                    "season":     str(season),
+                    "gameType":   "R",
+                    "limit":      1000,
+                },
+                headers={"User-Agent": "Mozilla/5.0"},
+                timeout=15,
+            )
+            if r.status_code != 200:
+                print(f"[espn.py] MLB Stats API {season} returned {r.status_code}")
+                return {}
+            splits = r.json().get("stats", [{}])[0].get("splits", [])
+            result = {}
+            for split in splits:
+                name = split.get("player", {}).get("fullName", "")
+                if name:
+                    result[name.lower()] = split.get("stat", {})
+            return result
+        except Exception as e:
+            print(f"[espn.py] Failed to fetch {season} MLB stats: {e}")
+            return {}
+
+    def parse_ip(ip_str) -> float:
+        """Convert IP string like '34.2' to actual innings (34.667)."""
+        try:
+            parts = str(ip_str).split(".")
+            full  = int(parts[0])
+            outs  = int(parts[1]) if len(parts) > 1 else 0
+            return full + outs / 3
+        except Exception:
+            return 0.0
+
+    def per_game_avgs(stat: dict, games: int) -> dict:
+        """Calculate per-game averages from season totals. Works for both SP and RP."""
+        if games == 0:
+            return None
+        return {
+            "ip": parse_ip(stat.get("inningsPitched", "0.0")) / games,
+            "so": int(stat.get("strikeOuts",        0)) / games,
+            "h":  int(stat.get("hits",              0)) / games,
+            "bb": int(stat.get("baseOnBalls",       0)) / games,
+            "er": int(stat.get("earnedRuns",        0)) / games,
+            "hb": int(stat.get("hitBatsmen",        0)) / games,
+            "w":  int(stat.get("wins",              0)) / games,
+            "l":  int(stat.get("losses",            0)) / games,
+            "sv": int(stat.get("saves",             0)) / games,
+        }
+
+    def apply_formula(avgs: dict) -> float:
+        """Apply league scoring formula to per-game averages."""
+        return (
+            avgs["ip"] *  3 +
+            avgs["so"] *  1 +
+            avgs["h"]  * -1 +
+            avgs["bb"] * -1 +
+            avgs["er"] * -2 +
+            avgs["hb"] * -1 +
+            avgs["w"]  *  5 +
+            avgs["l"]  * -5 +
+            avgs["sv"] *  5
+        )
+
+    # Fetch both seasons in parallel
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        f2026 = executor.submit(fetch_season_stats, 2026)
+        f2025 = executor.submit(fetch_season_stats, 2025)
+        stats_2026 = f2026.result()
+        stats_2025 = f2025.result()
+
+    proj_fpts  = {}
+    proj_blend = {}
+
+    for name_lower, player_info in starts_by_name.items():
+        full_name        = player_info["name"]
+        projected_starts = player_info["starts"]
+        is_rp            = player_info.get("is_rp", False)
+
+        stat_26 = stats_2026.get(name_lower, {})
+        stat_25 = stats_2025.get(name_lower, {})
+
+        # For SPs use gamesStarted; for RPs use gamesPlayed (appearances)
+        if is_rp:
+            gs_26 = int(stat_26.get("gamesPlayed", 0))
+            gs_25 = int(stat_25.get("gamesPlayed", 0))
+        else:
+            gs_26 = int(stat_26.get("gamesStarted", 0))
+            gs_25 = int(stat_25.get("gamesStarted", 0))
+
+        ip_26 = parse_ip(stat_26.get("inningsPitched", "0.0"))
+
+        # Blend weight: ramp from 0% to 100% this year as IP crosses 50
+        this_year_weight = min(1.0, ip_26 / 50.0)
+        last_year_weight = 1.0 - this_year_weight
+
+        avgs_26 = per_game_avgs(stat_26, gs_26)
+        avgs_25 = per_game_avgs(stat_25, gs_25)
+
+        if avgs_26 is None and avgs_25 is None:
+            proj_fpts[full_name]  = 0.0
+            proj_blend[full_name] = 0.0
+            continue
+        elif avgs_26 is None:
+            blended          = avgs_25
+            this_year_weight = 0.0
+            last_year_weight = 1.0
+        elif avgs_25 is None:
+            blended          = avgs_26
+            this_year_weight = 1.0
+            last_year_weight = 0.0
+        else:
+            blended = {
+                s: avgs_26[s] * this_year_weight + avgs_25[s] * last_year_weight
+                for s in avgs_26
+            }
+
+        fpts_per_game = apply_formula(blended)
+
+        # For SPs: multiply by projected starts this period
+        # For RPs: projected_starts is 0 — use appearances-per-week estimate (4 per week)
+        if is_rp:
+            days_in_period = player_info.get("days_in_period", 7)
+            projected_appearances = round(
+                (blended["ip"] / max(avgs_26["ip"] if avgs_26 else 1, 0.01)) *
+                (days_in_period / 7) * 4
+            ) if not is_rp else round(days_in_period / 7 * 4)
+            projected = round(fpts_per_game * projected_appearances, 1)
+        else:
+            projected = round(fpts_per_game * projected_starts, 1)
+
+        proj_fpts[full_name]  = projected
+        proj_blend[full_name] = round(this_year_weight, 2)
+
+        print(f"[espn.py] {full_name}: {round(this_year_weight*100)}% '26 / "
+              f"{round(last_year_weight*100)}% '25 | "
+              f"{fpts_per_game:.1f} pts/game × "
+              f"{projected_starts if not is_rp else projected_appearances} = {projected}")
+
+    return proj_fpts, proj_blend
+
+
 def get_actual_fpts(past_dates: list, player_names: set, headers: dict, cookies: dict) -> dict:
     """
     Fetch actual fantasy points, saves, and bench status per pitcher per day.
@@ -261,6 +434,27 @@ def get_league_data(team_id: int, week: int) -> dict:
             proj = p.get("playerPoolEntry", {}).get("appliedStatTotal", 0)
             proj_fpts_by_player[pid] = round(float(proj or 0), 1)
 
+    # Option B inputs — filled with starts after starts_map is available below
+    option_b_inputs = []
+    for entry in my_team.get("roster", {}).get("entries", []):
+        pool_entry     = entry.get("playerPoolEntry", {})
+        player         = pool_entry.get("player", {})
+        eligible_slots = set(player.get("eligibleSlots", []))
+        lineup_slot    = entry.get("lineupSlotId", 0)
+        full_name      = player.get("fullName", "")
+        if not full_name:
+            continue
+        if not (14 in eligible_slots or 13 in eligible_slots):
+            continue
+        if lineup_slot in (16, 17):
+            continue
+        is_rp = (14 not in eligible_slots and 13 in eligible_slots)
+        option_b_inputs.append({
+            "name":   full_name,
+            "starts": 0,
+            "is_rp":  is_rp,
+        })
+
     # ── Fetch probable pitchers + full game schedule ──────────────────────
     roster_entries   = my_team.get("roster", {}).get("entries", [])
     all_player_names = [
@@ -269,6 +463,19 @@ def get_league_data(team_id: int, week: int) -> dict:
         if e.get("playerPoolEntry", {}).get("player", {}).get("fullName")
     ]
     starts_map, schedule = get_starts_for_players(all_player_names, week)
+
+    # Fill in projected starts and period length for Option B
+    days_in_period = 7
+    if mp:
+        start_d = datetime.strptime(mp["start"], "%Y-%m-%d").date()
+        end_d   = datetime.strptime(mp["end"],   "%Y-%m-%d").date()
+        days_in_period = (end_d - start_d).days + 1
+
+    for entry in option_b_inputs:
+        entry["starts"]         = starts_map.get(entry["name"], {}).get("starts", 0)
+        entry["days_in_period"] = days_in_period
+
+    proj_fpts_by_name, proj_blend_by_name = get_projected_fpts(option_b_inputs)
 
     # ── Roster transaction lag fix ────────────────────────────────────────
     # Once any game today starts, ESPN locks the current scoring period's
@@ -337,7 +544,10 @@ def get_league_data(team_id: int, week: int) -> dict:
             pitcher_data     = starts_map.get(player_name, {"starts": 0, "startDates": []})
             scheduled_starts = pitcher_data["starts"]
             start_dates      = pitcher_data["startDates"]
-            proj_fpts        = proj_fpts_by_player.get(player_id, 0.0)
+            proj_fpts        = proj_fpts_by_name.get(
+                player_name,
+                proj_fpts_by_player.get(player_id, 0.0)
+            )
 
         roster_sps.append({
             "name":         player_name,
@@ -347,6 +557,7 @@ def get_league_data(team_id: int, week: int) -> dict:
             "starts":       scheduled_starts,
             "startDates":   start_dates,
             "projFpts":     proj_fpts,
+            "projBlend":    proj_blend_by_name.get(player_name, 0.0),
             "percentOwned": round(pool_entry.get("percentOwned", 100), 1),
         })
 

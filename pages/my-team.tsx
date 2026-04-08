@@ -7,7 +7,7 @@ import ScheduleGrid from '../components/ScheduleGrid'
 // ─── Types ────────────────────────────────────────────────────────────────────
 interface RosterSP {
   name: string; team: string; slot: string; injuryStatus: string
-  starts: number; projFpts: number; percentOwned: number; startDates?: any[]
+  starts: number; projFpts: number; projBlend?: number; percentOwned: number; startDates?: any[]
 }
 
 interface MatchupPeriod {

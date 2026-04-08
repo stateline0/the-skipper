@@ -17,6 +17,7 @@ interface Pitcher {
   slot: string
   starts: number
   projFpts: number
+  projBlend?: number
   startDates?: StartDate[]
   // Free agents also have these:
   percentOwned?: number
@@ -369,6 +370,15 @@ export default function ScheduleGrid({
                   color: pitcher.projFpts > 0 ? 'var(--green)' : 'var(--ink-3)',
                 }}>
                   {pitcher.projFpts.toFixed(1)}
+                  {pitcher.projBlend !== undefined && pitcher.projFpts > 0 && (
+                    <div style={{
+                      fontSize: 9, fontWeight: 500,
+                      color: 'var(--ink-3)', marginTop: 2,
+                      letterSpacing: '0.02em',
+                    }}>
+                      {Math.round(pitcher.projBlend * 100)}% &apos;26
+                    </div>
+                  )}
                 </td>
 
                 {renderSuffix?.(pitcher, i)}
