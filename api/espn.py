@@ -18,6 +18,16 @@ from mlb import get_starts_for_players, MATCHUP_PERIODS
 
 SEASON_START = datetime(2026, 3, 25)
 
+import unicodedata
+
+def strip_accents(s: str) -> str:
+    """Normalize accented characters for name matching across data sources.
+    e.g. 'Edwin Díaz' -> 'edwin diaz' to match ESPN's 'Edwin Diaz'."""
+    return ''.join(
+        c for c in unicodedata.normalize('NFD', s)
+        if unicodedata.category(c) != 'Mn'
+    ).lower()
+
 
 def get_headers_and_cookies():
     espn_s2 = os.environ.get("ESPN_S2", "").strip()
@@ -139,7 +149,7 @@ def get_projected_fpts(player_starts: list) -> tuple:
     if not player_starts:
         return {}, {}
 
-    starts_by_name = {p["name"].lower(): p for p in player_starts}
+    starts_by_name = {strip_accents(p["name"]): p for p in player_starts}
 
     def fetch_season_stats(season: int) -> dict:
         """Fetch season pitching stats. Returns { fullname_lower: stat_dict }"""
@@ -165,7 +175,7 @@ def get_projected_fpts(player_starts: list) -> tuple:
             for split in splits:
                 name = split.get("player", {}).get("fullName", "")
                 if name:
-                    result[name.lower()] = split.get("stat", {})
+                    result[strip_accents(name)] = split.get("stat", {})
             return result
         except Exception as e:
             print(f"[espn.py] Failed to fetch {season} MLB stats: {e}")
