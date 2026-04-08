@@ -49,6 +49,8 @@ interface Props {
   actualFpts?: Record<string, Record<string, number>>
   // Days each pitcher was on bench: { "Edwin Diaz": ["2026-03-26", ...] }
   benchDays?: Record<string, string[]>
+  // Saves per pitcher per day: { "Edwin Diaz": { "2026-03-27": 1 } }
+  actualSaves?: Record<string, Record<string, number>>
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -97,14 +99,15 @@ function todayISO(): string {
 // ─── Cell renderer ────────────────────────────────────────────────────────────
 // Returns what to show in a single pitcher × day cell.
 
-function DayCell({ pitcher, date, schedule, today, actualFpts, benchDays }: {
+function DayCell({ pitcher, date, schedule, today, actualFpts, benchDays, actualSaves }: {
   pitcher: Pitcher
   date: string
   schedule: Schedule
   today: string
   actualFpts?: Record<string, Record<string, number>>
   benchDays?: Record<string, string[]>
-}) {
+  actualSaves?: Record<string, Record<string, number>>
+}){
   const isPast   = date < today
   const isToday  = date === today
   const isFuture = date > today
@@ -146,6 +149,9 @@ function DayCell({ pitcher, date, schedule, today, actualFpts, benchDays }: {
             }}>
               {fpts > 0 ? '+' : ''}{fpts.toFixed(1)}
             </div>
+          )}
+          {actualSaves?.[pitcher.name]?.[date] && (
+            <div style={{ fontSize: 10, marginTop: 1 }} title="Save recorded">🔒</div>
           )}
         </div>
       )
@@ -191,6 +197,7 @@ export default function ScheduleGrid({
   onRowClick,
   actualFpts,
   benchDays,
+  actualSaves,
 }: Props) {
   const today = todayISO()
 
@@ -312,6 +319,7 @@ export default function ScheduleGrid({
                         today={today}
                         actualFpts={actualFpts}
                         benchDays={benchDays}
+                        actualSaves={actualSaves}
                       />
                     </td>
                   )

@@ -52,174 +52,6 @@ function ProgressBar({ value, max }: { value: number; max: number }) {
   )
 }
 
-function RelieversTable({
-  relievers,
-  actualFpts,
-  actualSaves,
-  benchDays,
-}: {
-  relievers: RosterSP[]
-  actualFpts: Record<string, Record<string, number>>
-  actualSaves: Record<string, Record<string, number>>
-  benchDays: Record<string, string[]>
-}) {
-  if (relievers.length === 0) return null
-
-  function sumFpts(name: string): number {
-    const byDay = actualFpts[name]
-    if (!byDay) return 0
-    return Object.values(byDay).reduce((a, b) => a + b, 0)
-  }
-
-  function sumSaves(name: string): number {
-    const byDay = actualSaves[name]
-    if (!byDay) return 0
-    return Object.values(byDay).reduce((a, b) => a + b, 0)
-  }
-
-  function saveDays(name: string): string[] {
-    return Object.keys(actualSaves[name] || {})
-  }
-
-  // Sum total saves across all relievers
-  const teamSaves = relievers.reduce((acc, p) => acc + sumSaves(p.name), 0)
-
-  const cellStyle: React.CSSProperties = {
-    padding: '8px 10px',
-    fontSize: 13,
-    borderBottom: '1px solid var(--border)',
-    verticalAlign: 'middle',
-  }
-  const headerStyle: React.CSSProperties = {
-    padding: '8px 10px',
-    fontSize: 10,
-    fontFamily: 'var(--mono)',
-    fontWeight: 500,
-    color: 'var(--ink-3)',
-    letterSpacing: '0.05em',
-    borderBottom: '1px solid var(--border)',
-    textAlign: 'left' as const,
-    whiteSpace: 'nowrap' as const,
-  }
-
-  return (
-    <div style={{
-      background: 'var(--white)', border: '1px solid var(--border)',
-      borderRadius: 'var(--radius-lg)', padding: '20px 24px',
-      boxShadow: 'var(--shadow)', marginBottom: 16,
-    }}>
-      <div style={{
-        display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12,
-      }}>
-        <div style={{
-          fontSize: 10, fontFamily: 'var(--mono)', fontWeight: 500,
-          letterSpacing: '0.1em', color: 'var(--ink-3)', textTransform: 'uppercase',
-        }}>Your relievers</div>
-        {teamSaves > 0 && (
-          <div style={{
-            fontSize: 11, fontFamily: 'var(--mono)', fontWeight: 700,
-            color: 'var(--ink-2)', background: 'var(--paper-2)',
-            borderRadius: 99, padding: '3px 10px',
-          }}>
-            🔒 {teamSaves} team SV
-          </div>
-        )}
-      </div>
-      <div style={{ overflowX: 'auto' }}>
-        <table style={{ borderCollapse: 'collapse', width: '100%' }}>
-          <thead>
-            <tr>
-              <th style={{ ...headerStyle, minWidth: 140 }}>Pitcher</th>
-              <th style={{ ...headerStyle, minWidth: 44, textAlign: 'center' as const }}>Team</th>
-              <th style={{ ...headerStyle, minWidth: 52, textAlign: 'center' as const }}>Slot</th>
-              <th style={{ ...headerStyle, minWidth: 60, textAlign: 'center' as const }}>Saves</th>
-              <th style={{ ...headerStyle, minWidth: 100, textAlign: 'center' as const }}>Actual FPTS</th>
-            </tr>
-          </thead>
-          <tbody>
-            {relievers.map((p, i) => {
-              const total     = sumFpts(p.name)
-              const saves     = sumSaves(p.name)
-              const days      = saveDays(p.name)
-              const isIL      = p.slot === 'IL'
-
-              // Build FPTS display — sum only non-bench days for the "counted" total
-              const benched   = benchDays[p.name] || []
-              const byDay     = actualFpts[p.name] || {}
-              const counted   = Object.entries(byDay)
-                .filter(([d]) => !benched.includes(d))
-                .reduce((a, [, v]) => a + v, 0)
-              const uncounted = Object.entries(byDay)
-                .filter(([d]) => benched.includes(d))
-                .reduce((a, [, v]) => a + v, 0)
-
-              return (
-                <tr key={i} style={{ opacity: isIL ? 0.5 : 1 }}>
-                  <td style={{ ...cellStyle, fontWeight: 600 }}>{p.name}</td>
-                  <td style={{ ...cellStyle, textAlign: 'center', fontFamily: 'var(--mono)', fontSize: 11 }}>
-                    {p.team}
-                  </td>
-                  <td style={{ ...cellStyle, textAlign: 'center' }}>
-                    <span style={{
-                      display: 'inline-block', fontSize: 11, fontWeight: 600,
-                      fontFamily: 'var(--mono)', padding: '2px 8px', borderRadius: 99,
-                      letterSpacing: '0.04em',
-                      background: p.slot === 'IL' ? 'var(--red-light)' : 'var(--amber-light)',
-                      color: p.slot === 'IL' ? 'var(--red)' : 'var(--amber)',
-                    }}>
-                      {p.slot}
-                    </span>
-                  </td>
-                  <td style={{ ...cellStyle, textAlign: 'center', fontFamily: 'var(--mono)', fontWeight: 700 }}>
-                    {saves > 0 ? (
-                      <div>
-                        <span style={{ color: 'var(--ink)' }}>{saves}</span>
-                        <div style={{ fontSize: 9, color: 'var(--ink-3)', marginTop: 2 }}>
-                          {days.map(d => {
-                            const [, mo, dy] = d.split('-')
-                            const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
-                            return `${months[parseInt(mo)-1]} ${parseInt(dy)}`
-                          }).join(', ')}
-                        </div>
-                      </div>
-                    ) : (
-                      <span style={{ color: 'var(--ink-3)' }}>—</span>
-                    )}
-                  </td>
-                  <td style={{ ...cellStyle, textAlign: 'center', fontFamily: 'var(--mono)' }}>
-                    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2 }}>
-                      {counted !== 0 && (
-                        <span style={{
-                          fontWeight: 700,
-                          color: counted > 0 ? 'var(--green)' : 'var(--red)',
-                        }}>
-                          {counted > 0 ? '+' : ''}{counted.toFixed(1)}
-                        </span>
-                      )}
-                      {uncounted !== 0 && (
-                        <span style={{
-                          fontWeight: 500, fontSize: 11,
-                          color: 'var(--ink-3)',
-                          textDecoration: 'line-through',
-                        }}>
-                          {uncounted > 0 ? '+' : ''}{uncounted.toFixed(1)}
-                        </span>
-                      )}
-                      {counted === 0 && uncounted === 0 && (
-                        <span style={{ color: 'var(--ink-3)' }}>—</span>
-                      )}
-                    </div>
-                  </td>
-                </tr>
-              )
-            })}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  )
-}
-
 // ─── Main component ───────────────────────────────────────────────────────────
 export default function MyTeam() {
   const router = useRouter()
@@ -245,6 +77,11 @@ export default function MyTeam() {
 
   const rosterStarterSPs = rosterSPs.filter(p => p.slot === 'SP')
   const rosterRelievers  = rosterSPs.filter(p => p.slot === 'RP')
+
+  const teamSavesTotal = rosterRelievers.reduce((acc, p) => {
+    const byDay = actualSaves[p.name] || {}
+    return acc + Object.values(byDay).reduce((a, b) => a + b, 0)
+  }, 0)
 
   useEffect(() => {
     fetch('/api/config')
@@ -485,12 +322,40 @@ export default function MyTeam() {
             </div>
 
             {/* Relievers section */}
-            <RelieversTable
-              relievers={rosterRelievers}
-              actualFpts={actualFpts}
-              actualSaves={actualSaves}
-              benchDays={benchDays}
-            />
+            {rosterRelievers.length > 0 && (
+              <div style={{
+                background: 'var(--white)', border: '1px solid var(--border)',
+                borderRadius: 'var(--radius-lg)', padding: '20px 24px',
+                boxShadow: 'var(--shadow)', marginBottom: 16,
+              }}>
+                <div style={{
+                  display: 'flex', justifyContent: 'space-between',
+                  alignItems: 'center', marginBottom: 12,
+                }}>
+                  <div style={{
+                    fontSize: 10, fontFamily: 'var(--mono)', fontWeight: 500,
+                    letterSpacing: '0.1em', color: 'var(--ink-3)', textTransform: 'uppercase',
+                  }}>Your relievers</div>
+                  {teamSavesTotal > 0 && (
+                    <div style={{
+                      fontSize: 11, fontFamily: 'var(--mono)', fontWeight: 700,
+                      color: 'var(--ink-2)', background: 'var(--paper-2)',
+                      borderRadius: 99, padding: '3px 10px',
+                    }}>
+                      🔒 {teamSavesTotal} team SV this period
+                    </div>
+                  )}
+                </div>
+                <ScheduleGrid
+                  pitchers={rosterRelievers}
+                  schedule={schedule}
+                  matchupDates={matchupDates}
+                  actualFpts={actualFpts}
+                  actualSaves={actualSaves}
+                  benchDays={benchDays}
+                />
+              </div>
+            )}
 
             {/* Starts editor */}
             <div style={{
