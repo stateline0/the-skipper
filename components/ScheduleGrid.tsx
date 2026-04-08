@@ -45,8 +45,10 @@ interface Props {
   prefixHeaders?: React.ReactNode
   suffixHeaders?: React.ReactNode
   onRowClick?: (index: number) => void
-  // Actual FPTS earned per pitcher per day: { "Garrett Crochet": { "2026-03-26": 26.0 } }
+  // Actual // Actual FPTS earned per pitcher per day: { "Garrett Crochet": { "2026-03-26": 26.0 } }
   actualFpts?: Record<string, Record<string, number>>
+  // Days each pitcher was on bench: { "Edwin Diaz": ["2026-03-26", ...] }
+  benchDays?: Record<string, string[]>
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -95,12 +97,13 @@ function todayISO(): string {
 // ─── Cell renderer ────────────────────────────────────────────────────────────
 // Returns what to show in a single pitcher × day cell.
 
-function DayCell({ pitcher, date, schedule, today, actualFpts }: {
+function DayCell({ pitcher, date, schedule, today, actualFpts, benchDays }: {
   pitcher: Pitcher
   date: string
   schedule: Schedule
   today: string
   actualFpts?: Record<string, Record<string, number>>
+  benchDays?: Record<string, string[]>
 }) {
   const isPast   = date < today
   const isToday  = date === today
@@ -127,6 +130,7 @@ function DayCell({ pitcher, date, schedule, today, actualFpts }: {
       const color = startInfo.confirmed ? 'var(--green)' : 'var(--ink-3)'
       const fpts = actualFpts?.[pitcher.name]?.[date]
       const hasFpts = fpts !== undefined && fpts !== 0
+      const wasOnBench = benchDays?.[pitcher.name]?.includes(date) ?? false
       return (
         <div style={{ textAlign: 'center' }}>
           <div style={{ fontSize: 11, fontFamily: 'var(--mono)', fontWeight: 700, color }}>
@@ -136,8 +140,9 @@ function DayCell({ pitcher, date, schedule, today, actualFpts }: {
           {hasFpts && (
             <div style={{
               fontSize: 10, fontFamily: 'var(--mono)', fontWeight: 700,
-              color: fpts > 0 ? 'var(--green)' : 'var(--red)',
+              color: wasOnBench ? 'var(--ink-3)' : fpts > 0 ? 'var(--green)' : 'var(--red)',
               marginTop: 1,
+              textDecoration: wasOnBench ? 'line-through' : 'none',
             }}>
               {fpts > 0 ? '+' : ''}{fpts.toFixed(1)}
             </div>
@@ -185,6 +190,7 @@ export default function ScheduleGrid({
   prefixHeaders, suffixHeaders,
   onRowClick,
   actualFpts,
+  benchDays,
 }: Props) {
   const today = todayISO()
 
@@ -305,6 +311,7 @@ export default function ScheduleGrid({
                         schedule={schedule}
                         today={today}
                         actualFpts={actualFpts}
+                        benchDays={benchDays}
                       />
                     </td>
                   )
