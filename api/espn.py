@@ -103,6 +103,19 @@ def date_to_scoring_period(date_str: str) -> int:
     return (d - SEASON_START).days + 1
 
 
+def today_has_started(schedule: dict) -> bool:
+    """
+    Returns True if any MLB game today is in_progress or final.
+    Used to detect whether ESPN has locked today's roster scoring period.
+    """
+    today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    today_games = schedule.get(today_str, {})
+    return any(
+        g.get("status") in ("in_progress", "final")
+        for g in today_games.values()
+    )
+
+
 def get_actual_fpts(past_dates: list, player_names: set, headers: dict, cookies: dict) -> dict:
     """
     Fetch actual fantasy points, saves, and bench status per pitcher per day.
@@ -256,6 +269,39 @@ def get_league_data(team_id: int, week: int) -> dict:
         if e.get("playerPoolEntry", {}).get("player", {}).get("fullName")
     ]
     starts_map, schedule = get_starts_for_players(all_player_names, week)
+
+    # ── Roster transaction lag fix ────────────────────────────────────────
+    # Once any game today starts, ESPN locks the current scoring period's
+    # roster. Transactions made after that won't appear until tomorrow's
+    # scoring period. Detect this and re-fetch with scoringPeriodId + 1
+    # so adds/drops made today are reflected immediately.
+    if today_has_started(schedule):
+        next_period = current_week + 1
+        print(f"[espn.py] Games in progress — fetching roster at scoringPeriodId={next_period}")
+        r2 = requests.get(
+            base,
+            params=[
+                ("view", "mRoster"),
+                ("view", "mTeam"),
+                ("scoringPeriodId", next_period),
+                ("_", int(datetime.now().timestamp())),
+            ],
+            cookies=cookies,
+            headers=headers,
+            timeout=15
+        )
+        if r2.status_code == 200:
+            data2    = r2.json()
+            teams2   = data2.get("teams", [])
+            my_team2 = next((t for t in teams2 if t.get("id") == team_id), None)
+            if my_team2:
+                my_team        = my_team2
+                roster_entries = my_team.get("roster", {}).get("entries", [])
+                print(f"[espn.py] Roster re-fetched successfully at period {next_period}")
+            else:
+                print(f"[espn.py] Re-fetch succeeded but team {team_id} not found — keeping original")
+        else:
+            print(f"[espn.py] Re-fetch failed (HTTP {r2.status_code}) — keeping original roster")
 
     # ── Parse roster ──────────────────────────────────────────────────────
     roster_sps  = []
