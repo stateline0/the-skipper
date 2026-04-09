@@ -4,7 +4,31 @@ Last updated: April 7, 2026
 
 ---
 
-## ✅ Completed (session April 7, 2026)
+## ✅ Completed (session April 7, 2026 — part 2)
+
+### Roster transaction lag fix
+- [x] Detect if any MLB game today is `in_progress` or `final` using schedule data
+- [x] If yes, re-fetch roster at `scoringPeriodId = currentScoringPeriod + 1`
+- [x] Falls back to original roster if re-fetch fails
+- [x] `today_has_started()` helper added to `espn.py`
+- [x] Handles last day of matchup period gracefully (tomorrow's period is correct behavior)
+
+### Projected FPTS model — Option B
+- [x] `get_projected_fpts()` added to `espn.py`
+- [x] Pulls 2025 and 2026 season pitching stats from MLB Stats API in parallel via `ThreadPoolExecutor`
+- [x] Blends by IP: 0% this year at season start → 100% at 50 IP for SPs, 20 IP for RPs
+- [x] RP threshold lower (20 IP) because relievers reach 50 IP much later in the season (~13 weeks vs ~6)
+- [x] League-specific scoring applied: IP×3, K×1, H×-1, BB×-1, ER×-2, HB×-1, W×+5, L×-5, SV×+5
+- [x] RPs projected via appearances-per-week estimate (4/week × period length) rather than starts
+- [x] Blend % shown under each Proj FPTS number (e.g. "29% '26")
+- [x] Unicode accent normalization via `strip_accents()` for MLB↔ESPN name matching (e.g. Edwin Díaz → Edwin Diaz)
+- [x] Falls back to ESPN's `appliedStatTotal` if MLB Stats API unavailable
+- [x] `projBlend` field added to API response and `RosterSP` interface
+- [x] `ScheduleGrid` Pitcher interface updated with optional `projBlend` field
+
+---
+
+## ✅ Completed (session April 7, 2026 — part 1)
 
 ### Relievers section on My Team
 - [x] Separate "Your Relievers" grid below the starters grid using `ScheduleGrid` component
@@ -115,40 +139,62 @@ Last updated: April 7, 2026
 
 ## 🔜 Next session priorities
 
+## 🔜 Next session priorities
+
+### Free agent projections (highest priority)
+- [ ] Call `get_projected_fpts()` for free agents using `fa_starts_map`
+- [ ] Same Option B blended model as roster players
+- [ ] `projFpts` and `projBlend` added to free agent API response
+- [ ] Display in Free Agents ScheduleGrid Proj FPTS column with blend % sub-label
+
+### Per-start projections in schedule grid cells
+- [ ] Return `fpts_per_start` from `get_projected_fpts()` alongside period total
+- [ ] Display per-start projection in future start cells (below ✅ or P badge)
+- [ ] Same position as actual FPTS shows below ✓ on past starts
+- [ ] Period total column stays — cells show the per-start breakdown
+
 ### Dashboard "at a glance" component
 - [ ] "This week at a glance" tile — projected starts vs. weekly limit with visual progress bar
 - [ ] Current matchup period dates and opponent
 - [ ] Quick links to My Team and Free Agents
 - [ ] Tile/component system so new features slot in over time
 
-### Roster transaction lag fix
-- [ ] ESPN locks today's roster once the first MLB game starts
-- [ ] Adds/drops made during the day don't appear until the next scoring period
-- [ ] Fix: detect if any game today is `in_progress` or `final` using schedule data we already have
-- [ ] If yes, fetch `scoringPeriodId = currentScoringPeriod + 1` to get the post-transaction roster
-- [ ] Edge case: last day of matchup period — tomorrow is a new period, handle gracefully
-
 ### Shane Smith probable pitcher matching bug
 - [ ] Last-name-only matching (`"smith"`) collides with other Smiths in the data
 - [ ] Fix: use full name or ESPN player ID for matching instead of last name only
 - [ ] His schedule cells populate correctly (abbreviation fix worked) but starts aren't detected
 
+### League scoring settings UI
+- [ ] Settings form where user can enter custom scoring multipliers
+- [ ] Stored in `localStorage` (persistent across sessions)
+- [ ] Projection formula reads from stored settings instead of hardcoded constants
+- [ ] Pre-populated with current league values as defaults
+- [ ] Generalizes app to any ESPN league scoring configuration
+
 ---
 
 ## ⚾ Data layer — remaining work
 
-### Projected FPTS model — Option B (v1, ship now)
-- [ ] `projFpts` shows 0.0 for all pitchers — ESPN's `appliedStatTotal` not populated early in season
-- [ ] Use MLB Stats API for pitcher season stats (ERA, WHIP, K/9, avg IP/start)
-- [ ] Apply ESPN standard scoring formula: 3 pts/IP, 1 pt/K, -1 pt/H, -1 pt/BB, -2 pts/ER, +2 win, -2 loss
-- [ ] Per-start projection, summed across probable starts for weekly total
-- [ ] Label clearly as "projected" not guaranteed
+### Projection accuracy improvements — Bundle 1 (next 1-2 sessions)
+Implement as a group since they're all contextual per-start adjustments:
+- [ ] **Opponent offensive strength** (HIGH impact) — adjust projection based on opponent team wOBA or K-rate from MLB Stats API. Multiplier: ~×1.15 vs weak offense, ~×0.85 vs strong offense
+- [ ] **Park factors** (HIGH impact) — hardcoded table of 30 park factors adjusting H and ER components. Coors ~+30%, Petco ~-15%. Stable year-over-year, essentially free accuracy
+- [ ] **Home/away split** (MEDIUM impact, very low effort) — flat adjustment using existing `is_home` field. ~×1.05 home, ~×0.95 away
 
-### Projected FPTS model — Option C (v2, after ~6 weeks of season data)
+### Projection accuracy improvements — Bundle 2 (session after Bundle 1)
+- [ ] **Days of rest** (MEDIUM impact) — pitcher on 4 days rest projects lower than 5+ days. Calculate from last start date vs next start date, already in schedule data
+- [ ] **Recent form weighting** (MEDIUM impact) — weight last 3-4 starts more heavily than season average. Requires game log fetch (already done for actual FPTS). Captures hot/cold streaks season averages wash out
+
+### Projected FPTS model — Option C (after ~50 IP of 2026 data, target mid-May)
 - [ ] Replace Option B inputs with Statcast metrics from Baseball Savant
 - [ ] Key inputs: xFIP, SIERA, xERA, SwStr%, CSW%
-- [ ] Only meaningful after ~50 innings of season data (mid-May 2026)
+- [ ] Only meaningful after ~50 innings of season data — mid-May 2026 for most starters
 - [ ] Target: 15-25% lower projection error vs Option B
+- [ ] At that point most SPs will naturally be near/past the 50 IP blend threshold anyway
+
+### Projection improvements — future / lower priority
+- [ ] **Handedness splits** (LOW-MEDIUM impact, HIGH effort) — pitcher vs L/R lineup composition. Requires per-pitcher split data and opponent lineup handedness. Marginal gain over opponent wOBA
+- [ ] **Weather** (LOW impact) — wind/temperature affect scoring but APIs cost money and effect is small. Not worth it
 
 ### Dropped players section
 - [ ] Players who started this matchup period but were subsequently dropped should still appear
@@ -159,10 +205,8 @@ Last updated: April 7, 2026
 
 ## 🐛 Known bugs (current version)
 
-- [ ] `projFpts` showing 0.0 for all pitchers — ESPN's `appliedStatTotal` not populated early season. Fixed by Option B model.
 - [ ] Shane Smith (CWS SP) probable pitcher starts not being detected — last-name-only matching collision.
 - [ ] ESPN slot 16 vs slot 17 behavior confirmed for this league (16=bench, 17=IL) but may vary by league settings — worth noting if app ever goes multi-user.
-- [ ] Roster transaction lag — adds/drops made after first game of day don't appear until next scoring period.
 - [ ] `vercel dev` does not serve Python API routes locally (Vercel CLI v50+ known issue). Always test Python changes against production URL.
 
 ---
@@ -258,8 +302,8 @@ https://lm-api-reads.fantasy.espn.com/apis/v3/games/flb/seasons/{year}/segments/
 
 ### Known limitations
 - `matchupPeriodDates` not returned for this league → all 22 period dates are hardcoded in `api/config.py`
-- `appliedStatTotal` not populated early in the season → `projFpts` shows 0.0 until Option B model ships
-- Roster locked to current scoring period once first game starts → transaction lag bug
+- `appliedStatTotal` not populated early in the season → replaced by Option B model
+- Roster locked to current scoring period once first game starts → fixed by transaction lag fix
 - ESPN Scoreboard API uses `CHW` for White Sox; our map uses `CWS` → normalization map in `mlb.py`
 - ESPN caches roster data server-side — cache-busting query params have no effect
 
@@ -277,7 +321,10 @@ https://lm-api-reads.fantasy.espn.com/apis/v3/games/flb/seasons/{year}/segments/
 - Base: `https://statsapi.mlb.com`
 - Confirms probable pitchers 1-2 days out only
 - Free, no auth required
-- Used for: confirmed probables, game schedules, pitcher stats (future Option B model)
+- Season stats endpoint: `/api/v1/stats?stats=season&playerPool=all&group=pitching&season=YYYY&gameType=R&limit=1000`
+- Returns `gamesStarted`, `gamesPlayed`, `inningsPitched`, `strikeOuts`, `hits`, `baseOnBalls`, `earnedRuns`, `hitBatsmen`, `wins`, `losses`, `saves`
+- IP stored as string e.g. "34.2" meaning 34 innings + 2 outs = 34.667 actual innings
+- Player names may use accented characters (e.g. "Edwin Díaz") — normalize with `strip_accents()` before matching against ESPN names
 
 ## 📚 ESPN Scoreboard API reference
 
@@ -286,3 +333,17 @@ https://lm-api-reads.fantasy.espn.com/apis/v3/games/flb/seasons/{year}/segments/
 - Returns probable starters up to 7 days out
 - Uses `CHW` for White Sox (not `CWS`) — normalization required
 - FantasyPros and FanGraphs probables are JS-rendered — not scrapeable server-side
+
+## 📚 League scoring settings (Good Season Imanagas)
+
+| Stat | Points |
+|---|---|
+| Innings Pitched (IP) | +3 |
+| Strikeouts (K) | +1 |
+| Hits Allowed (H) | -1 |
+| Earned Runs (ER) | -2 |
+| Walks Issued (BB) | -1 |
+| Hit Batsmen (HB) | -1 |
+| Wins (W) | +5 |
+| Losses (L) | -5 |
+| Saves (SV) | +5 |
