@@ -18,6 +18,7 @@ interface Pitcher {
   starts: number
   projFpts: number
   projBlend?: number
+  fptsPerStart?: number
   startDates?: StartDate[]
   // Free agents also have these:
   percentOwned?: number
@@ -55,6 +56,8 @@ interface Props {
   actualSaves?: Record<string, Record<string, number>>
   // When provided, replaces the Starts column with a Saves column
   savesData?: Record<string, Record<string, number>>
+  // Per-start projection: { "Garrett Crochet": 18.2 } — shown in start cells
+  fptsPerStart?: Record<string, number>
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -103,7 +106,7 @@ function todayISO(): string {
 // ─── Cell renderer ────────────────────────────────────────────────────────────
 // Returns what to show in a single pitcher × day cell.
 
-function DayCell({ pitcher, date, schedule, today, actualFpts, benchDays, actualSaves }: {
+function DayCell({ pitcher, date, schedule, today, actualFpts, benchDays, actualSaves, fptsPerStart }: {
   pitcher: Pitcher
   date: string
   schedule: Schedule
@@ -111,6 +114,7 @@ function DayCell({ pitcher, date, schedule, today, actualFpts, benchDays, actual
   actualFpts?: Record<string, Record<string, number>>
   benchDays?: Record<string, string[]>
   actualSaves?: Record<string, Record<string, number>>
+  fptsPerStart?: Record<string, number>
 }){
   const isPast   = date < today
   const isToday  = date === today
@@ -138,6 +142,7 @@ function DayCell({ pitcher, date, schedule, today, actualFpts, benchDays, actual
       const fpts = actualFpts?.[pitcher.name]?.[date]
       const hasFpts = fpts !== undefined && fpts !== 0
       const wasOnBench = benchDays?.[pitcher.name]?.includes(date) ?? false
+      const perStart = fptsPerStart?.[pitcher.name]
       return (
         <div style={{ textAlign: 'center' }}>
           <div style={{ fontSize: 11, fontFamily: 'var(--mono)', fontWeight: 700, color }}>
@@ -152,6 +157,11 @@ function DayCell({ pitcher, date, schedule, today, actualFpts, benchDays, actual
               textDecoration: wasOnBench ? 'line-through' : 'none',
             }}>
               {fpts > 0 ? '+' : ''}{fpts.toFixed(1)}
+            </div>
+          )}
+          {hasFpts && perStart !== undefined && (
+            <div style={{ fontSize: 9, fontFamily: 'var(--mono)', color: 'var(--ink-3)', marginTop: 1 }}>
+              (proj: {perStart >= 0 ? '+' : ''}{perStart.toFixed(1)})
             </div>
           )}
           {actualSaves?.[pitcher.name]?.[date] && (
@@ -200,12 +210,18 @@ function DayCell({ pitcher, date, schedule, today, actualFpts, benchDays, actual
     const indicator = startInfo.confirmed
         ? <span style={{ fontSize: 11 }}>✅</span>
         : <span style={{ fontSize: 10, fontWeight: 700, fontFamily: 'var(--mono)', color: 'var(--blue)', background: 'var(--blue-light)', borderRadius: 99, padding: '1px 5px' }}>P</span>
+    const perStart = fptsPerStart?.[pitcher.name]
     return (
       <div style={{ textAlign: 'center' }}>
         <div style={{ fontSize: 11, fontFamily: 'var(--mono)', fontWeight: 700, color: 'var(--ink)' }}>
           {oppLabel}
         </div>
         <div style={{ fontSize: 11, marginTop: 1 }}>{indicator}</div>
+        {perStart !== undefined && (
+          <div style={{ fontSize: 9, fontFamily: 'var(--mono)', color: 'var(--ink-3)', marginTop: 1 }}>
+            {perStart >= 0 ? '+' : ''}{perStart.toFixed(1)}
+          </div>
+        )}
       </div>
     )
   }
@@ -229,6 +245,7 @@ export default function ScheduleGrid({
   benchDays,
   actualSaves,
   savesData,
+  fptsPerStart,
 }: Props) {
   const today = todayISO()
 
@@ -298,6 +315,9 @@ export default function ScheduleGrid({
 
             {/* Fixed right columns */}
             <th style={{ ...headerStyle, minWidth: 52 }}>{savesData ? 'Saves' : 'Starts'}</th>
+            {actualFpts && (
+              <th style={{ ...headerStyle, minWidth: 72 }}>Act FPTS</th>
+            )}
             <th style={{ ...headerStyle, minWidth: 72 }}>Proj FPTS</th>
             {suffixHeaders}
           </tr>
@@ -351,6 +371,7 @@ export default function ScheduleGrid({
                         actualFpts={actualFpts}
                         benchDays={benchDays}
                         actualSaves={actualSaves}
+                        fptsPerStart={fptsPerStart}
                       />
                     </td>
                   )
@@ -362,6 +383,20 @@ export default function ScheduleGrid({
                     ? Object.values(savesData[pitcher.name] || {}).reduce((a, b) => a + b, 0)
                     : pitcher.starts}
                 </td>
+
+                {/* Actual FPTS total — only rendered when actualFpts prop is provided */}
+                {actualFpts && (() => {
+                  const total = Object.values(actualFpts[pitcher.name] || {}).reduce((a, b) => a + b, 0)
+                  return (
+                    <td style={{
+                      ...cellStyle,
+                      fontFamily: 'var(--mono)', fontWeight: 700,
+                      color: total > 0 ? 'var(--green)' : total < 0 ? 'var(--red)' : 'var(--ink-3)',
+                    }}>
+                      {total !== 0 ? (total > 0 ? '+' : '') + total.toFixed(1) : '—'}
+                    </td>
+                  )
+                })()}
 
                 {/* Proj FPTS */}
                 <td style={{

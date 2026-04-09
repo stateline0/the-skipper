@@ -3,11 +3,11 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import { useRouter } from 'next/router'
 import ScheduleGrid from '../components/ScheduleGrid'
 
-const CACHE_VERSION = 2 // bump this whenever the API response shape changes
+const CACHE_VERSION = 3 // bump this whenever the API response shape changes
 
 interface FreeSP {
   name: string; team: string; slot: string; injuryStatus: string
-  percentOwned: number; projFpts: number; starts: number
+  percentOwned: number; projFpts: number; projBlend?: number; starts: number
   opps?: string; checked: boolean; startDates?: any[]
 }
 
@@ -24,7 +24,8 @@ export default function FreeAgents() {
   const [freeSPs, setFreeSPs] = useState<FreeSP[]>([])
   const [schedule, setSchedule] = useState<Record<string, any>>({})
   const [matchupDates, setMatchupDates] = useState<string[]>([])
-  const [actualFpts, setActualFpts] = useState<Record<string, Record<string, number>>>({})
+  const [actualFpts, setActualFpts]     = useState<Record<string, Record<string, number>>>({})
+  const [fptsPerStart, setFptsPerStart] = useState<Record<string, number>>({})
 
   useEffect(() => {
     fetch('/api/config')
@@ -46,6 +47,7 @@ export default function FreeAgents() {
       setSchedule(data.schedule || {})
       setMatchupDates(data.matchupDates || [])
       setActualFpts(data.actualFpts || {})
+      setFptsPerStart(data.fptsPerStart || {})
     }
   }, [])
 
@@ -87,6 +89,7 @@ export default function FreeAgents() {
         slot: p.slot || 'SP',
         starts: p.starts ?? 0,
         projFpts: p.projFpts ?? 0,
+        projBlend: p.projBlend ?? 0,
         opps: p.opps || '',
         checked: p.percentOwned >= 15,
       }))
@@ -97,12 +100,14 @@ export default function FreeAgents() {
         schedule: data.schedule || {},
         matchupDates: data.matchupDates || [],
         actualFpts: data.actualFpts || {},
+        fptsPerStart: data.faFptsPerStart || {},
       }
       sessionStorage.setItem('skipper_free_agents', JSON.stringify(toCache))
       setFreeSPs(fas)
       setSchedule(data.schedule || {})
       setMatchupDates(data.matchupDates || [])
       setActualFpts(data.actualFpts || {})
+      setFptsPerStart(data.faFptsPerStart || {})
     } catch (e: any) {
       setError(e.message || 'Failed to load free agents')
     } finally {
@@ -219,7 +224,7 @@ export default function FreeAgents() {
                 pitchers={freeSPs}
                 schedule={schedule}
                 matchupDates={matchupDates}
-                actualFpts={actualFpts}
+                fptsPerStart={fptsPerStart}
                 prefixHeaders={<th style={{ padding: '8px 6px', fontSize: 10, fontFamily: 'var(--mono)', fontWeight: 500, color: 'var(--ink-3)', borderBottom: '1px solid var(--border)', minWidth: 32 }}></th>}
                 suffixHeaders={<th style={{ padding: '8px 6px', fontSize: 10, fontFamily: 'var(--mono)', fontWeight: 500, color: 'var(--ink-3)', borderBottom: '1px solid var(--border)', minWidth: 52, whiteSpace: 'nowrap' }}>Own%</th>}
                 renderPrefix={(pitcher, i) => (
