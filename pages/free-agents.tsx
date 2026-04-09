@@ -1,5 +1,5 @@
 import Head from 'next/head'
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { useRouter } from 'next/router'
 import ScheduleGrid from '../components/ScheduleGrid'
 
@@ -26,6 +26,8 @@ export default function FreeAgents() {
   const [matchupDates, setMatchupDates] = useState<string[]>([])
   const [actualFpts, setActualFpts]     = useState<Record<string, Record<string, number>>>({})
   const [fptsPerStart, setFptsPerStart] = useState<Record<string, number>>({})
+  const [sortCol, setSortCol]           = useState<string>('percentOwned')
+  const [sortDir, setSortDir]           = useState<'asc' | 'desc'>('desc')
 
   useEffect(() => {
     fetch('/api/config')
@@ -115,9 +117,57 @@ export default function FreeAgents() {
     }
   }, [selectedPeriod])
 
+function handleSort(col: string) {
+    if (col === sortCol) {
+      // Same column — cycle: desc → asc → default (percentOwned desc)
+      if (sortDir === 'desc') {
+        setSortDir('asc')
+      } else {
+        setSortCol('percentOwned')
+        setSortDir('desc')
+      }
+    } else {
+      setSortCol(col)
+      setSortDir('desc')
+    }
+  }
+
+  const sortedFreeSPs = useMemo(() => {
+    const sorted = [...freeSPs]
+    sorted.sort((a, b) => {
+      let aVal: number
+      let bVal: number
+
+      if (sortCol === 'name') {
+        // String sort — flip the numeric logic
+        const cmp = a.name.localeCompare(b.name)
+        return sortDir === 'asc' ? cmp : -cmp
+      } else if (sortCol === 'percentOwned') {
+        aVal = a.percentOwned ?? 0
+        bVal = b.percentOwned ?? 0
+      } else if (sortCol === 'projFpts') {
+        aVal = a.projFpts ?? 0
+        bVal = b.projFpts ?? 0
+      } else if (sortCol === 'starts') {
+        aVal = a.starts ?? 0
+        bVal = b.starts ?? 0
+      } else {
+        // Date column — sort by fptsPerStart if pitcher starts that day, else 0
+        const aStarts = a.startDates?.some(s => s.date === sortCol) ?? false
+        const bStarts = b.startDates?.some(s => s.date === sortCol) ?? false
+        aVal = aStarts ? (fptsPerStart[a.name] ?? 0) : 0
+        bVal = bStarts ? (fptsPerStart[b.name] ?? 0) : 0
+      }
+
+      return sortDir === 'desc' ? bVal - aVal : aVal - bVal
+    })
+    return sorted
+  }, [freeSPs, sortCol, sortDir, fptsPerStart])
+
   function toggleCheck(index: number) {
-    const updated = [...freeSPs]
-    updated[index] = { ...updated[index], checked: !updated[index].checked }
+    // index refers to sortedFreeSPs position — look up by name to find position in freeSPs
+    const name = sortedFreeSPs[index]?.name
+    const updated = freeSPs.map(p => p.name === name ? { ...p, checked: !p.checked } : p)
     setFreeSPs(updated)
     const cached = JSON.parse(sessionStorage.getItem('skipper_free_agents') || '{}')
     sessionStorage.setItem('skipper_free_agents', JSON.stringify({ ...cached, freeSPs: updated }))
@@ -221,12 +271,28 @@ export default function FreeAgents() {
               boxShadow: 'var(--shadow)', marginBottom: 16,
             }}>
               <ScheduleGrid
-                pitchers={freeSPs}
+                pitchers={sortedFreeSPs}
                 schedule={schedule}
                 matchupDates={matchupDates}
                 fptsPerStart={fptsPerStart}
+                sortCol={sortCol}
+                sortDir={sortDir}
+                onSortChange={handleSort}
                 prefixHeaders={<th style={{ padding: '8px 6px', fontSize: 10, fontFamily: 'var(--mono)', fontWeight: 500, color: 'var(--ink-3)', borderBottom: '1px solid var(--border)', minWidth: 32 }}></th>}
-                suffixHeaders={<th style={{ padding: '8px 6px', fontSize: 10, fontFamily: 'var(--mono)', fontWeight: 500, color: 'var(--ink-3)', borderBottom: '1px solid var(--border)', minWidth: 52, whiteSpace: 'nowrap' }}>Own%</th>}
+                suffixHeaders={
+                  <th
+                    onClick={() => handleSort('percentOwned')}
+                    style={{
+                      padding: '8px 6px', fontSize: 10, fontFamily: 'var(--mono)',
+                      fontWeight: 500, borderBottom: '1px solid var(--border)',
+                      minWidth: 52, whiteSpace: 'nowrap', cursor: 'pointer',
+                      userSelect: 'none',
+                      color: sortCol === 'percentOwned' ? 'var(--ink)' : 'var(--ink-3)',
+                    }}
+                  >
+                    Own%{sortCol === 'percentOwned' ? (sortDir === 'desc' ? ' ↓' : ' ↑') : ''}
+                  </th>
+                }
                 renderPrefix={(pitcher, i) => (
                   <td style={{ padding: '8px 6px', borderBottom: '1px solid var(--border)', verticalAlign: 'middle', textAlign: 'center' }}
                     onClick={e => { e.stopPropagation(); toggleCheck(i) }}>
