@@ -2,6 +2,45 @@
 
 ---
 
+## Session 8 — April 8, 2026
+
+FA projections, per-start cell projections, actual FPTS column, and bug fixes. One PR shipped (#35).
+
+### Key learnings this session
+- Cache version bumps are critical any time the API response shape changes — without them, users with stale caches silently get empty data rather than an error. Always bump `CACHE_VERSION` when adding new fields.
+- When a fetch function sets state from an API response, the key names must match exactly — `data.rosterFptsPerStart` not `data.fptsPerStart`. A mismatch silently sets state to `{}` with no error.
+- Hard refresh (`Cmd+Shift+R`) busts the browser's JS cache and is a reliable first debugging step when deployed behavior doesn't match expectations.
+- The IIFE pattern (`(() => { const x = ...; return <td>...</td> })()`) is the clean way to compute local variables inside JSX expressions where `const` declarations aren't allowed inline.
+- Conditional column rendering with `{actualFpts && <th>...</th>}` lets one component serve two pages with different column layouts — no duplication.
+- A dead `if not is_rp else` branch inside an `if is_rp:` block always takes the else path — effectively a no-op wrapper that makes code unreadable. Simplify to the direct expression.
+
+### Free agent projections
+- `api/espn.py`: `fa_option_b_inputs` built for free agents — same structure as roster Option B inputs
+- `api/espn.py`: `get_projected_fpts()` called for free agents; `fa_proj_fpts`, `fa_proj_blend`, `fa_fpts_per_start` returned
+- `api/espn.py`: `projFpts` and `projBlend` now populated on each free agent dict (was hardcoded `0.0`)
+- `api/espn.py`: `faFptsPerStart` added to API response
+
+### Per-start projections in schedule grid cells
+- `api/espn.py`: `get_projected_fpts()` now returns a third dict `fpts_per_start` — per-game FPTS average per pitcher
+- `api/espn.py`: `rosterFptsPerStart` added to API response
+- `components/ScheduleGrid.tsx`: new `fptsPerStart` prop (`Record<string, number>`) added to `Props` and `DayCell`
+- `components/ScheduleGrid.tsx`: future start cells show per-start projection in gray below ✅ or P badge
+- `components/ScheduleGrid.tsx`: past start cells show `(proj: +X.X)` in gray below actual FPTS — only when actual FPTS is also present
+- `pages/my-team.tsx` + `pages/free-agents.tsx`: `fptsPerStart` state added, fetched, cached, restored, and passed to `ScheduleGrid`
+
+### Actual FPTS column
+- `components/ScheduleGrid.tsx`: new Act FPTS column — sums `actualFpts` across all days for each pitcher
+- Column only renders when `actualFpts` prop is provided — appears on My Team, absent on Free Agents
+- Positive totals in green, negative in red, zero as `—`
+- Sits left of Proj FPTS column for direct comparison
+
+### Bug fixes
+- `api/espn.py`: fixed dead `if not is_rp else` branch inside `if is_rp:` RP projection block — simplified to direct expression
+- `pages/my-team.tsx`: fixed `setFptsPerStart(data.fptsPerStart)` → `setFptsPerStart(data.rosterFptsPerStart)` — was silently setting state to `{}` after every Refresh click
+- `CACHE_VERSION` bumped to 3 on both `my-team.tsx` and `free-agents.tsx`
+
+---
+
 ## Session 7 — April 7, 2026 (part 3)
 
 Projection model brainstorm and prioritization. No code written.
