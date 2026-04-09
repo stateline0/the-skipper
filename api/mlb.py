@@ -266,13 +266,21 @@ def build_pitcher_starts(mlb_data, fp_data, period_start, period_end):
         if not period_dates:
             continue
 
-        start_list = [
-            {"date": d, "confirmed": d in mlb_dates}
-            for d in period_dates
-        ]
+        # Build startDates — we need to know which team this pitcher is on
+        # to look up their opponent. We find their team by scanning the schedule
+        # for a day they start and matching their last name via the probables data.
+        start_list = []
+        for d in period_dates:
+            # opponent is filled in later by get_starts_for_players()
+            # which has the full player name → team mapping
+            start_list.append({
+                "date":      d,
+                "confirmed": d in mlb_dates,
+                "opponent":  "",
+            })
 
         result[name] = {
-            "starts": len(start_list),
+            "starts":     len(start_list),
             "startDates": start_list,
         }
 
@@ -287,12 +295,15 @@ def build_pitcher_starts(mlb_data, fp_data, period_start, period_end):
 # Matching is by last name (lowercase). First match wins on collision.
 # ---------------------------------------------------------------------------
 
-def get_starts_for_players(player_names, matchup_period):
+def get_starts_for_players(player_names, matchup_period, team_map=None):
     """
     Given a list of full player names and a matchup period number,
     returns a tuple:
       - starts_map:  { "Garrett Crochet": {"starts": 2, "startDates": [...]} }
       - schedule:    { "2026-03-26": { "BOS": {opponent, is_home, status}, ... } }
+
+    team_map: optional { "Garrett Crochet": "BOS" } — used to add opponent
+    info to each startDate entry so the projection model can apply matchup factors.
     """
     if matchup_period not in MATCHUP_PERIODS:
         return {}, {}
@@ -300,7 +311,6 @@ def get_starts_for_players(player_names, matchup_period):
     mp       = MATCHUP_PERIODS[matchup_period]
     mlb_data = fetch_mlb_probables(mp["start"], mp["end"])
 
-    # fetch_espn_probables now returns (pitchers, schedule)
     fp_data, schedule = fetch_espn_probables(mp["start"], mp["end"])
 
     pitcher_starts = build_pitcher_starts(mlb_data, fp_data, mp["start"], mp["end"])
@@ -312,11 +322,131 @@ def get_starts_for_players(player_names, matchup_period):
             parts     = full_name.split()
             last_name = parts[-2].lower() if len(parts) >= 2 else last_name
         if last_name in pitcher_starts:
-            result[full_name] = pitcher_starts[last_name]
+            entry = pitcher_starts[last_name]
+            # Add opponent to each startDate using the schedule + team_map
+            if team_map and full_name in team_map:
+                team_abbrev = team_map[full_name]
+                for sd in entry["startDates"]:
+                    day = schedule.get(sd["date"], {})
+                    game = day.get(team_abbrev, {})
+                    sd["opponent"] = game.get("opponent", "")
+            result[full_name] = entry
         else:
             result[full_name] = {"starts": 0, "startDates": []}
 
     return result, schedule
+
+
+# ---------------------------------------------------------------------------
+# Team wOBA — used for opponent quality adjustment in projections.
+#
+# Fetches team-level hitting stats from MLB Stats API and computes wOBA
+# for each team. Returns factors relative to league average (1.0 = average).
+# Teams with fewer than 10 games are returned as 1.0 (not enough data).
+#
+# wOBA formula:
+#   (0.69×uBB + 0.72×HBP + 0.89×1B + 1.27×2B + 1.62×3B + 2.10×HR) / PA
+# where uBB = BB - IBB, 1B = H - 2B - 3B - HR
+# ---------------------------------------------------------------------------
+
+# MLB Stats API team ID → abbreviation (verified 2026)
+MLB_TEAM_ID_TO_ABBREV = {
+    108: "LAA", 109: "ARI", 110: "BAL", 111: "BOS", 112: "CHC",
+    113: "CIN", 114: "CLE", 115: "COL", 116: "DET", 117: "HOU",
+    118: "KC",  119: "LAD", 120: "WSH", 121: "NYM", 133: "ATH",
+    134: "PIT", 135: "SD",  136: "SEA", 137: "SF",  138: "STL",
+    139: "TB",  140: "TEX", 141: "TOR", 142: "MIN", 143: "PHI",
+    144: "ATL", 145: "CWS", 146: "MIA", 147: "NYY", 158: "MIL",
+}
+
+def get_team_woba(season: int = 2026) -> dict:
+    """
+    Returns { "LAD": 1.08, "CWS": 0.91, ... } — wOBA relative to league avg.
+    Falls back to empty dict on any error (caller treats missing teams as 1.0).
+    """
+    try:
+        r = requests.get(
+            "https://statsapi.mlb.com/api/v1/teams/stats",
+            params={
+                "stats":    "season",
+                "group":    "hitting",
+                "gameType": "R",
+                "season":   str(season),
+                "sportId":  1,
+            },
+            headers={"User-Agent": "Mozilla/5.0"},
+            timeout=10,
+        )
+        if r.status_code != 200:
+            print(f"[mlb.py] Team stats API returned {r.status_code}")
+            return {}
+
+        splits = r.json().get("stats", [{}])[0].get("splits", [])
+
+        # Compute raw wOBA per team
+        raw_wobas = {}
+        for split in splits:
+            team_id = split.get("team", {}).get("id")
+            abbrev  = MLB_TEAM_ID_TO_ABBREV.get(team_id)
+            if not abbrev:
+                continue
+
+            s  = split.get("stat", {})
+            gp = s.get("gamesPlayed", 0)
+            if gp < 10:
+                # Too early in season — not enough data to trust
+                raw_wobas[abbrev] = None
+                continue
+
+            pa  = s.get("plateAppearances", 0)
+            if pa == 0:
+                continue
+
+            bb  = s.get("baseOnBalls", 0)
+            ibb = s.get("intentionalWalks", 0)
+            hbp = s.get("hitByPitch", 0)
+            h   = s.get("hits", 0)
+            d   = s.get("doubles", 0)
+            t   = s.get("triples", 0)
+            hr  = s.get("homeRuns", 0)
+
+            ubb = bb - ibb
+            single = h - d - t - hr
+
+            woba = (
+                0.69 * ubb +
+                0.72 * hbp +
+                0.89 * single +
+                1.27 * d +
+                1.62 * t +
+                2.10 * hr
+            ) / pa
+
+            raw_wobas[abbrev] = woba
+
+        # Compute league average from teams with enough data
+        valid = [w for w in raw_wobas.values() if w is not None]
+        if not valid:
+            return {}
+
+        lg_avg = sum(valid) / len(valid)
+        print(f"[mlb.py] League avg wOBA: {lg_avg:.3f} across {len(valid)} teams")
+
+        # Return factors relative to league average
+        # Teams without enough data get 1.0 (league average)
+        factors = {}
+        for abbrev, woba in raw_wobas.items():
+            if woba is None:
+                factors[abbrev] = 1.0
+            else:
+                factors[abbrev] = round(woba / lg_avg, 4)
+                print(f"[mlb.py] {abbrev}: wOBA {woba:.3f} → factor {factors[abbrev]:.3f}")
+
+        return factors
+
+    except Exception as e:
+        print(f"[mlb.py] get_team_woba failed: {e}")
+        return {}
 
 
 # ---------------------------------------------------------------------------

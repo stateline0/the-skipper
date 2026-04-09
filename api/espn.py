@@ -13,7 +13,7 @@ from urllib.parse import urlparse, parse_qs
 from datetime import datetime, timedelta, timezone
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__)))
-from mlb import get_starts_for_players, MATCHUP_PERIODS
+from mlb import get_starts_for_players, get_team_woba, MATCHUP_PERIODS
 
 
 SEASON_START = datetime(2026, 3, 25)
@@ -126,26 +126,28 @@ def today_has_started(schedule: dict) -> bool:
     )
 
 
-def get_projected_fpts(player_starts: list) -> tuple:
+def get_projected_fpts(player_starts: list, team_woba_factors: dict = None) -> tuple:
     """
-    Project fantasy points per pitcher by blending 2025 and 2026 season stats.
+    Project fantasy points per pitcher by blending 2025 and 2026 season stats,
+    adjusted for opponent quality using team wOBA factors.
 
     Blend weight shifts from 100% last year to 100% this year as the pitcher
-    accumulates innings in 2026. Threshold for full trust = 50 IP.
+    accumulates innings in 2026. Threshold for full trust = 50 IP for SPs, 20 IP for RPs.
 
-      this_year_weight = min(1.0, ip_2026 / 50)
-      last_year_weight = 1 - this_year_weight
-
-    player_starts: [{"name": "Garrett Crochet", "starts": 2, "is_rp": False}, ...]
+    player_starts: [{"name": "Garrett Crochet", "starts": 2, "is_rp": False,
+                     "startDates": [{"date": "...", "opponent": "COL", ...}]}, ...]
+    team_woba_factors: { "LAD": 1.08, "CWS": 0.91, ... } — relative to league avg
 
     Returns tuple:
-      proj_fpts:  { "Garrett Crochet": 34.2, ... }
-      proj_blend: { "Garrett Crochet": 0.3, ... }  ← fraction of 2026 data used
+      proj_fpts:     { "Garrett Crochet": 34.2, ... }
+      proj_blend:    { "Garrett Crochet": 0.3, ... }
+      fpts_per_start: { "Garrett Crochet": 17.1, ... }  ← baseline, pre-matchup
 
     League scoring settings (Good Season Imanagas):
       IP:  +3    H:  -1    ER: -2    BB: -1
       HB:  -1    K:  +1    W:  +5    L:  -5    SV: +5
     """
+    team_woba_factors = team_woba_factors or {}
     if not player_starts:
         return {}, {}
 
@@ -283,14 +285,26 @@ def get_projected_fpts(player_starts: list) -> tuple:
 
         fpts_per_game = apply_formula(blended)
 
-        # For SPs: multiply by projected starts this period
-        # For RPs: use appearances-per-week estimate (4 per week × period length)
-        if is_rp:
+        # Apply opponent quality adjustment per start using team wOBA factors.
+        # For each projected start, look up the opponent and scale fpts_per_game.
+        # Missing opponent or factor → use 1.0 (no adjustment).
+        start_dates = player_info.get("startDates", [])
+        if not is_rp and start_dates and team_woba_factors:
+            adjusted_total = 0.0
+            for sd in start_dates:
+                opp    = sd.get("opponent", "")
+                factor = team_woba_factors.get(opp, 1.0)
+                adjusted_total += fpts_per_game * factor
+            projected = round(adjusted_total, 1)
+            avg_factor = round(adjusted_total / (fpts_per_game * len(start_dates)), 3) if start_dates and fpts_per_game else 1.0
+        elif is_rp:
             days_in_period = player_info.get("days_in_period", 7)
             projected_appearances = round(days_in_period / 7 * 4)
             projected = round(fpts_per_game * projected_appearances, 1)
+            avg_factor = 1.0
         else:
             projected = round(fpts_per_game * projected_starts, 1)
+            avg_factor = 1.0
 
         proj_fpts[full_name]      = projected
         proj_blend[full_name]     = round(this_year_weight, 2)
@@ -298,8 +312,7 @@ def get_projected_fpts(player_starts: list) -> tuple:
 
         print(f"[espn.py] {full_name}: {round(this_year_weight*100)}% '26 / "
               f"{round(last_year_weight*100)}% '25 | "
-              f"{fpts_per_game:.1f} pts/game × "
-              f"{projected_starts if not is_rp else projected_appearances} = {projected}")
+              f"{fpts_per_game:.1f} pts/game × factor {avg_factor:.3f} = {projected}")
 
     return proj_fpts, proj_blend, fpts_per_start
 
@@ -387,6 +400,10 @@ def get_league_data(team_id: int, week: int) -> dict:
         f"https://lm-api-reads.fantasy.espn.com/apis/v3/games/flb"
         f"/seasons/{year}/segments/0/leagues/{league_id}"
     )
+
+    # ── Team wOBA factors for opponent quality adjustment ─────────────────
+    year_int = int(os.environ.get("ESPN_SEASON", "2026"))
+    team_woba_factors = get_team_woba(year_int)
 
     # ── Matchup period metadata ──────────────────────────────────────────
     mp            = MATCHUP_PERIODS.get(week, {})
@@ -477,7 +494,16 @@ def get_league_data(team_id: int, week: int) -> dict:
         for e in roster_entries
         if e.get("playerPoolEntry", {}).get("player", {}).get("fullName")
     ]
-    starts_map, schedule = get_starts_for_players(all_player_names, week)
+    # Build team_map so get_starts_for_players can add opponent to each startDate
+    roster_team_map = {}
+    for e in roster_entries:
+        pool   = e.get("playerPoolEntry", {})
+        player = pool.get("player", {})
+        name   = player.get("fullName", "")
+        pro_id = player.get("proTeamId", 0)
+        if name and pro_id:
+            roster_team_map[name] = PRO_TEAM_MAP.get(pro_id, "")
+    starts_map, schedule = get_starts_for_players(all_player_names, week, team_map=roster_team_map)
 
     # Fill in projected starts and period length for Option B
     days_in_period = 7
@@ -487,10 +513,12 @@ def get_league_data(team_id: int, week: int) -> dict:
         days_in_period = (end_d - start_d).days + 1
 
     for entry in option_b_inputs:
-        entry["starts"]         = starts_map.get(entry["name"], {}).get("starts", 0)
+        pitcher_data            = starts_map.get(entry["name"], {})
+        entry["starts"]         = pitcher_data.get("starts", 0)
+        entry["startDates"]     = pitcher_data.get("startDates", [])
         entry["days_in_period"] = days_in_period
 
-    proj_fpts_by_name, proj_blend_by_name, fpts_per_start_roster = get_projected_fpts(option_b_inputs)
+    proj_fpts_by_name, proj_blend_by_name, fpts_per_start_roster = get_projected_fpts(option_b_inputs, team_woba_factors)
 
     # ── Roster transaction lag fix ────────────────────────────────────────
     # Once any game today starts, ESPN locks the current scoring period's
@@ -610,7 +638,14 @@ def get_league_data(team_id: int, week: int) -> dict:
             fa_names.append(player["fullName"])
             fa_players_raw.append(p)
 
-        fa_starts_map, _ = get_starts_for_players(fa_names, week)
+        fa_team_map = {}
+        for p in fa_players_raw:
+            player = p.get("player", {})
+            name   = player.get("fullName", "")
+            pro_id = player.get("proTeamId", 0)
+            if name and pro_id:
+                fa_team_map[name] = PRO_TEAM_MAP.get(pro_id, "")
+        fa_starts_map, _ = get_starts_for_players(fa_names, week, team_map=fa_team_map)
 
         # Build Option B inputs for free agents — same model as roster players
         fa_option_b_inputs = []
@@ -621,14 +656,16 @@ def get_league_data(team_id: int, week: int) -> dict:
             is_rp          = (14 not in eligible_slots and 13 in eligible_slots)
             if not fa_name:
                 continue
+            fa_pitcher_data = fa_starts_map.get(fa_name, {})
             fa_option_b_inputs.append({
-                "name":          fa_name,
-                "starts":        fa_starts_map.get(fa_name, {}).get("starts", 0),
-                "is_rp":         is_rp,
+                "name":           fa_name,
+                "starts":         fa_pitcher_data.get("starts", 0),
+                "startDates":     fa_pitcher_data.get("startDates", []),
+                "is_rp":          is_rp,
                 "days_in_period": days_in_period,
             })
 
-        fa_proj_fpts, fa_proj_blend, fa_fpts_per_start = get_projected_fpts(fa_option_b_inputs)
+        fa_proj_fpts, fa_proj_blend, fa_fpts_per_start = get_projected_fpts(fa_option_b_inputs, team_woba_factors)
 
         inj_label_map = {
             "ACTIVE": "Active", "NORMAL": "Active",
