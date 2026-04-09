@@ -163,7 +163,7 @@ function DayCell({ pitcher, date, schedule, today, actualFpts, benchDays, actual
               {fpts > 0 ? '+' : ''}{fpts.toFixed(1)}
             </div>
           )}
-          {hasFpts && perStart !== undefined && (
+          {perStart !== undefined && (hasFpts || isToday) && (
             <div style={{ fontSize: 9, fontFamily: 'var(--mono)', color: 'var(--ink-3)', marginTop: 1 }}>
               (proj: {perStart >= 0 ? '+' : ''}{perStart.toFixed(1)})
             </div>
