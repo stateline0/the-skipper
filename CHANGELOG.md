@@ -2,6 +2,34 @@
 
 ---
 
+## Session 10 — April 9, 2026
+
+Opponent quality adjustment using team wOBA factors. One PR shipped (#39).
+
+### Key learnings this session
+- MLB Stats API `/api/v1/teams/stats` returns team-level hitting stats for all 30 teams in one call — free, no auth, same API we already use for pitcher stats.
+- wOBA (weighted on-base average) is the best single stat for measuring offensive quality — it weights each outcome (BB, HBP, 1B, 2B, 3B, HR) by its run value rather than treating them equally like OBP.
+- Normalizing to league average (factor = team_wOBA / lg_avg) is cleaner than using raw wOBA — it makes 1.0 always mean "average opponent" regardless of league-wide offensive environment year to year.
+- 10-game minimum threshold before trusting team wOBA — small samples produce noisy factors early in the season.
+- Per-start opponent adjustment (sum each start's adjusted fpts) is mathematically equivalent to average-factor × total but easier to extend when we want per-start UI context later.
+- RPs excluded from matchup adjustment — their appearance rate is driven by game state and save situations, not opponent quality.
+- `get_starts_for_players()` needed a `team_map` parameter to look up each pitcher's opponent per start date — the schedule dict already had this data, just needed to thread the team abbreviation through.
+- The MLB Stats API uses `AZ` as Arizona's abbreviation but our schedule uses `ARI` — always verify abbreviation normalization when adding new data sources.
+
+### Opponent quality adjustment
+- `api/mlb.py`: `get_team_woba()` — fetches team hitting stats, computes wOBA per team, returns factors relative to league average
+- `api/mlb.py`: `MLB_TEAM_ID_TO_ABBREV` — hardcoded MLB Stats API team ID → abbreviation map (verified 2026)
+- `api/mlb.py`: `get_starts_for_players()` now accepts `team_map` parameter — adds `opponent` field to each `startDate` entry
+- `api/mlb.py`: `build_pitcher_starts()` cleaned up — removed unused `schedule` parameter
+- `api/espn.py`: `get_team_woba` imported from `mlb`
+- `api/espn.py`: `get_team_woba()` called once at top of `get_league_data()` — result passed to both roster and FA projection calls
+- `api/espn.py`: `roster_team_map` and `fa_team_map` built from `PRO_TEAM_MAP` and passed to `get_starts_for_players()`
+- `api/espn.py`: `startDates` (with opponent) now included in Option B inputs for both roster and FA pitchers
+- `api/espn.py`: `get_projected_fpts()` accepts `team_woba_factors` — applies per-start matchup factor before summing period total
+- RPs use flat appearances-per-week estimate with no matchup adjustment
+
+---
+
 ## Session 9 — April 9, 2026
 
 Sortable free agents table, SP slot filter fix, FA actual FPTS, and projection model fixes. One PR shipped (#37).

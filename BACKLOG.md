@@ -145,8 +145,8 @@ Last updated: April 9, 2026
 - [ ] Tile/component system so new features slot in over time
 
 ### Projection model improvements — near term
-- [ ] **Opponent quality adjustment** (HIGH impact) — scale projection up/down based on opponent wOBA vs SP. Requires fetching team batting stats from MLB Stats API
-- [ ] **Recent form weighting** (MEDIUM impact) — weight last 3-4 starts more heavily than season average. Requires game log fetch
+- [x] **Opponent quality adjustment** — team wOBA factors applied per start. Done in PR #39.
+- [ ] **Recent form weighting** (MEDIUM impact) — weight last 3-4 starts more heavily than season average. Game log data already fetched for actualFpts — infrastructure mostly in place.
 
 ### Projected FPTS model — Option C (target mid-May)
 - [ ] Replace Option B inputs with Statcast metrics from Baseball Savant
