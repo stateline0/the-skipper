@@ -228,8 +228,9 @@ def get_projected_fpts(player_starts: list) -> tuple:
         stats_2026 = f2026.result()
         stats_2025 = f2025.result()
 
-    proj_fpts  = {}
-    proj_blend = {}
+    proj_fpts      = {}
+    proj_blend     = {}
+    fpts_per_start = {}
 
     for name_lower, player_info in starts_by_name.items():
         full_name        = player_info["name"]
@@ -280,26 +281,24 @@ def get_projected_fpts(player_starts: list) -> tuple:
         fpts_per_game = apply_formula(blended)
 
         # For SPs: multiply by projected starts this period
-        # For RPs: projected_starts is 0 — use appearances-per-week estimate (4 per week)
+        # For RPs: use appearances-per-week estimate (4 per week × period length)
         if is_rp:
             days_in_period = player_info.get("days_in_period", 7)
-            projected_appearances = round(
-                (blended["ip"] / max(avgs_26["ip"] if avgs_26 else 1, 0.01)) *
-                (days_in_period / 7) * 4
-            ) if not is_rp else round(days_in_period / 7 * 4)
+            projected_appearances = round(days_in_period / 7 * 4)
             projected = round(fpts_per_game * projected_appearances, 1)
         else:
             projected = round(fpts_per_game * projected_starts, 1)
 
-        proj_fpts[full_name]  = projected
-        proj_blend[full_name] = round(this_year_weight, 2)
+        proj_fpts[full_name]      = projected
+        proj_blend[full_name]     = round(this_year_weight, 2)
+        fpts_per_start[full_name] = round(fpts_per_game, 1)
 
         print(f"[espn.py] {full_name}: {round(this_year_weight*100)}% '26 / "
               f"{round(last_year_weight*100)}% '25 | "
               f"{fpts_per_game:.1f} pts/game × "
               f"{projected_starts if not is_rp else projected_appearances} = {projected}")
 
-    return proj_fpts, proj_blend
+    return proj_fpts, proj_blend, fpts_per_start
 
 
 def get_actual_fpts(past_dates: list, player_names: set, headers: dict, cookies: dict) -> dict:
@@ -488,7 +487,7 @@ def get_league_data(team_id: int, week: int) -> dict:
         entry["starts"]         = starts_map.get(entry["name"], {}).get("starts", 0)
         entry["days_in_period"] = days_in_period
 
-    proj_fpts_by_name, proj_blend_by_name = get_projected_fpts(option_b_inputs)
+    proj_fpts_by_name, proj_blend_by_name, fpts_per_start_roster = get_projected_fpts(option_b_inputs)
 
     # ── Roster transaction lag fix ────────────────────────────────────────
     # Once any game today starts, ESPN locks the current scoring period's
@@ -609,6 +608,24 @@ def get_league_data(team_id: int, week: int) -> dict:
 
         fa_starts_map, _ = get_starts_for_players(fa_names, week)
 
+        # Build Option B inputs for free agents — same model as roster players
+        fa_option_b_inputs = []
+        for p in fa_players_raw:
+            player         = p.get("player", {})
+            fa_name        = player.get("fullName", "")
+            eligible_slots = set(player.get("eligibleSlots", []))
+            is_rp          = (14 not in eligible_slots and 13 in eligible_slots)
+            if not fa_name:
+                continue
+            fa_option_b_inputs.append({
+                "name":          fa_name,
+                "starts":        fa_starts_map.get(fa_name, {}).get("starts", 0),
+                "is_rp":         is_rp,
+                "days_in_period": days_in_period,
+            })
+
+        fa_proj_fpts, fa_proj_blend, fa_fpts_per_start = get_projected_fpts(fa_option_b_inputs)
+
         inj_label_map = {
             "ACTIVE": "Active", "NORMAL": "Active",
             "FIFTEEN_DAY_DL": "IL15", "SIXTY_DAY_DL": "IL60",
@@ -627,7 +644,8 @@ def get_league_data(team_id: int, week: int) -> dict:
                 "team":         team_abbrev,
                 "injuryStatus": inj_label_map.get(raw_inj, raw_inj),
                 "percentOwned": round(player.get("ownership", {}).get("percentOwned", 0), 1),
-                "projFpts":     0.0,
+                "projFpts":     fa_proj_fpts.get(fa_name, 0.0),
+                "projBlend":    fa_proj_blend.get(fa_name, 0.0),
                 "starts":       pitcher_data["starts"],
                 "startDates":   pitcher_data["startDates"],
                 "opps":         "",
@@ -655,18 +673,20 @@ def get_league_data(team_id: int, week: int) -> dict:
         )
 
     return {
-        "ok":           True,
-        "teamName":     team_name,
-        "currentWeek":  current_week,
-        "weekStart":    week_start,
-        "weekEnd":      week_end,
-        "rosterSPs":    roster_sps,
-        "freeAgentSPs": free_agents,
-        "schedule":     schedule,
-        "matchupDates": [mp["start"], mp["end"]] if mp else [],
-        "actualFpts":   actual_fpts,
-        "actualSaves":  actual_saves,
-        "benchDays":    bench_days,
+        "ok":                True,
+        "teamName":          team_name,
+        "currentWeek":       current_week,
+        "weekStart":         week_start,
+        "weekEnd":           week_end,
+        "rosterSPs":         roster_sps,
+        "freeAgentSPs":      free_agents,
+        "schedule":          schedule,
+        "matchupDates":      [mp["start"], mp["end"]] if mp else [],
+        "actualFpts":        actual_fpts,
+        "actualSaves":       actual_saves,
+        "benchDays":         bench_days,
+        "rosterFptsPerStart": fpts_per_start_roster,
+        "faFptsPerStart":     fa_fpts_per_start,
     }
 
 
