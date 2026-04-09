@@ -665,13 +665,18 @@ def get_league_data(team_id: int, week: int) -> dict:
             d += timedelta(days=1)
 
     all_pitcher_names = set(p["name"] for p in roster_sps)
+    fa_pitcher_names  = set(p["name"] for p in free_agents)
     actual_fpts  = {}
     actual_saves = {}
     bench_days   = {}
     if all_dates:
         actual_fpts, actual_saves, bench_days = get_actual_fpts(
-            all_dates, all_pitcher_names, headers, cookies
+            all_dates, all_pitcher_names | fa_pitcher_names, headers, cookies
         )
+
+    # Split actual FPTS back into roster and FA subsets for the frontend
+    fa_actual_fpts = {name: actual_fpts[name] for name in fa_pitcher_names if name in actual_fpts}
+    roster_actual_fpts = {name: actual_fpts[name] for name in all_pitcher_names if name in actual_fpts}
 
     return {
         "ok":                True,
@@ -683,11 +688,12 @@ def get_league_data(team_id: int, week: int) -> dict:
         "freeAgentSPs":      free_agents,
         "schedule":          schedule,
         "matchupDates":      [mp["start"], mp["end"]] if mp else [],
-        "actualFpts":        actual_fpts,
+        "actualFpts":        roster_actual_fpts,
         "actualSaves":       actual_saves,
         "benchDays":         bench_days,
         "rosterFptsPerStart": fpts_per_start_roster,
         "faFptsPerStart":     fa_fpts_per_start,
+        "faActualFpts":       fa_actual_fpts,
     }
 
 

@@ -101,14 +101,14 @@ export default function FreeAgents() {
         freeSPs: fas,
         schedule: data.schedule || {},
         matchupDates: data.matchupDates || [],
-        actualFpts: data.actualFpts || {},
+        actualFpts: data.faActualFpts || {},
         fptsPerStart: data.faFptsPerStart || {},
       }
       sessionStorage.setItem('skipper_free_agents', JSON.stringify(toCache))
       setFreeSPs(fas)
       setSchedule(data.schedule || {})
       setMatchupDates(data.matchupDates || [])
-      setActualFpts(data.actualFpts || {})
+      setActualFpts(data.faActualFpts || {})
       setFptsPerStart(data.faFptsPerStart || {})
     } catch (e: any) {
       setError(e.message || 'Failed to load free agents')
@@ -274,6 +274,7 @@ function handleSort(col: string) {
                 pitchers={sortedFreeSPs}
                 schedule={schedule}
                 matchupDates={matchupDates}
+                actualFpts={actualFpts}
                 fptsPerStart={fptsPerStart}
                 sortCol={sortCol}
                 sortDir={sortDir}
