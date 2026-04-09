@@ -580,6 +580,7 @@ def get_league_data(team_id: int, week: int) -> dict:
     xff_fa = json.dumps({
         "players": {
             "filterStatus": {"value": ["FREEAGENT", "WAIVERS"]},
+            "filterSlotIds": {"value": [14]},
             "limit": 100,
             "sortPercOwned": {"sortPriority": 1, "sortAsc": False},
             "filterStatsForCurrentSeasonScoringPeriodId": {"value": [current_week]},
