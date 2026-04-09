@@ -2,6 +2,46 @@
 
 ---
 
+## Session 9 — April 9, 2026
+
+Sortable free agents table, SP slot filter fix, FA actual FPTS, and projection model fixes. One PR shipped (#37).
+
+### Key learnings this session
+- ESPN's `kona_player_info` with `limit: 100` returns top 100 players across all positions — without `filterSlotIds: [14]`, only ~29 of those are SPs. Always filter by slot before applying limits.
+- `get_actual_fpts()` fetches whole-league roster data per day — free agents who were never rostered have no retrievable stats. Accept the limitation; show data when available.
+- Minimum sample size thresholds are essential in projection models — a pitcher with 1 start and a win produces absurdly inflated per-game averages. 3 starts for SPs, 5 appearances for RPs.
+- The `hasFpts || isToday` pattern for conditional rendering: past days need actual data before showing projections (comparison context), but today should always show projections (game is live or upcoming).
+- Sort state should never mutate the source array — derive a sorted copy with `useMemo`, keep source as truth for checkbox state.
+- When rows are reordered by sort, index-based state updates break — look up by name instead of index.
+- Branch cleanup: `git fetch --prune` syncs local refs with remote, removing stale tracking branches from deleted PRs.
+
+### Sortable free agents table
+- `pages/free-agents.tsx`: `sortCol` and `sortDir` state added
+- `pages/free-agents.tsx`: `handleSort()` — cycles desc → asc → reset to default on third click
+- `pages/free-agents.tsx`: `sortedFreeSPs` derived via `useMemo` — date columns sort by `fptsPerStart` for starters, 0 for non-starters
+- `pages/free-agents.tsx`: `toggleCheck()` rewritten to look up by name instead of index — fixes checkbox behavior after sort
+- `pages/free-agents.tsx`: Own% header wired to `handleSort` with arrow indicator
+- `components/ScheduleGrid.tsx`: `sortCol`, `sortDir`, `onSortChange` props added
+- `components/ScheduleGrid.tsx`: all sortable column headers get click handlers and ↓/↑ indicators
+- `components/ScheduleGrid.tsx`: duplicate `}}` closing brace on `Props` interface removed
+
+### Fix: SP slot filter on free agent fetch
+- `api/espn.py`: `filterSlotIds: [14]` added to FA `kona_player_info` filter
+- Free agent count jumped from 29 to 100 — low-ownership probable starters now visible
+
+### Actual FPTS for free agents
+- `api/espn.py`: `get_actual_fpts()` now receives roster + FA names combined via set union
+- `api/espn.py`: `faActualFpts` split from roster `actualFpts` in return dict
+- `pages/free-agents.tsx`: `faActualFpts` wired into cache, state, and `ScheduleGrid`
+- Act FPTS column now appears on Free Agents page
+
+### Projection model fixes
+- `api/espn.py`: `per_game_avgs()` now requires minimum sample — 3 starts (SP), 5 appearances (RP)
+- Prevents inflated projections from tiny samples (Grant Taylor 41.9 → 0.0)
+- `components/ScheduleGrid.tsx`: today's start cells show (proj: +X.X) even before actual FPTS arrives
+
+---
+
 ## Session 8 — April 8, 2026
 
 FA projections, per-start cell projections, actual FPTS column, and bug fixes. One PR shipped (#35).
