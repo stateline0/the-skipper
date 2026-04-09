@@ -190,8 +190,7 @@ export default function MyTeam() {
       setActualFpts(data.actualFpts || {})
       setActualSaves(data.actualSaves || {})
       setBenchDays(data.benchDays || {})
-      setFptsPerStart(data.fptsPerStart || {})
-    } catch (e: any) {
+      setFptsPerStart(data.rosterFptsPerStart || {})    } catch (e: any) {
       setError(e.message || 'Failed to load roster')
     } finally {
       setLoading(false)
