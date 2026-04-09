@@ -137,21 +137,28 @@ Last updated: April 7, 2026
 
 ---
 
-## 🔜 Next session priorities
+## ✅ Completed (session April 8, 2026)
 
-## 🔜 Next session priorities
-
-### Free agent projections (highest priority)
-- [ ] Call `get_projected_fpts()` for free agents using `fa_starts_map`
-- [ ] Same Option B blended model as roster players
-- [ ] `projFpts` and `projBlend` added to free agent API response
-- [ ] Display in Free Agents ScheduleGrid Proj FPTS column with blend % sub-label
+### Free agent projections
+- [x] Call `get_projected_fpts()` for free agents using `fa_starts_map`
+- [x] Same Option B blended model as roster players
+- [x] `projFpts` and `projBlend` added to free agent API response
+- [x] Display in Free Agents ScheduleGrid Proj FPTS column with blend % sub-label
+- [x] `faFptsPerStart` added to API response
 
 ### Per-start projections in schedule grid cells
-- [ ] Return `fpts_per_start` from `get_projected_fpts()` alongside period total
-- [ ] Display per-start projection in future start cells (below ✅ or P badge)
-- [ ] Same position as actual FPTS shows below ✓ on past starts
-- [ ] Period total column stays — cells show the per-start breakdown
+- [x] Return `fpts_per_start` from `get_projected_fpts()` alongside period total
+- [x] Future start cells show per-start projection in gray below ✅ or P badge
+- [x] Past start cells show `(proj: +X.X)` in gray below actual FPTS
+- [x] `rosterFptsPerStart` added to API response
+
+### Actual FPTS column
+- [x] New Act FPTS column sums actual points earned per pitcher across the period
+- [x] Only renders on My Team (where `actualFpts` prop is provided), not Free Agents
+- [x] Sits left of Proj FPTS for direct comparison
+- [x] `CACHE_VERSION` bumped to 3 on both pages
+
+## 🔜 Next session priorities
 
 ### Dashboard "at a glance" component
 - [ ] "This week at a glance" tile — projected starts vs. weekly limit with visual progress bar
