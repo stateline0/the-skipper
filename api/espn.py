@@ -191,9 +191,12 @@ def get_projected_fpts(player_starts: list) -> tuple:
         except Exception:
             return 0.0
 
-    def per_game_avgs(stat: dict, games: int) -> dict:
-        """Calculate per-game averages from season totals. Works for both SP and RP."""
-        if games == 0:
+    def per_game_avgs(stat: dict, games: int, is_rp: bool = False) -> dict:
+        """Calculate per-game averages from season totals. Works for both SP and RP.
+        Requires minimum sample size to avoid wild projections from tiny samples:
+        SPs need at least 3 starts, RPs need at least 5 appearances."""
+        min_games = 5 if is_rp else 3
+        if games < min_games:
             return None
         return {
             "ip": parse_ip(stat.get("inningsPitched", "0.0")) / games,
@@ -257,8 +260,8 @@ def get_projected_fpts(player_starts: list) -> tuple:
         this_year_weight = min(1.0, ip_26 / ip_threshold)
         last_year_weight = 1.0 - this_year_weight
 
-        avgs_26 = per_game_avgs(stat_26, gs_26)
-        avgs_25 = per_game_avgs(stat_25, gs_25)
+        avgs_26 = per_game_avgs(stat_26, gs_26, is_rp)
+        avgs_25 = per_game_avgs(stat_25, gs_25, is_rp)
 
         if avgs_26 is None and avgs_25 is None:
             proj_fpts[full_name]  = 0.0
