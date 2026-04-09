@@ -191,9 +191,12 @@ def get_projected_fpts(player_starts: list) -> tuple:
         except Exception:
             return 0.0
 
-    def per_game_avgs(stat: dict, games: int) -> dict:
-        """Calculate per-game averages from season totals. Works for both SP and RP."""
-        if games == 0:
+    def per_game_avgs(stat: dict, games: int, is_rp: bool = False) -> dict:
+        """Calculate per-game averages from season totals. Works for both SP and RP.
+        Requires minimum sample size to avoid wild projections from tiny samples:
+        SPs need at least 3 starts, RPs need at least 5 appearances."""
+        min_games = 5 if is_rp else 3
+        if games < min_games:
             return None
         return {
             "ip": parse_ip(stat.get("inningsPitched", "0.0")) / games,
@@ -257,8 +260,8 @@ def get_projected_fpts(player_starts: list) -> tuple:
         this_year_weight = min(1.0, ip_26 / ip_threshold)
         last_year_weight = 1.0 - this_year_weight
 
-        avgs_26 = per_game_avgs(stat_26, gs_26)
-        avgs_25 = per_game_avgs(stat_25, gs_25)
+        avgs_26 = per_game_avgs(stat_26, gs_26, is_rp)
+        avgs_25 = per_game_avgs(stat_25, gs_25, is_rp)
 
         if avgs_26 is None and avgs_25 is None:
             proj_fpts[full_name]  = 0.0
@@ -580,6 +583,7 @@ def get_league_data(team_id: int, week: int) -> dict:
     xff_fa = json.dumps({
         "players": {
             "filterStatus": {"value": ["FREEAGENT", "WAIVERS"]},
+            "filterSlotIds": {"value": [14]},
             "limit": 100,
             "sortPercOwned": {"sortPriority": 1, "sortAsc": False},
             "filterStatsForCurrentSeasonScoringPeriodId": {"value": [current_week]},
@@ -664,13 +668,18 @@ def get_league_data(team_id: int, week: int) -> dict:
             d += timedelta(days=1)
 
     all_pitcher_names = set(p["name"] for p in roster_sps)
+    fa_pitcher_names  = set(p["name"] for p in free_agents)
     actual_fpts  = {}
     actual_saves = {}
     bench_days   = {}
     if all_dates:
         actual_fpts, actual_saves, bench_days = get_actual_fpts(
-            all_dates, all_pitcher_names, headers, cookies
+            all_dates, all_pitcher_names | fa_pitcher_names, headers, cookies
         )
+
+    # Split actual FPTS back into roster and FA subsets for the frontend
+    fa_actual_fpts = {name: actual_fpts[name] for name in fa_pitcher_names if name in actual_fpts}
+    roster_actual_fpts = {name: actual_fpts[name] for name in all_pitcher_names if name in actual_fpts}
 
     return {
         "ok":                True,
@@ -682,11 +691,12 @@ def get_league_data(team_id: int, week: int) -> dict:
         "freeAgentSPs":      free_agents,
         "schedule":          schedule,
         "matchupDates":      [mp["start"], mp["end"]] if mp else [],
-        "actualFpts":        actual_fpts,
+        "actualFpts":        roster_actual_fpts,
         "actualSaves":       actual_saves,
         "benchDays":         bench_days,
         "rosterFptsPerStart": fpts_per_start_roster,
         "faFptsPerStart":     fa_fpts_per_start,
+        "faActualFpts":       fa_actual_fpts,
     }
 
 

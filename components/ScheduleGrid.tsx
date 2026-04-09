@@ -58,6 +58,10 @@ interface Props {
   savesData?: Record<string, Record<string, number>>
   // Per-start projection: { "Garrett Crochet": 18.2 } — shown in start cells
   fptsPerStart?: Record<string, number>
+  // Sortable column support
+  sortCol?: string
+  sortDir?: 'asc' | 'desc'
+  onSortChange?: (col: string) => void
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -159,7 +163,7 @@ function DayCell({ pitcher, date, schedule, today, actualFpts, benchDays, actual
               {fpts > 0 ? '+' : ''}{fpts.toFixed(1)}
             </div>
           )}
-          {hasFpts && perStart !== undefined && (
+          {perStart !== undefined && (hasFpts || isToday) && (
             <div style={{ fontSize: 9, fontFamily: 'var(--mono)', color: 'var(--ink-3)', marginTop: 1 }}>
               (proj: {perStart >= 0 ? '+' : ''}{perStart.toFixed(1)})
             </div>
@@ -246,6 +250,9 @@ export default function ScheduleGrid({
   actualSaves,
   savesData,
   fptsPerStart,
+  sortCol,
+  sortDir,
+  onSortChange,
 }: Props) {
   const today = todayISO()
 
@@ -278,6 +285,20 @@ export default function ScheduleGrid({
     whiteSpace: 'nowrap' as const,
   }
 
+  // Returns sort arrow indicator for a given column key
+  function sortIndicator(col: string) {
+    if (sortCol !== col) return null
+    return <span style={{ marginLeft: 3 }}>{sortDir === 'desc' ? '↓' : '↑'}</span>
+  }
+
+  // Style override for sortable headers
+  const sortableHeader = (col: string): React.CSSProperties => ({
+    ...headerStyle,
+    cursor: onSortChange ? 'pointer' : 'default',
+    color: sortCol === col ? 'var(--ink)' : 'var(--ink-3)',
+    userSelect: 'none',
+  })
+
   return (
     <div style={{ overflowX: 'auto' }}>
       <table style={{ borderCollapse: 'collapse', width: '100%' }}>
@@ -285,25 +306,37 @@ export default function ScheduleGrid({
           <tr>
             {/* Fixed left columns */}
             {prefixHeaders}
-            <th style={{ ...headerStyle, textAlign: 'left', paddingLeft: 10, minWidth: 140 }}>Pitcher</th>
+            <th
+              style={{ ...sortableHeader('name'), textAlign: 'left', paddingLeft: 10, minWidth: 140 }}
+              onClick={() => onSortChange?.('name')}
+            >
+              Pitcher{sortIndicator('name')}
+            </th>
             <th style={{ ...headerStyle, minWidth: 44 }}>Team</th>
             <th style={{ ...headerStyle, minWidth: 44 }}>Slot</th>
 
             {/* Date columns — inserted between Slot and Starts */}
             {dates.map(date => {
               const isToday = date === today
+              const isActiveSort = sortCol === date
               return (
-                <th key={date} style={{
-                  ...headerStyle,
-                  minWidth: 54,
-                  fontWeight: isToday ? 700 : 500,
-                  color: isToday ? 'var(--ink)' : 'var(--ink-3)',
-                  background: isToday ? 'var(--paper-2)' : 'transparent',
-                  borderBottom: isToday
-                    ? '2px solid var(--green-mid)'
-                    : '1px solid var(--border)',
-                }}>
-                  {fmtDate(date)}
+                <th
+                  key={date}
+                  onClick={() => onSortChange?.(date)}
+                  style={{
+                    ...headerStyle,
+                    minWidth: 54,
+                    fontWeight: isToday || isActiveSort ? 700 : 500,
+                    color: isToday || isActiveSort ? 'var(--ink)' : 'var(--ink-3)',
+                    background: isToday ? 'var(--paper-2)' : 'transparent',
+                    borderBottom: isToday
+                      ? '2px solid var(--green-mid)'
+                      : '1px solid var(--border)',
+                    cursor: onSortChange ? 'pointer' : 'default',
+                    userSelect: 'none',
+                  }}
+                >
+                  {fmtDate(date)}{sortIndicator(date)}
                   {isToday && (
                     <div style={{ fontSize: 8, letterSpacing: '0.08em', color: 'var(--green-mid)', marginTop: 1 }}>
                       TODAY
@@ -314,11 +347,21 @@ export default function ScheduleGrid({
             })}
 
             {/* Fixed right columns */}
-            <th style={{ ...headerStyle, minWidth: 52 }}>{savesData ? 'Saves' : 'Starts'}</th>
+            <th
+              style={{ ...sortableHeader('starts'), minWidth: 52 }}
+              onClick={() => onSortChange?.('starts')}
+            >
+              {savesData ? 'Saves' : 'Starts'}{sortIndicator('starts')}
+            </th>
             {actualFpts && (
               <th style={{ ...headerStyle, minWidth: 72 }}>Act FPTS</th>
             )}
-            <th style={{ ...headerStyle, minWidth: 72 }}>Proj FPTS</th>
+            <th
+              style={{ ...sortableHeader('projFpts'), minWidth: 72 }}
+              onClick={() => onSortChange?.('projFpts')}
+            >
+              Proj FPTS{sortIndicator('projFpts')}
+            </th>
             {suffixHeaders}
           </tr>
         </thead>
