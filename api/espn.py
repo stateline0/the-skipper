@@ -14,6 +14,7 @@ from datetime import datetime, timedelta, timezone
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__)))
 from mlb import get_starts_for_players, get_team_woba, MATCHUP_PERIODS
+from kv import get_locked_projection, set_locked_projection, get_all_locked_projections
 
 
 SEASON_START = datetime(2026, 3, 25)
@@ -126,7 +127,9 @@ def today_has_started(schedule: dict) -> bool:
     )
 
 
-def get_projected_fpts(player_starts: list, team_woba_factors: dict = None) -> tuple:
+def get_projected_fpts(player_starts: list, team_woba_factors: dict = None,
+                       season: int = 2026, period: int = 1,
+                       today_str: str = "") -> tuple:
     """
     Project fantasy points per pitcher by blending 2025 and 2026 season stats,
     adjusted for opponent quality using team wOBA factors.
@@ -309,6 +312,18 @@ def get_projected_fpts(player_starts: list, team_woba_factors: dict = None) -> t
         proj_fpts[full_name]      = projected
         proj_blend[full_name]     = round(this_year_weight, 2)
         fpts_per_start[full_name] = round(fpts_per_game, 1)
+
+        # ── Per-start locking ─────────────────────────────────────────────
+        # For starts that are today or past, lock fpts_per_game into KV
+        # so the projection is frozen at game time. Future starts stay live.
+        if today_str and start_dates and not is_rp:
+            for sd in start_dates:
+                date = sd.get("date", "")
+                if date and date <= today_str:
+                    existing = get_locked_projection(season, period, full_name, date)
+                    if existing is None:
+                        set_locked_projection(season, period, full_name, date,
+                                              round(fpts_per_game, 1))
 
         print(f"[espn.py] {full_name}: {round(this_year_weight*100)}% '26 / "
               f"{round(last_year_weight*100)}% '25 | "
@@ -518,7 +533,11 @@ def get_league_data(team_id: int, week: int) -> dict:
         entry["startDates"]     = pitcher_data.get("startDates", [])
         entry["days_in_period"] = days_in_period
 
-    proj_fpts_by_name, proj_blend_by_name, fpts_per_start_roster = get_projected_fpts(option_b_inputs, team_woba_factors)
+    proj_fpts_by_name, proj_blend_by_name, fpts_per_start_roster = get_projected_fpts(
+        option_b_inputs, team_woba_factors,
+        season=year_int, period=week,
+        today_str=datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+    )
 
     # ── Roster transaction lag fix ────────────────────────────────────────
     # Once any game today starts, ESPN locks the current scoring period's
@@ -665,7 +684,11 @@ def get_league_data(team_id: int, week: int) -> dict:
                 "days_in_period": days_in_period,
             })
 
-        fa_proj_fpts, fa_proj_blend, fa_fpts_per_start = get_projected_fpts(fa_option_b_inputs, team_woba_factors)
+        fa_proj_fpts, fa_proj_blend, fa_fpts_per_start = get_projected_fpts(
+            fa_option_b_inputs, team_woba_factors,
+            season=year_int, period=week,
+            today_str=datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+        )
 
         inj_label_map = {
             "ACTIVE": "Active", "NORMAL": "Active",
@@ -734,6 +757,7 @@ def get_league_data(team_id: int, week: int) -> dict:
         "rosterFptsPerStart": fpts_per_start_roster,
         "faFptsPerStart":     fa_fpts_per_start,
         "faActualFpts":       fa_actual_fpts,
+        "lockedProjections":  get_all_locked_projections(year_int, week),
     }
 
 

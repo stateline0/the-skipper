@@ -58,6 +58,9 @@ interface Props {
   savesData?: Record<string, Record<string, number>>
   // Per-start projection: { "Garrett Crochet": 18.2 } — shown in start cells
   fptsPerStart?: Record<string, number>
+  // Locked projections from KV: { "Garrett Crochet": { "2026-04-07": 14.2 } }
+  // Used for past/today cells — frozen at game time, never recalculated
+  lockedProjections?: Record<string, Record<string, number>>
   // Sortable column support
   sortCol?: string
   sortDir?: 'asc' | 'desc'
@@ -110,7 +113,7 @@ function todayISO(): string {
 // ─── Cell renderer ────────────────────────────────────────────────────────────
 // Returns what to show in a single pitcher × day cell.
 
-function DayCell({ pitcher, date, schedule, today, actualFpts, benchDays, actualSaves, fptsPerStart }: {
+function DayCell({ pitcher, date, schedule, today, actualFpts, benchDays, actualSaves, fptsPerStart, lockedProjections }: {
   pitcher: Pitcher
   date: string
   schedule: Schedule
@@ -119,6 +122,7 @@ function DayCell({ pitcher, date, schedule, today, actualFpts, benchDays, actual
   benchDays?: Record<string, string[]>
   actualSaves?: Record<string, Record<string, number>>
   fptsPerStart?: Record<string, number>
+  lockedProjections?: Record<string, Record<string, number>>
 }){
   const isPast   = date < today
   const isToday  = date === today
@@ -146,7 +150,7 @@ function DayCell({ pitcher, date, schedule, today, actualFpts, benchDays, actual
       const fpts = actualFpts?.[pitcher.name]?.[date]
       const hasFpts = fpts !== undefined && fpts !== 0
       const wasOnBench = benchDays?.[pitcher.name]?.includes(date) ?? false
-      const perStart = fptsPerStart?.[pitcher.name]
+      const perStart = lockedProjections?.[pitcher.name]?.[date] ?? fptsPerStart?.[pitcher.name]
       return (
         <div style={{ textAlign: 'center' }}>
           <div style={{ fontSize: 11, fontFamily: 'var(--mono)', fontWeight: 700, color }}>
@@ -250,6 +254,7 @@ export default function ScheduleGrid({
   actualSaves,
   savesData,
   fptsPerStart,
+  lockedProjections,
   sortCol,
   sortDir,
   onSortChange,
@@ -415,6 +420,7 @@ export default function ScheduleGrid({
                         benchDays={benchDays}
                         actualSaves={actualSaves}
                         fptsPerStart={fptsPerStart}
+                        lockedProjections={lockedProjections}
                       />
                     </td>
                   )
