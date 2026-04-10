@@ -598,8 +598,8 @@ def get_league_data(team_id: int, week: int) -> dict:
         if lineup_slot in (16, 17):
             # IL or Bench — zero out future projections but keep past start history
             pitcher_data     = starts_map.get(player_name, {"starts": 0, "startDates": []})
-            past_start_dates = [s for s in pitcher_data["startDates"] if s["date"] < today_str]
-            scheduled_starts = 0
+            past_start_dates = [s for s in pitcher_data["startDates"] if s["date"] <= today_str]
+            scheduled_starts = len([s for s in past_start_dates if s["date"] == today_str and s.get("confirmed")])
             proj_fpts        = 0.0
             start_dates      = past_start_dates
         else:
