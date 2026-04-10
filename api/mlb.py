@@ -88,7 +88,7 @@ def fetch_espn_probables(period_start, period_end):
     start_dt = datetime.strptime(period_start, "%Y-%m-%d")
     end_dt   = datetime.strptime(period_end,   "%Y-%m-%d")
 
-    pitchers = {}   # last_name -> [dates]
+    pitchers = {}   # full_name_lower -> [dates]
     schedule = {}   # date -> { team_abbrev -> {opponent, is_home, status} }
 
     current = start_dt
@@ -165,16 +165,13 @@ def fetch_espn_probables(period_start, period_end):
                     for probable in comp.get("probables", []):
                         if probable.get("name") != "probableStartingPitcher":
                             continue
-                        athlete  = probable.get("athlete", {})
+                        athlete   = probable.get("athlete", {})
                         full_name = athlete.get("fullName", "")
                         if full_name:
-                            last_name = full_name.split()[-1].lower()
-                            if last_name in ("jr.", "sr.", "ii", "iii", "iv"):
-                                parts     = full_name.split()
-                                last_name = parts[-2].lower() if len(parts) >= 2 else last_name
-                            pitchers.setdefault(last_name, [])
-                            if iso_date not in pitchers[last_name]:
-                                pitchers[last_name].append(iso_date)
+                            key = full_name.strip().lower()
+                            pitchers.setdefault(key, [])
+                            if iso_date not in pitchers[key]:
+                                pitchers[key].append(iso_date)
 
         except Exception as e:
             print(f"[mlb.py] ESPN scoreboard fetch failed for {date_str}: {e}")
@@ -220,13 +217,10 @@ def fetch_mlb_probables(start_date, end_date):
                 if pitcher:
                     full_name = pitcher.get("fullName", "")
                     if full_name:
-                        last_name = full_name.split()[-1].lower()
-                        if last_name in ("jr.", "sr.", "ii", "iii", "iv"):
-                            parts = full_name.split()
-                            last_name = parts[-2].lower() if len(parts) >= 2 else last_name
-                        result.setdefault(last_name, [])
-                        if game_date not in result[last_name]:
-                            result[last_name].append(game_date)
+                        key = full_name.strip().lower()
+                        result.setdefault(key, [])
+                        if game_date not in result[key]:
+                            result[key].append(game_date)
     return result
 
 
@@ -317,12 +311,9 @@ def get_starts_for_players(player_names, matchup_period, team_map=None):
 
     result = {}
     for full_name in player_names:
-        last_name = full_name.split()[-1].lower()
-        if last_name in ("jr.", "sr.", "ii", "iii", "iv"):
-            parts     = full_name.split()
-            last_name = parts[-2].lower() if len(parts) >= 2 else last_name
-        if last_name in pitcher_starts:
-            entry = pitcher_starts[last_name]
+        key = full_name.strip().lower()
+        if key in pitcher_starts:
+            entry = pitcher_starts[key]
             # Add opponent to each startDate using the schedule + team_map
             if team_map and full_name in team_map:
                 team_abbrev = team_map[full_name]
