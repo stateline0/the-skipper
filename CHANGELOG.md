@@ -2,6 +2,42 @@
 
 ---
 
+## Session 11 — April 10, 2026
+
+Upstash KV locked projections, full-name pitcher matching, bench player start fix, and multiple bug fixes. Seven PRs shipped (#41–#47).
+
+### Key learnings this session
+- Vercel removed native KV — Upstash for Redis is the direct replacement, same `upstash-redis` Python library, same REST API pattern.
+- Upstash Eviction must be OFF for projection storage — eviction silently deletes keys when storage fills up, which would destroy our audit log.
+- Redis NX flag (`set key value nx=True`) is the correct pattern for write-once locks — it's atomic and never overwrites an existing value.
+- Key schema design matters: `proj:{season}:{period}:{slug}:{date}` makes prefix queries trivial and keys human-readable.
+- ESPN `lineupSlotId` reflects the scoring period snapshot, not the player's live lineup position — it can be stale after the transaction lag re-fetch.
+- Last-name-only pitcher matching was fragile in two distinct ways: (1) common surnames collide (Smith), (2) unusual surnames fail silently if there's any name variation across sources. Full-name matching eliminates both.
+- The ESPN API cannot be called directly from local machine — requires `espn_s2` and `SWID` cookies only available server-side. Always test ESPN-dependent changes against production URL after deploy.
+- `git reset --hard origin/main` is the correct fix when local main diverges from origin after a squash merge — do not `git merge origin/main` as it creates a stray merge commit that branch protection will reject.
+- When debugging a data pipeline issue, add a targeted debug field to the API response and read it from DevTools Network tab — much faster than guessing at intermediate state.
+
+### Upstash KV infrastructure (PR #41, #42)
+- `requirements.txt`: added `upstash-redis==1.7.0`
+- `.gitignore`: fixed — `next-env.d.ts` was accidentally concatenated with `.env.local` entry
+- `api/kv.py`: new module — `get_locked_projection()`, `set_locked_projection()` (NX flag), `get_all_locked_projections()`
+- `api/espn.py`: imports kv helpers; `get_projected_fpts()` accepts `season`, `period`, `today_str` params; locks `fpts_per_game` into KV for each past/today start; returns `lockedProjections` in API response
+- `pages/my-team.tsx`: `lockedProjections` state, cache (CACHE_VERSION → 4), and ScheduleGrid prop wiring; fixed relievers grid rendering starters data
+- `components/ScheduleGrid.tsx`: DayCell uses `lockedProjections?.[pitcher.name]?.[date]` for past/today cells with live `fptsPerStart` as fallback
+
+### Full-name probable pitcher matching (PR #43)
+- `api/mlb.py`: `fetch_espn_probables` and `fetch_mlb_probables` now store `full_name.strip().lower()` as key instead of last name
+- `api/mlb.py`: `get_starts_for_players` looks up by full lowercase name instead of last name
+- Removes all suffix handling code (`jr.`/`sr.`/`ii`/`iii`) — no longer needed
+- Fixes Shane Baz and Shane Smith probable pitcher detection
+
+### Bench player starts fix (PR #46)
+- `api/espn.py`: bench player `startDates` filter changed from `< today_str` to `<= today_str`
+- `scheduled_starts` for bench players now counts today's confirmed starts instead of hardcoding 0
+- Fixes players in lineup slot 16 not showing today's confirmed probable start
+
+---
+
 ## Session 10 — April 9, 2026
 
 Opponent quality adjustment using team wOBA factors. One PR shipped (#39).

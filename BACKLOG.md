@@ -1,6 +1,35 @@
 # The Skipper — Backlog
 
-Last updated: April 9, 2026
+Last updated: April 10, 2026
+
+---
+
+## ✅ Completed (session April 10, 2026)
+
+### Upstash KV locked projections infrastructure
+- [x] `api/kv.py`: new helper module — all Upstash Redis read/write logic in one place
+- [x] Key schema: `proj:{season}:{period}:{player-slug}:{date}` → float
+- [x] `get_locked_projection()`: reads existing lock, returns None if not yet locked
+- [x] `set_locked_projection()`: writes with NX flag — never overwrites existing lock
+- [x] `get_all_locked_projections()`: returns full period dict for API response
+- [x] `api/espn.py`: locks fpts_per_game into KV for each start that is today or past
+- [x] `api/espn.py`: passes `lockedProjections` dict in API response
+- [x] `pages/my-team.tsx`: wires lockedProjections into state, cache (CACHE_VERSION → 4), and ScheduleGrid props
+- [x] `components/ScheduleGrid.tsx`: DayCell uses locked projection for past/today cells, live fptsPerStart for future cells
+- [x] Fixed pre-existing bug: relievers ScheduleGrid was rendering rosterStarterSPs instead of rosterRelievers
+
+### Full-name probable pitcher matching
+- [x] Replaced last-name-only key with `full_name.strip().lower()` throughout `mlb.py`
+- [x] `fetch_espn_probables`: stores `{ 'shane baz': ['2026-04-10'] }` instead of `{ 'baz': [...] }`
+- [x] `fetch_mlb_probables`: same — full lowercase name as key
+- [x] `get_starts_for_players`: looks up by full name instead of last name
+- [x] Fixes Shane Baz probable starts not being detected
+- [x] Fixes Shane Smith (CWS) probable pitcher collision with other Smiths
+
+### Bench player starts fix
+- [x] Bench player startDates filter used strict `<` — excluded today's confirmed starts
+- [x] Changed to `<=` so today's confirmed start is included for bench-slotted players
+- [x] `scheduled_starts` now counts today's confirmed starts rather than hardcoding 0
 
 ---
 
@@ -134,19 +163,40 @@ Last updated: April 9, 2026
 
 ## 🔜 Next session priorities
 
-### Shane Smith probable pitcher matching bug
-- [ ] Last-name-only matching (`"smith"`) collides with other Smiths in the data
-- [ ] Fix: use full name or ESPN player ID for matching instead of last name only
+### Proj FPTS column bugs — Joe Ryan / Garrett Crochet showing 0.0
+- [ ] Proj FPTS column should sum all starts (past locked + future projected) for the full period
+- [ ] Past starts with a locked projection should contribute to the column total even when no future starts remain
+- [ ] Past start cells should always show their locked projection value
 
-### Dashboard "at a glance" component
-- [ ] "This week at a glance" tile — projected starts vs. weekly limit with visual progress bar
-- [ ] Current matchup period dates and opponent
-- [ ] Quick links to My Team and Free Agents
-- [ ] Tile/component system so new features slot in over time
+### Tile redesign — My Team page
+- [ ] ROSTERED SPs tile: fix count to only include `slot === 'SP'` players (currently counts all pitchers)
+- [ ] Replace SCHEDULED and STILL NEEDED tiles with:
+  - ACTUAL STARTS — starts already completed this period
+  - PROJECTED STARTS — actual + probable future starts (compare against limit)
+- [ ] Progress bar should track projected starts vs limit
+
+### Dropped streamers
+- [ ] Players dropped mid-period who started a game should remain visible in the SP grid
+- [ ] Show with a special slot badge (e.g. `EX-SP`) to indicate they are no longer rostered
+- [ ] Sort dropped streamers to the bottom of the starters table
+- [ ] Detect by finding players with actual FPTS in the period who are no longer in roster entries
+
+### Proj FPTS locking — proper sequencing fix
+- [ ] Root cause: `option_b_inputs` is built before the transaction lag re-fetch, so lineup slots can be stale
+- [ ] Fix part 1: move transaction lag re-fetch to top of `get_league_data`, before `option_b_inputs` is built
+- [ ] Fix part 2: decouple "show starts" from lineup slot — confirmed starts should always display regardless of slot
+- [ ] Only use lineup slot for bench-day strikethrough UI and IL opacity
+
+### Store actual FPTS in Upstash KV
+- [ ] Store actual FPTS per pitcher per start date in KV alongside locked projections
+- [ ] Key schema: `actual:{season}:{period}:{player-slug}:{date}` → float
+- [ ] Enables model accuracy analysis: `actual - projected` per start
+- [ ] Reduces ESPN API calls for historical period views (read from KV instead of re-fetching)
+- [ ] Required foundation for future model accuracy dashboard
 
 ### Projection model improvements — near term
-- [x] **Opponent quality adjustment** — team wOBA factors applied per start. Done in PR #39.
-- [ ] **Recent form weighting** (MEDIUM impact) — weight last 3-4 starts more heavily than season average. Game log data already fetched for actualFpts — infrastructure mostly in place.
+- [ ] Recent form weighting (MEDIUM impact) — weight last 3-4 starts more heavily than season average
+  - Game log data already fetched for actualFpts — infrastructure mostly in place
 
 ### Projected FPTS model — Option C (target mid-May)
 - [ ] Replace Option B inputs with Statcast metrics from Baseball Savant
@@ -157,15 +207,19 @@ Last updated: April 9, 2026
 
 ## 🐛 Known bugs
 
-- [ ] Shane Smith (CWS SP) probable pitcher starts not being detected — last-name-only matching collision
+- [ ] Proj FPTS column shows 0.0 for pitchers whose only starts are in the past (Joe Ryan, Garrett Crochet)
+- [ ] Lineup slot stale data: `option_b_inputs` built before transaction lag re-fetch — can cause incorrect bench/active classification
 - [ ] Free agent actual FPTS only available for players who were rostered at time of start — ESPN API limitation, no fix available
 - [ ] `vercel dev` does not serve Python API routes locally (Vercel CLI v50+ known issue). Always test Python changes against production URL
+- [ ] ESPN API requires espn_s2 and SWID cookies — cannot be called directly from local machine for debugging
 
 ---
 
 ## 💡 Future ideas
 
+- Model accuracy dashboard — projected vs actual FPTS per start, mean error, directional bias, accuracy trend over time
 - Dropped players section — players who started this period but were dropped should still appear
+- Dashboard at-a-glance component — projected starts vs limit, current period dates, quick links
 - Hitter optimizer
 - Trade analyzer
 - Push notifications when probable pitchers change
@@ -193,6 +247,11 @@ All set in both `.env.local` (local) and Vercel dashboard (production):
 | `ESPN_TEAM_ID` | Your team number in the league |
 | `ESPN_STARTS_LIMIT` | Weekly pitcher starts limit |
 | `ANTHROPIC_API_KEY` | Claude API key |
+| `KV_REST_API_URL` | Upstash Redis REST URL |
+| `KV_REST_API_TOKEN` | Upstash Redis REST token |
+| `KV_REST_API_READ_ONLY_TOKEN` | Upstash Redis read-only token |
+| `KV_URL` | Upstash Redis connection URL |
+| `REDIS_URL` | Upstash Redis connection URL (alias) |
 
 ---
 
@@ -208,6 +267,8 @@ Open `http://localhost:3000`. Python API routes only work at `https://the-skippe
 
 **Deploy sequence:** `git add` → `git commit` → `vercel --prod`
 **Git workflow:** Feature branches → PR → squash merge. Prefixes: `fix:`, `feat:`, `chore:`
+
+**Important:** ESPN API requires `espn_s2` and `SWID` cookies — cannot be called directly from local machine. Always test ESPN-dependent changes against production URL after deploy.
 
 ---
 
@@ -250,12 +311,14 @@ https://lm-api-reads.fantasy.espn.com/apis/v3/games/flb/seasons/{year}/segments/
 - Requires `espn_s2` and `SWID` cookies
 - Must use `lm-api-reads.fantasy.espn.com` not `fantasy.espn.com`
 - CloudFront blocks requests without a browser-like `User-Agent` header
+- Cannot be called directly from local machine — always test against production
 
 ### Known limitations
 - `matchupPeriodDates` not returned for this league → all 22 period dates hardcoded in `api/config.py`
 - Roster locked to current scoring period once first game starts → fixed by transaction lag fix
 - Free agent actual FPTS only available if player was rostered at time of start
 - ESPN caches roster data server-side — cache-busting params have no effect
+- `lineupSlotId` reflects ESPN's scoring period snapshot, not current live lineup
 
 ### PRO_TEAM_MAP (2026 verified)
 ```
@@ -264,6 +327,8 @@ https://lm-api-reads.fantasy.espn.com/apis/v3/games/flb/seasons/{year}/segments/
 20=WSH, 21=NYM, 22=PHI, 23=PIT, 24=STL, 25=SD, 26=SF, 27=COL, 28=MIA,
 29=ARI, 30=TB, 31=FA, 32=FA
 ```
+---
+
 ---
 
 ## 📚 MLB Stats API reference
@@ -275,6 +340,7 @@ https://lm-api-reads.fantasy.espn.com/apis/v3/games/flb/seasons/{year}/segments/
 - IP stored as string e.g. "34.2" meaning 34 innings + 2 outs = 34.667 actual innings
 - Minimum sample thresholds: 3 starts for SPs, 5 appearances for RPs before trusting per-game averages
 - Player names may use accented characters — normalize with `strip_accents()` before matching
+- Uses `AZ` for Arizona — normalize to `ARI` when matching against our schedule data
 
 ## 📚 ESPN Scoreboard API reference
 
@@ -282,6 +348,17 @@ https://lm-api-reads.fantasy.espn.com/apis/v3/games/flb/seasons/{year}/segments/
 - Public, no auth required
 - Returns probable starters up to 7 days out
 - Uses `CHW` for White Sox (not `CWS`) — normalization required
+- Probable pitcher matching now uses full lowercase name as key (not last name only)
+
+## 📚 Upstash KV reference
+
+- Client: `upstash-redis` Python library
+- Credentials: `KV_REST_API_URL` and `KV_REST_API_TOKEN` env vars
+- Key schema: `proj:{season}:{period}:{player-slug}:{date}` → float
+- NX flag on set ensures locked values are never overwritten
+- Eviction is OFF — locked projections are stored permanently
+- Free tier: 500,000 commands/month, 256MB storage
+- Data browser: Vercel → Storage → the-skipper-kv → Open in Upstash
 
 ## 📚 League scoring settings (Good Season Imanagas)
 
