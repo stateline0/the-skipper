@@ -1,6 +1,6 @@
 import Head from 'next/head'
 import { useState, useEffect, useCallback, useRef } from 'react'
-const CACHE_VERSION = 3 // bump this whenever the API response shape changes
+const CACHE_VERSION = 4 // bump this whenever the API response shape changes
 import { useRouter } from 'next/router'
 import ScheduleGrid from '../components/ScheduleGrid'
 
@@ -72,7 +72,8 @@ export default function MyTeam() {
   const [actualFpts, setActualFpts]       = useState<Record<string, Record<string, number>>>({})
   const [actualSaves, setActualSaves]     = useState<Record<string, Record<string, number>>>({})
   const [benchDays, setBenchDays]         = useState<Record<string, string[]>>({})
-  const [fptsPerStart, setFptsPerStart]   = useState<Record<string, number>>({})
+  const [fptsPerStart, setFptsPerStart]         = useState<Record<string, number>>({})
+const [lockedProjections, setLockedProjections] = useState<Record<string, Record<string, number>>>({})
 
   const weekLabel = getWeekRange(weekStart, weekEnd)
   const needed = Math.max(0, limit - confirmedStarts)
@@ -117,6 +118,7 @@ export default function MyTeam() {
       setActualSaves(data.actualSaves || {})
       setBenchDays(data.benchDays || {})
       setFptsPerStart(data.fptsPerStart || {})
+      setLockedProjections(data.lockedProjections || {})
     }
   }, [])
 
@@ -176,6 +178,7 @@ export default function MyTeam() {
         actualSaves: data.actualSaves || {},
         benchDays: data.benchDays || {},
         fptsPerStart: data.rosterFptsPerStart || {},
+        lockedProjections: data.lockedProjections || {},
       }
       sessionStorage.setItem('skipper_roster', JSON.stringify(toCache))
 
@@ -190,7 +193,9 @@ export default function MyTeam() {
       setActualFpts(data.actualFpts || {})
       setActualSaves(data.actualSaves || {})
       setBenchDays(data.benchDays || {})
-      setFptsPerStart(data.rosterFptsPerStart || {})    } catch (e: any) {
+      setFptsPerStart(data.rosterFptsPerStart || {})
+      setLockedProjections(data.lockedProjections || {})
+    } catch (e: any) {
       setError(e.message || 'Failed to load roster')
     } finally {
       setLoading(false)
@@ -325,6 +330,7 @@ export default function MyTeam() {
                 actualFpts={actualFpts}
                 benchDays={benchDays}
                 fptsPerStart={fptsPerStart}
+                lockedProjections={lockedProjections}
               />
             </div>
 
@@ -362,6 +368,7 @@ export default function MyTeam() {
                   benchDays={benchDays}
                   savesData={actualSaves}
                   fptsPerStart={fptsPerStart}
+                  lockedProjections={lockedProjections}
                 />
               </div>
             )}
