@@ -758,7 +758,6 @@ def get_league_data(team_id: int, week: int) -> dict:
         "faFptsPerStart":     fa_fpts_per_start,
         "faActualFpts":       fa_actual_fpts,
         "lockedProjections":  get_all_locked_projections(year_int, week),
-        "_debug_shane_baz": starts_map.get("Shane Baz", "NOT FOUND"),
     }
 
 
