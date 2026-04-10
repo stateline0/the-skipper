@@ -491,4 +491,4 @@ class handler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Access-Control-Allow-Methods", "GET, OPTIONS")
-        self.end_headers()
+        self.end_headers()# cache bust Fri Apr 10 16:29:15 CDT 2026

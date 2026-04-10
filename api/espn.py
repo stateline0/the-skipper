@@ -758,6 +758,7 @@ def get_league_data(team_id: int, week: int) -> dict:
         "faFptsPerStart":     fa_fpts_per_start,
         "faActualFpts":       fa_actual_fpts,
         "lockedProjections":  get_all_locked_projections(year_int, week),
+        "_debug_starts_map_keys": list(starts_map.keys()),
     }
 
 
