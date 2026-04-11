@@ -269,6 +269,7 @@ def get_projected_fpts(player_starts: list, team_woba_factors: dict = None,
     proj_fpts      = {}
     proj_blend     = {}
     fpts_per_start = {}
+    proj_details   = {}
  
     for name_lower, player_info in starts_by_name.items():
         full_name        = player_info["name"]
@@ -334,6 +335,7 @@ def get_projected_fpts(player_starts: list, team_woba_factors: dict = None,
  
         fpts_per_game = apply_formula(blended)
         model_label = "savant" if used_savant else "stats"
+        season_base = round(fpts_per_game, 1)  # capture pre-adjustment base
  
         # ── Layer 2: Recent form weighting ─────────────────────────────
         # If we have game logs with 4+ starts, compute a weighted average
@@ -353,6 +355,8 @@ def get_projected_fpts(player_starts: list, team_woba_factors: dict = None,
             print(f"[espn.py]   ↳ {full_name} recent form: {recent_form_fpts:.1f} | "
                   f"season: {season_fpts:.1f} → blended: {fpts_per_game:.1f}")
 
+        adjusted_base = round(fpts_per_game, 1)  # after recent form blend
+
         # ── Opponent quality + Park factor adjustment (Layers 1 & 3) ───
         # Each start gets two multipliers:
         #   1. wOBA factor — how good is the opposing lineup?
@@ -361,6 +365,7 @@ def get_projected_fpts(player_starts: list, team_woba_factors: dict = None,
         #   - If our pitcher is home → our pitcher's team park
         #   - If our pitcher is away → opponent's team park
         start_dates = player_info.get("startDates", [])
+        per_start_details = []
         if not is_rp and start_dates:
             adjusted_total = 0.0
             for sd in start_dates:
@@ -375,7 +380,18 @@ def get_projected_fpts(player_starts: list, team_woba_factors: dict = None,
                     park_factor = 1.0
                 else:
                     park_factor = get_park_factor(park_team)
-                adjusted_total += fpts_per_game * woba_factor * park_factor
+                start_proj = fpts_per_game * woba_factor * park_factor
+                adjusted_total += start_proj
+                # Build per-start detail for tooltip
+                location = "vs" if is_home else "@"
+                per_start_details.append({
+                    "label":    f"{location} {opp}",
+                    "date":     sd.get("date", ""),
+                    "woba":     round(woba_factor, 3),
+                    "park":     round(park_factor, 3),
+                    "parkTeam": park_team,
+                    "proj":     round(start_proj, 1),
+                })
             projected = round(adjusted_total, 1)
             avg_factor = round(adjusted_total / (fpts_per_game * len(start_dates)), 3) if start_dates and fpts_per_game else 1.0
         elif is_rp:
@@ -390,6 +406,17 @@ def get_projected_fpts(player_starts: list, team_woba_factors: dict = None,
         proj_fpts[full_name]      = projected
         proj_blend[full_name]     = round(this_year_weight, 2)
         fpts_per_start[full_name] = round(fpts_per_game, 1)
+
+        # ── Projection breakdown for tooltip ──────────────────────────
+        proj_details[full_name] = {
+            "seasonBase":   season_base,
+            "modelType":    model_label,
+            "blendWeight":  round(this_year_weight, 2),
+            "recentForm":   round(recent_form_fpts, 1) if recent_form_fpts is not None else None,
+            "adjustedBase": adjusted_base,
+            "starts":       per_start_details,
+            "total":        projected,
+        }
  
         # ── Per-start locking ─────────────────────────────────────────
         if today_str and start_dates and not is_rp:
@@ -406,7 +433,7 @@ def get_projected_fpts(player_starts: list, team_woba_factors: dict = None,
               f"{fpts_per_game:.1f} pts/game × {avg_factor:.3f} = {projected}"
               f"{' [recent form applied]' if recent_form_fpts is not None else ''}")
  
-    return proj_fpts, proj_blend, fpts_per_start
+    return proj_fpts, proj_blend, fpts_per_start, proj_details
 
 
 def get_actual_fpts(past_dates: list, player_names: set, headers: dict, cookies: dict, team_id: int = 0) -> tuple:
@@ -820,7 +847,7 @@ def get_league_data(team_id: int, week: int) -> dict:
             "team":           PRO_TEAM_MAP.get(pro_team_id, ""),
         })
 
-    proj_fpts_by_name, proj_blend_by_name, fpts_per_start_roster = get_projected_fpts(
+    proj_fpts_by_name, proj_blend_by_name, fpts_per_start_roster, proj_details_roster = get_projected_fpts(
         projection_inputs, team_woba_factors,
         season=year_int, period=week,
         today_str=datetime.now(timezone.utc).strftime("%Y-%m-%d"),
@@ -907,6 +934,8 @@ def get_league_data(team_id: int, week: int) -> dict:
         timeout=15
     )
     free_agents = []
+    fa_fpts_per_start = {}
+    fa_proj_details = {}
     if fa_r.status_code == 200:
         fa_names      = []
         fa_players_raw = []
@@ -949,7 +978,7 @@ def get_league_data(team_id: int, week: int) -> dict:
                 "team":           PRO_TEAM_MAP.get(pro_team_id, ""),
             })
 
-        fa_proj_fpts, fa_proj_blend, fa_fpts_per_start = get_projected_fpts(
+        fa_proj_fpts, fa_proj_blend, fa_fpts_per_start, fa_proj_details = get_projected_fpts(
             fa_projection_inputs, team_woba_factors,
             season=year_int, period=week,
             today_str=datetime.now(timezone.utc).strftime("%Y-%m-%d"),
@@ -1080,6 +1109,8 @@ def get_league_data(team_id: int, week: int) -> dict:
         "faActualFpts":       fa_actual_fpts,
         "lockedProjections":  get_all_locked_projections(year_int, week),
         "droppedPlayers":     dropped_players,
+        "projectionDetails":  proj_details_roster,
+        "faProjectionDetails": fa_proj_details,
     }
 
 

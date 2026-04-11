@@ -3,7 +3,7 @@ import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { useRouter } from 'next/router'
 import ScheduleGrid from '../components/ScheduleGrid'
 
-const CACHE_VERSION = 3 // bump this whenever the API response shape changes
+const CACHE_VERSION = 4 // bump this whenever the API response shape changes
 
 interface FreeSP {
   name: string; team: string; slot: string; injuryStatus: string
@@ -26,6 +26,7 @@ export default function FreeAgents() {
   const [matchupDates, setMatchupDates] = useState<string[]>([])
   const [actualFpts, setActualFpts]     = useState<Record<string, Record<string, number>>>({})
   const [fptsPerStart, setFptsPerStart] = useState<Record<string, number>>({})
+  const [projectionDetails, setProjectionDetails] = useState<Record<string, any>>({})
   const [sortCol, setSortCol]           = useState<string>('percentOwned')
   const [sortDir, setSortDir]           = useState<'asc' | 'desc'>('desc')
 
@@ -50,6 +51,7 @@ export default function FreeAgents() {
       setMatchupDates(data.matchupDates || [])
       setActualFpts(data.actualFpts || {})
       setFptsPerStart(data.fptsPerStart || {})
+      setProjectionDetails(data.projectionDetails || {})
     }
   }, [])
 
@@ -103,6 +105,7 @@ export default function FreeAgents() {
         matchupDates: data.matchupDates || [],
         actualFpts: data.faActualFpts || {},
         fptsPerStart: data.faFptsPerStart || {},
+        projectionDetails: data.faProjectionDetails || {},
       }
       sessionStorage.setItem('skipper_free_agents', JSON.stringify(toCache))
       setFreeSPs(fas)
@@ -110,6 +113,7 @@ export default function FreeAgents() {
       setMatchupDates(data.matchupDates || [])
       setActualFpts(data.faActualFpts || {})
       setFptsPerStart(data.faFptsPerStart || {})
+      setProjectionDetails(data.faProjectionDetails || {})
     } catch (e: any) {
       setError(e.message || 'Failed to load free agents')
     } finally {
@@ -276,6 +280,7 @@ function handleSort(col: string) {
                 matchupDates={matchupDates}
                 actualFpts={actualFpts}
                 fptsPerStart={fptsPerStart}
+                projectionDetails={projectionDetails}
                 sortCol={sortCol}
                 sortDir={sortDir}
                 onSortChange={handleSort}
