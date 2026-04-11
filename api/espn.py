@@ -120,11 +120,40 @@ def today_has_started(schedule: dict) -> bool:
     )
 
 
+# ── Fetch MLB Stats API season data (both years, parallel) ────────────
+def fetch_season_stats(yr: int) -> dict:
+    """Fetch season pitching stats from MLB Stats API.
+    Returns { fullname_lower: stat_dict }"""
+    try:
+        r = requests.get(
+            "https://statsapi.mlb.com/api/v1/stats",
+            params={
+                "stats": "season", "playerPool": "all",
+                "group": "pitching", "season": str(yr),
+                "gameType": "R", "limit": 1000,
+            },
+            headers={"User-Agent": "Mozilla/5.0"},
+            timeout=15,
+        )
+        if r.status_code != 200:
+            return {}
+        splits = r.json().get("stats", [{}])[0].get("splits", [])
+        return {
+            strip_accents(s.get("player", {}).get("fullName", "")):
+                s.get("stat", {})
+            for s in splits if s.get("player", {}).get("fullName")
+        }
+    except Exception as e:
+        print(f"[espn.py] Failed to fetch {yr} MLB stats: {e}")
+        return {}
+
 def get_projected_fpts(player_starts: list, team_woba_factors: dict = None,
-                       season: int = 2026, period: int = 1,
-                       today_str: str = "",
-                       savant_current: dict = None,
-                       savant_previous: dict = None) -> tuple:
+                      season: int = 2026, period: int = 1,
+                      today_str: str = "",
+                      savant_current: dict = None,
+                      savant_previous: dict = None,
+                      mlb_stats_current: dict = None,
+                      mlb_stats_previous: dict = None) -> tuple:
     """
     Project fantasy points per pitcher using a hybrid model:
       - Skill-based stats (IP, K, BB, HBP) from MLB Stats API season averages
@@ -154,31 +183,6 @@ def get_projected_fpts(player_starts: list, team_woba_factors: dict = None,
         return {}, {}, {}
  
     starts_by_name = {strip_accents(p["name"]): p for p in player_starts}
- 
-    # ── Fetch MLB Stats API season data (both years, parallel) ────────────
-    def fetch_season_stats(yr: int) -> dict:
-        try:
-            r = requests.get(
-                "https://statsapi.mlb.com/api/v1/stats",
-                params={
-                    "stats": "season", "playerPool": "all",
-                    "group": "pitching", "season": str(yr),
-                    "gameType": "R", "limit": 1000,
-                },
-                headers={"User-Agent": "Mozilla/5.0"},
-                timeout=15,
-            )
-            if r.status_code != 200:
-                return {}
-            splits = r.json().get("stats", [{}])[0].get("splits", [])
-            return {
-                strip_accents(s.get("player", {}).get("fullName", "")):
-                    s.get("stat", {})
-                for s in splits if s.get("player", {}).get("fullName")
-            }
-        except Exception as e:
-            print(f"[espn.py] Failed to fetch {yr} MLB stats: {e}")
-            return {}
  
     def parse_ip(ip_str) -> float:
         try:
@@ -253,12 +257,9 @@ def get_projected_fpts(player_starts: list, team_woba_factors: dict = None,
             avgs["sv"] *  5
         )
  
-    # Fetch both seasons in parallel
-    with ThreadPoolExecutor(max_workers=2) as executor:
-        f_cur  = executor.submit(fetch_season_stats, 2026)
-        f_prev = executor.submit(fetch_season_stats, 2025)
-        stats_2026 = f_cur.result()
-        stats_2025 = f_prev.result()
+    # Use pre-fetched (and potentially cached) MLB stats
+    stats_2026 = mlb_stats_current or {}
+    stats_2025 = mlb_stats_previous or {}
  
     proj_fpts      = {}
     proj_blend     = {}
@@ -510,6 +511,44 @@ def get_league_data(team_id: int, week: int) -> dict:
 
     print(f"[espn.py] Savant: {len(savant_current)} current, {len(savant_previous)} previous")
 
+    # ── Fetch MLB Stats API season stats (cached) ─────────────────────────
+    # Same pattern as Savant: 2025 permanent, 2026 with 24hr TTL
+    mlb_stats_previous = {}
+    mlb_stats_current  = {}
+    try:
+        mlb_stats_previous = cache_get(f"cache:mlb-stats:{year_int - 1}") or {}
+        mlb_stats_current  = cache_get(f"cache:mlb-stats:{year_int}") or {}
+    except Exception:
+        pass
+
+    if not mlb_stats_previous or not mlb_stats_current:
+        try:
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                futures = {}
+                if not mlb_stats_previous:
+                    futures[executor.submit(fetch_season_stats, year_int - 1)] = "prev"
+                if not mlb_stats_current:
+                    futures[executor.submit(fetch_season_stats, year_int)] = "cur"
+                for future in as_completed(futures):
+                    label = futures[future]
+                    result = future.result() or {}
+                    if label == "prev":
+                        mlb_stats_previous = result
+                        try:
+                            cache_set(f"cache:mlb-stats:{year_int - 1}", result)
+                        except Exception:
+                            pass
+                    else:
+                        mlb_stats_current = result
+                        try:
+                            cache_set(f"cache:mlb-stats:{year_int}", result, ttl_seconds=86400)
+                        except Exception:
+                            pass
+        except Exception as e:
+            print(f"[espn.py] MLB stats fetch failed: {e}")
+
+    print(f"[espn.py] MLB stats: {len(mlb_stats_current)} current, {len(mlb_stats_previous)} previous")
+
     # ── Matchup period metadata ──────────────────────────────────────────
     mp            = MATCHUP_PERIODS.get(week, {})
     week_start    = ""
@@ -659,6 +698,8 @@ def get_league_data(team_id: int, week: int) -> dict:
         today_str=datetime.now(timezone.utc).strftime("%Y-%m-%d"),
         savant_current=savant_current,
         savant_previous=savant_previous,
+        mlb_stats_current=mlb_stats_current,
+        mlb_stats_previous=mlb_stats_previous,
     )
 
     # ── Parse roster ──────────────────────────────────────────────────────
@@ -783,6 +824,8 @@ def get_league_data(team_id: int, week: int) -> dict:
             today_str=datetime.now(timezone.utc).strftime("%Y-%m-%d"),
             savant_current=savant_current,
             savant_previous=savant_previous,
+            mlb_stats_current=mlb_stats_current,
+            mlb_stats_previous=mlb_stats_previous,
         )
 
         inj_label_map = {
