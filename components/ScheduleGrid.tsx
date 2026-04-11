@@ -3,6 +3,7 @@
 // Shows a day-by-day breakdown of each pitcher's starts for the matchup period.
 
 import { useMemo } from 'react'
+import ProjectionTooltip, { ProjectionBreakdown } from './ProjectionTooltip'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -65,6 +66,8 @@ interface Props {
   sortCol?: string
   sortDir?: 'asc' | 'desc'
   onSortChange?: (col: string) => void
+  // Projection model breakdown for tooltip: { "Garrett Crochet": { seasonBase, ... } }
+  projectionDetails?: Record<string, ProjectionBreakdown>
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -113,7 +116,7 @@ function todayISO(): string {
 // ─── Cell renderer ────────────────────────────────────────────────────────────
 // Returns what to show in a single pitcher × day cell.
 
-function DayCell({ pitcher, date, schedule, today, actualFpts, benchDays, actualSaves, fptsPerStart, lockedProjections }: {
+function DayCell({ pitcher, date, schedule, today, actualFpts, benchDays, actualSaves, fptsPerStart, lockedProjections, projectionDetails }: {
   pitcher: Pitcher
   date: string
   schedule: Schedule
@@ -123,6 +126,7 @@ function DayCell({ pitcher, date, schedule, today, actualFpts, benchDays, actual
   actualSaves?: Record<string, Record<string, number>>
   fptsPerStart?: Record<string, number>
   lockedProjections?: Record<string, Record<string, number>>
+  projectionDetails?: Record<string, ProjectionBreakdown>
 }){
   const isPast   = date < today
   const isToday  = date === today
@@ -219,6 +223,7 @@ function DayCell({ pitcher, date, schedule, today, actualFpts, benchDays, actual
         ? <span style={{ fontSize: 11 }}>✅</span>
         : <span style={{ fontSize: 10, fontWeight: 700, fontFamily: 'var(--mono)', color: 'var(--blue)', background: 'var(--blue-light)', borderRadius: 99, padding: '1px 5px' }}>P</span>
     const perStart = fptsPerStart?.[pitcher.name]
+    const breakdown = projectionDetails?.[pitcher.name]
     return (
       <div style={{ textAlign: 'center' }}>
         <div style={{ fontSize: 11, fontFamily: 'var(--mono)', fontWeight: 700, color: 'var(--ink)' }}>
@@ -226,9 +231,11 @@ function DayCell({ pitcher, date, schedule, today, actualFpts, benchDays, actual
         </div>
         <div style={{ fontSize: 11, marginTop: 1 }}>{indicator}</div>
         {perStart !== undefined && (
-          <div style={{ fontSize: 9, fontFamily: 'var(--mono)', color: 'var(--ink-3)', marginTop: 1 }}>
-            {perStart >= 0 ? '+' : ''}{perStart.toFixed(1)}
-          </div>
+          <ProjectionTooltip breakdown={breakdown} startDate={date}>
+            <div style={{ fontSize: 9, fontFamily: 'var(--mono)', color: 'var(--ink-3)', marginTop: 1 }}>
+              {perStart >= 0 ? '+' : ''}{perStart.toFixed(1)}
+            </div>
+          </ProjectionTooltip>
         )}
       </div>
     )
@@ -258,6 +265,7 @@ export default function ScheduleGrid({
   sortCol,
   sortDir,
   onSortChange,
+  projectionDetails,
 }: Props) {
   const today = todayISO()
 
@@ -421,6 +429,7 @@ export default function ScheduleGrid({
                         actualSaves={actualSaves}
                         fptsPerStart={fptsPerStart}
                         lockedProjections={lockedProjections}
+                        projectionDetails={projectionDetails}
                       />
                     </td>
                   )
@@ -453,16 +462,20 @@ export default function ScheduleGrid({
                   fontFamily: 'var(--mono)', fontWeight: 700,
                   color: pitcher.projFpts > 0 ? 'var(--green)' : 'var(--ink-3)',
                 }}>
-                  {pitcher.projFpts.toFixed(1)}
-                  {pitcher.projBlend !== undefined && pitcher.projFpts > 0 && (
-                    <div style={{
-                      fontSize: 9, fontWeight: 500,
-                      color: 'var(--ink-3)', marginTop: 2,
-                      letterSpacing: '0.02em',
-                    }}>
-                      {Math.round(pitcher.projBlend * 100)}% &apos;26
-                    </div>
-                  )}
+                  <ProjectionTooltip breakdown={projectionDetails?.[pitcher.name]}>
+                    <span>
+                      {pitcher.projFpts.toFixed(1)}
+                      {pitcher.projBlend !== undefined && pitcher.projFpts > 0 && (
+                        <div style={{
+                          fontSize: 9, fontWeight: 500,
+                          color: 'var(--ink-3)', marginTop: 2,
+                          letterSpacing: '0.02em',
+                        }}>
+                          {Math.round(pitcher.projBlend * 100)}% &apos;26
+                        </div>
+                      )}
+                    </span>
+                  </ProjectionTooltip>
                 </td>
 
                 {renderSuffix?.(pitcher, i)}

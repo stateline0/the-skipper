@@ -3,7 +3,7 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import { useRouter } from 'next/router'
 import ScheduleGrid from '../components/ScheduleGrid'
 
-const CACHE_VERSION = 6 // bump this whenever the API response shape changes
+const CACHE_VERSION = 7 // bump this whenever the API response shape changes
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 interface RosterSP {
@@ -87,6 +87,7 @@ export default function MyTeam() {
   const [benchDays, setBenchDays]           = useState<Record<string, string[]>>({})
   const [fptsPerStart, setFptsPerStart]     = useState<Record<string, number>>({})
   const [lockedProjections, setLockedProjections] = useState<Record<string, Record<string, number>>>({})
+  const [projectionDetails, setProjectionDetails] = useState<Record<string, any>>({})
 
   // ── Derived values ─────────────────────────────────────────────────────
   const weekLabel = getWeekRange(weekStart, weekEnd)
@@ -140,6 +141,7 @@ export default function MyTeam() {
       setBenchDays(data.benchDays || {})
       setFptsPerStart(data.fptsPerStart || {})
       setLockedProjections(data.lockedProjections || {})
+      setProjectionDetails(data.projectionDetails || {})
     }
   }, [])
 
@@ -218,6 +220,7 @@ export default function MyTeam() {
         benchDays: data.benchDays || {},
         fptsPerStart: data.rosterFptsPerStart || {},
         lockedProjections: data.lockedProjections || {},
+        projectionDetails: data.projectionDetails || {},
       }
       sessionStorage.setItem('skipper_roster', JSON.stringify(toCache))
 
@@ -237,6 +240,7 @@ export default function MyTeam() {
       setBenchDays(data.benchDays || {})
       setFptsPerStart(data.rosterFptsPerStart || {})
       setLockedProjections(data.lockedProjections || {})
+      setProjectionDetails(data.projectionDetails || {})
     } catch (e: any) {
       setError(e.message || 'Failed to load roster')
     } finally {
@@ -373,6 +377,7 @@ export default function MyTeam() {
                 benchDays={benchDays}
                 fptsPerStart={fptsPerStart}
                 lockedProjections={lockedProjections}
+                projectionDetails={projectionDetails}
               />
             </div>
 
