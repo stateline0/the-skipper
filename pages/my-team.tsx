@@ -6,7 +6,7 @@ import ScheduleGrid from '../components/ScheduleGrid'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 interface RosterSP {
-  name: string; team: string; slot: string; injuryStatus: string
+  name: string; team: string; slot: string; position?: string; injuryStatus: string
   starts: number; projFpts: number; projBlend?: number; percentOwned: number; startDates?: any[]
 }
 
@@ -73,13 +73,13 @@ export default function MyTeam() {
   const [actualSaves, setActualSaves]     = useState<Record<string, Record<string, number>>>({})
   const [benchDays, setBenchDays]         = useState<Record<string, string[]>>({})
   const [fptsPerStart, setFptsPerStart]         = useState<Record<string, number>>({})
-const [lockedProjections, setLockedProjections] = useState<Record<string, Record<string, number>>>({})
+  const [lockedProjections, setLockedProjections] = useState<Record<string, Record<string, number>>>({})
 
   const weekLabel = getWeekRange(weekStart, weekEnd)
   const needed = Math.max(0, limit - confirmedStarts)
 
-  const rosterStarterSPs = rosterSPs.filter(p => p.slot === 'SP')
-  const rosterRelievers  = rosterSPs.filter(p => p.slot === 'RP')
+  const rosterStarterSPs = rosterSPs.filter(p => (p.position || p.slot) === 'SP')
+  const rosterRelievers  = rosterSPs.filter(p => (p.position || p.slot) === 'RP')
 
   const teamSavesTotal = rosterRelievers.reduce((acc, p) => {
     const byDay = actualSaves[p.name] || {}

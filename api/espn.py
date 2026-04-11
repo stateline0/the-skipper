@@ -42,17 +42,12 @@ def get_headers_and_cookies():
     return headers, cookies
 
 
-def get_slot_label(lineup_slot_id: int, eligible_slots: set, inj_status: str) -> str:
-    # Slot 17 = true IL (injured players)
-    # Slot 16 = bench (healthy players parked there)
-    if lineup_slot_id == 17:
+def get_slot_label(eligible_slots: set, injured: bool) -> str:
+    """Determine position label from eligibility and injury status.
+    Uses eligibleSlots for SP/RP (stable player attribute) and
+    player.injured for IL detection (not lineupSlotId, which is daily)."""
+    if injured:
         return "IL"
-    if lineup_slot_id == 16:
-        # Bench — classify by position eligibility
-        if 14 in eligible_slots:
-            return "SP"
-        if 13 in eligible_slots:
-            return "RP"
     if 14 in eligible_slots:
         return "SP"
     if 13 in eligible_slots and 14 not in eligible_slots:
@@ -60,13 +55,10 @@ def get_slot_label(lineup_slot_id: int, eligible_slots: set, inj_status: str) ->
     return "P"
 
 
-def get_status(lineup_slot_id: int, inj_status: str) -> str:
-    if lineup_slot_id == 17:
+def get_status(injured: bool) -> str:
+    """Simple status label. Bench is not tracked — it's a daily lineup decision."""
+    if injured:
         return "IL"
-    if lineup_slot_id == 16:
-        return "Bench"
-    if inj_status and inj_status not in ("ACTIVE", "NORMAL", ""):
-        return inj_status
     return "Active"
 
 
@@ -152,7 +144,7 @@ def get_projected_fpts(player_starts: list, team_woba_factors: dict = None,
     """
     team_woba_factors = team_woba_factors or {}
     if not player_starts:
-        return {}, {}
+        return {}, {}, {}
 
     starts_by_name = {strip_accents(p["name"]): p for p in player_starts}
 
@@ -481,27 +473,6 @@ def get_league_data(team_id: int, week: int) -> dict:
             proj = p.get("playerPoolEntry", {}).get("appliedStatTotal", 0)
             proj_fpts_by_player[pid] = round(float(proj or 0), 1)
 
-    # Option B inputs — filled with starts after starts_map is available below
-    option_b_inputs = []
-    for entry in my_team.get("roster", {}).get("entries", []):
-        pool_entry     = entry.get("playerPoolEntry", {})
-        player         = pool_entry.get("player", {})
-        eligible_slots = set(player.get("eligibleSlots", []))
-        lineup_slot    = entry.get("lineupSlotId", 0)
-        full_name      = player.get("fullName", "")
-        if not full_name:
-            continue
-        if not (14 in eligible_slots or 13 in eligible_slots):
-            continue
-        if lineup_slot in (16, 17):
-            continue
-        is_rp = (14 not in eligible_slots and 13 in eligible_slots)
-        option_b_inputs.append({
-            "name":   full_name,
-            "starts": 0,
-            "is_rp":  is_rp,
-        })
-
     # ── Fetch probable pitchers + full game schedule ──────────────────────
     roster_entries   = my_team.get("roster", {}).get("entries", [])
     all_player_names = [
@@ -519,25 +490,6 @@ def get_league_data(team_id: int, week: int) -> dict:
         if name and pro_id:
             roster_team_map[name] = PRO_TEAM_MAP.get(pro_id, "")
     starts_map, schedule = get_starts_for_players(all_player_names, week, team_map=roster_team_map)
-
-    # Fill in projected starts and period length for Option B
-    days_in_period = 7
-    if mp:
-        start_d = datetime.strptime(mp["start"], "%Y-%m-%d").date()
-        end_d   = datetime.strptime(mp["end"],   "%Y-%m-%d").date()
-        days_in_period = (end_d - start_d).days + 1
-
-    for entry in option_b_inputs:
-        pitcher_data            = starts_map.get(entry["name"], {})
-        entry["starts"]         = pitcher_data.get("starts", 0)
-        entry["startDates"]     = pitcher_data.get("startDates", [])
-        entry["days_in_period"] = days_in_period
-
-    proj_fpts_by_name, proj_blend_by_name, fpts_per_start_roster = get_projected_fpts(
-        option_b_inputs, team_woba_factors,
-        season=year_int, period=week,
-        today_str=datetime.now(timezone.utc).strftime("%Y-%m-%d"),
-    )
 
     # ── Roster transaction lag fix ────────────────────────────────────────
     # Once any game today starts, ESPN locks the current scoring period's
@@ -572,6 +524,43 @@ def get_league_data(team_id: int, week: int) -> dict:
         else:
             print(f"[espn.py] Re-fetch failed (HTTP {r2.status_code}) — keeping original roster")
 
+    # ── Option B projection inputs ────────────────────────────────────────
+    # Built AFTER transaction lag re-fetch so lineup slots are fresh.
+    # Include ALL pitchers (including bench/IL) — they need projections
+    # for locked past starts. The bench/IL zeroing only affects future
+    # starts and happens later in the roster parsing step.
+    days_in_period = 7
+    if mp:
+        start_d = datetime.strptime(mp["start"], "%Y-%m-%d").date()
+        end_d   = datetime.strptime(mp["end"],   "%Y-%m-%d").date()
+        days_in_period = (end_d - start_d).days + 1
+
+    option_b_inputs = []
+    for entry in roster_entries:
+        pool_entry     = entry.get("playerPoolEntry", {})
+        player         = pool_entry.get("player", {})
+        eligible_slots = set(player.get("eligibleSlots", []))
+        full_name      = player.get("fullName", "")
+        if not full_name:
+            continue
+        if not (14 in eligible_slots or 13 in eligible_slots):
+            continue
+        is_rp = (14 not in eligible_slots and 13 in eligible_slots)
+        pitcher_data = starts_map.get(full_name, {})
+        option_b_inputs.append({
+            "name":           full_name,
+            "starts":         pitcher_data.get("starts", 0),
+            "startDates":     pitcher_data.get("startDates", []),
+            "is_rp":          is_rp,
+            "days_in_period": days_in_period,
+        })
+
+    proj_fpts_by_name, proj_blend_by_name, fpts_per_start_roster = get_projected_fpts(
+        option_b_inputs, team_woba_factors,
+        season=year_int, period=week,
+        today_str=datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+    )
+
     # ── Parse roster ──────────────────────────────────────────────────────
     roster_sps  = []
     SP_ELIGIBLE = {14}
@@ -587,34 +576,38 @@ def get_league_data(team_id: int, week: int) -> dict:
         if not (eligible_slots & SP_ELIGIBLE) and not (eligible_slots & RP_ELIGIBLE):
             continue
 
-        lineup_slot  = entry.get("lineupSlotId", 0)
-        inj_status   = pool_entry.get("injuryStatus", "")
-        slot_label   = get_slot_label(lineup_slot, eligible_slots, inj_status)
-        status_label = get_status(lineup_slot, inj_status)
+        injured      = player.get("injured", False)
+        slot_label   = get_slot_label(eligible_slots, injured)
+        status_label = get_status(injured)
         pro_team_id  = player.get("proTeamId", 0)
         team_abbrev  = PRO_TEAM_MAP.get(pro_team_id, str(pro_team_id))
         player_name  = player.get("fullName", "Unknown")
 
-        if lineup_slot in (16, 17):
-            # IL or Bench — zero out future projections but keep past start history
-            pitcher_data     = starts_map.get(player_name, {"starts": 0, "startDates": []})
-            past_start_dates = [s for s in pitcher_data["startDates"] if s["date"] <= today_str]
-            scheduled_starts = len([s for s in past_start_dates if s["date"] == today_str and s.get("confirmed")])
-            proj_fpts        = 0.0
-            start_dates      = past_start_dates
+        # All pitchers treated identically — bench status is a daily lineup
+        # decision and does not affect projections or start counting.
+        # IL players (injured=True) get the same projection treatment but
+        # are visually distinguished in the frontend with opacity + IL badge.
+        pitcher_data     = starts_map.get(player_name, {"starts": 0, "startDates": []})
+        scheduled_starts = pitcher_data["starts"]
+        start_dates      = pitcher_data["startDates"]
+        proj_fpts        = proj_fpts_by_name.get(
+            player_name,
+            proj_fpts_by_player.get(player_id, 0.0)
+        )
+
+        # Determine underlying position (SP or RP) independent of IL status
+        if 14 in eligible_slots:
+            position = "SP"
+        elif 13 in eligible_slots:
+            position = "RP"
         else:
-            pitcher_data     = starts_map.get(player_name, {"starts": 0, "startDates": []})
-            scheduled_starts = pitcher_data["starts"]
-            start_dates      = pitcher_data["startDates"]
-            proj_fpts        = proj_fpts_by_name.get(
-                player_name,
-                proj_fpts_by_player.get(player_id, 0.0)
-            )
+            position = "P"
 
         roster_sps.append({
             "name":         player_name,
             "team":         team_abbrev,
             "slot":         slot_label,
+            "position":     position,
             "injuryStatus": status_label,
             "starts":       scheduled_starts,
             "startDates":   start_dates,
