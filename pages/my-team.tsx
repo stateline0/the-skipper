@@ -1,8 +1,9 @@
 import Head from 'next/head'
 import { useState, useEffect, useCallback, useRef } from 'react'
-const CACHE_VERSION = 5 // bump this whenever the API response shape changes
 import { useRouter } from 'next/router'
 import ScheduleGrid from '../components/ScheduleGrid'
+
+const CACHE_VERSION = 6 // bump this whenever the API response shape changes
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 interface RosterSP {
@@ -15,6 +16,8 @@ interface MatchupPeriod {
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
+
+/** Format a date range label like "Apr 6 – Apr 12" */
 function getWeekRange(start?: string, end?: string) {
   if (start && end) return `${start} – ${end}`
   const today = new Date()
@@ -23,6 +26,12 @@ function getWeekRange(start?: string, end?: string) {
   const sun = new Date(mon); sun.setDate(mon.getDate() + 6)
   const fmt = (d: Date) => d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
   return `${fmt(mon)} – ${fmt(sun)}`
+}
+
+/** Today's date as YYYY-MM-DD in local time (not UTC) */
+function todayLocal(): string {
+  const d = new Date()
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`
 }
 
 function MetricCard({ label, value, accent }: {
@@ -56,44 +65,51 @@ function ProgressBar({ value, max }: { value: number; max: number }) {
 // ─── Main component ───────────────────────────────────────────────────────────
 export default function MyTeam() {
   const router = useRouter()
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState('')
-  const [rosterSPs, setRosterSPs] = useState<RosterSP[]>([])
-  const [limit, setLimit] = useState(12)
-  const [confirmedStarts, setConfirmedStarts] = useState(0)
-  const [actualStarts, setActualStarts] = useState(0)
-  const [weekStart, setWeekStart] = useState('')
-  const [weekEnd, setWeekEnd] = useState('')
-  const [teamName, setTeamName] = useState('')
-  const [currentWeek, setCurrentWeek] = useState(1)
+
+  // ── State ──────────────────────────────────────────────────────────────
+  const [loading, setLoading]               = useState(false)
+  const [error, setError]                   = useState('')
+  const [rosterSPs, setRosterSPs]           = useState<RosterSP[]>([])
+  const [droppedPlayers, setDroppedPlayers] = useState<RosterSP[]>([])
+  const [limit, setLimit]                   = useState(12)
+  const [projectedStarts, setProjectedStarts] = useState(0)
+  const [actualStarts, setActualStarts]     = useState(0)
+  const [weekStart, setWeekStart]           = useState('')
+  const [weekEnd, setWeekEnd]               = useState('')
+  const [teamName, setTeamName]             = useState('')
+  const [currentWeek, setCurrentWeek]       = useState(1)
   const [matchupPeriods, setMatchupPeriods] = useState<MatchupPeriod[]>([])
   const [selectedPeriod, setSelectedPeriod] = useState<number | null>(null)
-  const [schedule, setSchedule] = useState<Record<string, any>>({})
-  const [matchupDates, setMatchupDates] = useState<string[]>([])
-  const [actualFpts, setActualFpts]       = useState<Record<string, Record<string, number>>>({})
-  const [actualSaves, setActualSaves]     = useState<Record<string, Record<string, number>>>({})
-  const [benchDays, setBenchDays]         = useState<Record<string, string[]>>({})
-  const [fptsPerStart, setFptsPerStart]         = useState<Record<string, number>>({})
+  const [schedule, setSchedule]             = useState<Record<string, any>>({})
+  const [matchupDates, setMatchupDates]     = useState<string[]>([])
+  const [actualFpts, setActualFpts]         = useState<Record<string, Record<string, number>>>({})
+  const [actualSaves, setActualSaves]       = useState<Record<string, Record<string, number>>>({})
+  const [benchDays, setBenchDays]           = useState<Record<string, string[]>>({})
+  const [fptsPerStart, setFptsPerStart]     = useState<Record<string, number>>({})
   const [lockedProjections, setLockedProjections] = useState<Record<string, Record<string, number>>>({})
 
+  // ── Derived values ─────────────────────────────────────────────────────
   const weekLabel = getWeekRange(weekStart, weekEnd)
-  const needed = Math.max(0, limit - confirmedStarts)
 
-  const rosterStarterSPs = rosterSPs.filter(p => (p.position || p.slot) === 'SP')
-  const rosterRelievers  = rosterSPs.filter(p => (p.position || p.slot) === 'RP')
+  // Starters grid: SP-position roster players + dropped streamers at the bottom
+  const rosterStarterSPs = [
+    ...rosterSPs.filter(p => (p.position || p.slot) === 'SP'),
+    ...droppedPlayers,
+  ]
+  const rosterRelievers = rosterSPs.filter(p => (p.position || p.slot) === 'RP')
 
   const teamSavesTotal = rosterRelievers.reduce((acc, p) => {
     const byDay = actualSaves[p.name] || {}
     return acc + Object.values(byDay).reduce((a, b) => a + b, 0)
   }, 0)
 
+  // ── Load config on mount ───────────────────────────────────────────────
   useEffect(() => {
     fetch('/api/config')
       .then(r => r.json())
       .then(data => {
         if (data.defaultLimit) setLimit(data.defaultLimit)
         if (data.matchupPeriods) setMatchupPeriods(data.matchupPeriods)
-        // Use sessionStorage if present, otherwise default to today's period
         const saved = sessionStorage.getItem('skipper_selected_period')
         const period = saved ? parseInt(saved) : (data.currentPeriod ?? 1)
         setSelectedPeriod(period)
@@ -101,14 +117,16 @@ export default function MyTeam() {
       .catch(() => {})
   }, [])
 
+  // ── Restore from cache on mount ────────────────────────────────────────
   useEffect(() => {
     const cached = sessionStorage.getItem('skipper_roster')
     if (cached) {
       const data = JSON.parse(cached)
-      if (data.version !== CACHE_VERSION) return // outdated shape — let the fetch effect handle it
-      if (!data.matchupDates || data.matchupDates.length === 0) return // stale, wait for period
+      if (data.version !== CACHE_VERSION) return
+      if (!data.matchupDates || data.matchupDates.length === 0) return
       setRosterSPs(data.rosterSPs || [])
-      setConfirmedStarts(data.confirmedStarts || 0)
+      setDroppedPlayers(data.droppedPlayers || [])
+      setProjectedStarts(data.projectedStarts || 0)
       setActualStarts(data.actualStarts || 0)
       setWeekStart(data.weekStart || '')
       setWeekEnd(data.weekEnd || '')
@@ -124,6 +142,7 @@ export default function MyTeam() {
     }
   }, [])
 
+  // ── Auto-fetch on period change ────────────────────────────────────────
   const isFirstRender = useRef(true)
 
   useEffect(() => {
@@ -132,7 +151,6 @@ export default function MyTeam() {
     if (period) setLimit(period.limit)
 
     if (isFirstRender.current) {
-      // On first render: only fetch if there's no usable cache
       isFirstRender.current = false
       const cached = sessionStorage.getItem('skipper_roster')
       if (!cached) {
@@ -144,10 +162,10 @@ export default function MyTeam() {
       return
     }
 
-    // On subsequent renders (user changed the dropdown): always fetch fresh
     fetchRoster()
   }, [selectedPeriod, matchupPeriods])
 
+  // ── Fetch roster data ──────────────────────────────────────────────────
   const fetchRoster = useCallback(async () => {
     setLoading(true)
     setError('')
@@ -161,28 +179,32 @@ export default function MyTeam() {
       const data = await res.json()
       if (!data.ok) throw new Error(data.error || 'Failed to load ESPN data')
 
+      // Parse roster and dropped players from API response
       const roster: RosterSP[] = data.rosterSPs.map((p: any) => ({
         ...p, starts: p.starts ?? 0, projFpts: p.projFpts ?? 0,
       }))
-      const now = new Date()
-      const today = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')}`
+      const dropped: RosterSP[] = (data.droppedPlayers || []).map((p: any) => ({
+        ...p, starts: p.starts ?? 0, projFpts: p.projFpts ?? 0,
+      }))
+
+      // Compute actual and projected starts from SP-position players
+      const today = todayLocal()
       const spRoster = roster.filter((p: any) => (p.position || p.slot) === 'SP')
-      // Actual starts: past/today starts with confirmed=true, for SP-position players only
       const actual = spRoster.reduce((a: number, p: any) => {
         const pastStarts = (p.startDates || []).filter((s: any) => s.date <= today && s.confirmed)
         return a + pastStarts.length
       }, 0)
-      // Projected starts: actual + future confirmed/probable starts
       const projected = spRoster.reduce((a: number, p: any) => {
         const allStarts = (p.startDates || []).filter((s: any) => s.confirmed || s.date > today)
         return a + allStarts.length
       }, 0)
-      const starts = projected
 
+      // Cache everything
       const toCache = {
         version: CACHE_VERSION,
         rosterSPs: roster,
-        confirmedStarts: starts,
+        droppedPlayers: dropped,
+        projectedStarts: projected,
         actualStarts: actual,
         weekStart: data.weekStart || '',
         weekEnd: data.weekEnd || '',
@@ -198,8 +220,10 @@ export default function MyTeam() {
       }
       sessionStorage.setItem('skipper_roster', JSON.stringify(toCache))
 
+      // Update all state
       setRosterSPs(roster)
-      setConfirmedStarts(starts)
+      setDroppedPlayers(dropped)
+      setProjectedStarts(projected)
       setActualStarts(actual)
       setWeekStart(data.weekStart || '')
       setWeekEnd(data.weekEnd || '')
@@ -219,6 +243,7 @@ export default function MyTeam() {
     }
   }, [selectedPeriod])
 
+  // ── Render ─────────────────────────────────────────────────────────────
   return (
     <>
       <Head><title>My Team · The Skipper</title></Head>
@@ -316,19 +341,19 @@ export default function MyTeam() {
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 12, marginBottom: 16 }}>
               <MetricCard label="STARTS LIMIT" value={limit} />
               <MetricCard label="ACTUAL STARTS" value={actualStarts} />
-              <MetricCard label="PROJECTED STARTS" value={confirmedStarts}
-                accent={confirmedStarts >= limit ? 'ok' : confirmedStarts >= limit * 0.7 ? 'warn' : 'bad'} />
-              <MetricCard label="ROSTERED SPs" value={rosterStarterSPs.length} />
+              <MetricCard label="PROJECTED STARTS" value={projectedStarts}
+                accent={projectedStarts >= limit ? 'ok' : projectedStarts >= limit * 0.7 ? 'warn' : 'bad'} />
+              <MetricCard label="ROSTERED SPs" value={rosterSPs.filter(p => (p.position || p.slot) === 'SP').length} />
             </div>
 
             {/* Progress bar */}
             <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, fontFamily: 'var(--mono)', color: 'var(--ink-3)', marginBottom: 4 }}>
-              <span>Projected starts vs limit</span><span>{confirmedStarts} / {limit}</span>
+              <span>Projected starts vs limit</span><span>{projectedStarts} / {limit}</span>
             </div>
-            <ProgressBar value={confirmedStarts} max={limit} />
+            <ProgressBar value={projectedStarts} max={limit} />
             <div style={{ marginBottom: 16 }} />
 
-            {/* Schedule grid */}
+            {/* Schedule grid — starters + dropped streamers */}
             <div style={{
               background: 'var(--white)', border: '1px solid var(--border)',
               borderRadius: 'var(--radius-lg)', padding: '20px 24px',
@@ -405,11 +430,6 @@ export default function MyTeam() {
                   <label style={{ fontSize: 13, color: 'var(--ink-2)' }}>Starts limit:</label>
                   <input type="number" value={limit} min={1} max={30}
                     onChange={e => setLimit(parseInt(e.target.value) || 0)} style={{ width: 70 }} />
-                </div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <label style={{ fontSize: 13, color: 'var(--ink-2)' }}>Confirmed starts:</label>
-                  <input type="number" value={confirmedStarts} min={0} max={30}
-                    onChange={e => setConfirmedStarts(parseInt(e.target.value) || 0)} style={{ width: 70 }} />
                 </div>
               </div>
             </div>
