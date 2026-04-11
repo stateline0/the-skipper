@@ -324,14 +324,11 @@ def get_projected_fpts(player_starts: list, team_woba_factors: dict = None,
     return proj_fpts, proj_blend, fpts_per_start
 
 
-def get_actual_fpts(past_dates: list, player_names: set, headers: dict, cookies: dict) -> dict:
+def get_actual_fpts(past_dates: list, player_names: set, headers: dict, cookies: dict, team_id: int = 0) -> tuple:
     """
     Fetch actual fantasy points, saves, and bench status per pitcher per day.
     Fires one ESPN API request per date, in parallel.
-    Returns:
-      actualFpts:  { "Garrett Crochet": { "2026-03-26": 26.0, ... }, ... }
-      actualSaves: { "Edwin Diaz":       { "2026-03-27": 1,   ... }, ... }
-      benchDays:   { "Edwin Diaz":       ["2026-03-27", ...],       ... }
+    Also tracks which pitchers were on our team each day (for dropped player detection).
     """
     league_id = os.environ["ESPN_LEAGUE_ID"]
     year      = os.environ.get("ESPN_SEASON", "2026")
@@ -343,6 +340,8 @@ def get_actual_fpts(past_dates: list, player_names: set, headers: dict, cookies:
     fpts_result  = {name: {} for name in player_names}
     saves_result = {name: {} for name in player_names}
     bench_result = {name: [] for name in player_names}
+    # Track all pitchers seen on our team per day — used to detect dropped players
+    my_team_pitchers_by_day = {}
 
     def fetch_one_day(date_str: str):
         scoring_period = date_to_scoring_period(date_str)
@@ -369,10 +368,25 @@ def get_actual_fpts(past_dates: list, player_names: set, headers: dict, cookies:
                 continue
             scoring_period = date_to_scoring_period(date_str)
             for team in data.get("teams", []):
+                is_my_team = (team.get("id") == team_id)
                 for entry in team.get("roster", {}).get("entries", []):
                     pool_entry = entry.get("playerPoolEntry", {})
                     player     = pool_entry.get("player", {})
                     name       = player.get("fullName", "")
+
+                    # Track all pitchers on our team each day (for dropped player detection)
+                    if is_my_team and name:
+                        eligible_slots = set(player.get("eligibleSlots", []))
+                        if 14 in eligible_slots or 13 in eligible_slots:
+                            if date_str not in my_team_pitchers_by_day:
+                                my_team_pitchers_by_day[date_str] = {}
+                            lineup_slot = entry.get("lineupSlotId", 0)
+                            my_team_pitchers_by_day[date_str][name] = {
+                                "lineupSlotId": lineup_slot,
+                                "team": player.get("proTeamId", 0),
+                                "eligible": sorted(list(eligible_slots)),
+                            }
+
                     if name not in player_names:
                         continue
 
@@ -395,7 +409,7 @@ def get_actual_fpts(past_dates: list, player_names: set, headers: dict, cookies:
                                 saves_result[name][date_str] = int(saves)
                             break
 
-    return fpts_result, saves_result, bench_result
+    return fpts_result, saves_result, bench_result, my_team_pitchers_by_day
 
 
 def get_league_data(team_id: int, week: int) -> dict:
@@ -725,14 +739,65 @@ def get_league_data(team_id: int, week: int) -> dict:
     actual_fpts  = {}
     actual_saves = {}
     bench_days   = {}
+    my_team_pitchers_by_day = {}
     if all_dates:
-        actual_fpts, actual_saves, bench_days = get_actual_fpts(
-            all_dates, all_pitcher_names | fa_pitcher_names, headers, cookies
+        actual_fpts, actual_saves, bench_days, my_team_pitchers_by_day = get_actual_fpts(
+            all_dates, all_pitcher_names | fa_pitcher_names, headers, cookies, team_id
         )
 
     # Split actual FPTS back into roster and FA subsets for the frontend
     fa_actual_fpts = {name: actual_fpts[name] for name in fa_pitcher_names if name in actual_fpts}
     roster_actual_fpts = {name: actual_fpts[name] for name in all_pitcher_names if name in actual_fpts}
+
+    # ── Detect dropped players ────────────────────────────────────────────
+    # Players who were on our team during this period but are no longer in
+    # the current roster. They may have earned points that counted toward
+    # the matchup score while they were active.
+    dropped_players = []
+    current_roster_names = set(p["name"] for p in roster_sps)
+    all_past_names = set()
+    for day_players in my_team_pitchers_by_day.values():
+        all_past_names.update(day_players.keys())
+    dropped_names = all_past_names - current_roster_names
+
+    for name in sorted(dropped_names):
+        # Find the days this player was on our team
+        days_on_team = sorted([d for d, players in my_team_pitchers_by_day.items() if name in players])
+        if not days_on_team:
+            continue
+        # Get their team/position from their first appearance
+        first_day = days_on_team[0]
+        player_info = my_team_pitchers_by_day[first_day][name]
+        eligible = set(player_info.get("eligible", []))
+        if 14 in eligible:
+            position = "SP"
+        elif 13 in eligible:
+            position = "RP"
+        else:
+            position = "P"
+        # Only include SP-type dropped players (RPs are less relevant for starts tracking)
+        if position != "SP":
+            continue
+        team_abbrev = PRO_TEAM_MAP.get(player_info.get("team", 0), "")
+        # Collect actual FPTS for this player across the period
+        # They might be in fa_actual_fpts if they're now a free agent
+        player_fpts = actual_fpts.get(name, fa_actual_fpts.get(name, {}))
+        dropped_players.append({
+            "name":       name,
+            "team":       team_abbrev,
+            "slot":       "EX",
+            "position":   "SP",
+            "injuryStatus": "Dropped",
+            "starts":     0,
+            "startDates": [],
+            "projFpts":   0.0,
+            "projBlend":  0.0,
+            "percentOwned": 0.0,
+            "daysOnTeam": days_on_team,
+        })
+        # Add their FPTS to roster actual so they show in the grid
+        if name not in roster_actual_fpts and player_fpts:
+            roster_actual_fpts[name] = player_fpts
 
     return {
         "ok":                True,
@@ -751,6 +816,7 @@ def get_league_data(team_id: int, week: int) -> dict:
         "faFptsPerStart":     fa_fpts_per_start,
         "faActualFpts":       fa_actual_fpts,
         "lockedProjections":  get_all_locked_projections(year_int, week),
+        "droppedPlayers":     dropped_players,
     }
 
 
