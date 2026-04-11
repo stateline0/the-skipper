@@ -373,7 +373,7 @@ def get_projected_fpts(player_starts: list, team_woba_factors: dict = None,
 def get_actual_fpts(past_dates: list, player_names: set, headers: dict, cookies: dict, team_id: int = 0) -> tuple:
     """
     Fetch actual fantasy points, saves, and bench status per pitcher per day.
-    Fires one ESPN API request per date, in parallel.
+    Caches completed days in KV — only fetches from ESPN for uncached days.
     Also tracks which pitchers were on our team each day (for dropped player detection).
     """
     league_id = os.environ["ESPN_LEAGUE_ID"]
@@ -386,9 +386,47 @@ def get_actual_fpts(past_dates: list, player_names: set, headers: dict, cookies:
     fpts_result  = {name: {} for name in player_names}
     saves_result = {name: {} for name in player_names}
     bench_result = {name: [] for name in player_names}
-    # Track all pitchers seen on our team per day — used to detect dropped players
     my_team_pitchers_by_day = {}
 
+    # ── Check cache for each past day ─────────────────────────────────────
+    # Today is never cached (games may be in progress).
+    # Completed days are cached permanently after first fetch.
+    today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    dates_to_fetch = []
+
+    for date_str in past_dates:
+        if date_str >= today_str:
+            # Today or future — always fetch fresh
+            dates_to_fetch.append(date_str)
+            continue
+        try:
+            cached = cache_get(f"cache:daily:{date_str}")
+            if cached:
+                # Restore cached data into our result dicts
+                cached_fpts    = cached.get("fpts", {})
+                cached_saves   = cached.get("saves", {})
+                cached_bench   = cached.get("bench", {})
+                cached_my_team = cached.get("my_team", {})
+                for name in player_names:
+                    if name in cached_fpts:
+                        fpts_result[name][date_str] = cached_fpts[name]
+                    if name in cached_saves:
+                        saves_result[name][date_str] = cached_saves[name]
+                    if name in cached_bench:
+                        bench_result[name].append(date_str)
+                if cached_my_team:
+                    my_team_pitchers_by_day[date_str] = cached_my_team
+                continue
+        except Exception:
+            pass
+        dates_to_fetch.append(date_str)
+
+    if dates_to_fetch:
+        print(f"[espn.py] Fetching actual FPTS for {len(dates_to_fetch)} days (cached {len(past_dates) - len(dates_to_fetch)})")
+    else:
+        print(f"[espn.py] All {len(past_dates)} days loaded from cache")
+
+    # ── Fetch uncached days from ESPN ─────────────────────────────────────
     def fetch_one_day(date_str: str):
         scoring_period = date_to_scoring_period(date_str)
         try:
@@ -406,54 +444,81 @@ def get_actual_fpts(past_dates: list, player_names: set, headers: dict, cookies:
             print(f"[espn.py] Failed to fetch scoring period {scoring_period}: {e}")
             return date_str, {}
 
-    with ThreadPoolExecutor(max_workers=6) as executor:
-        futures = {executor.submit(fetch_one_day, d): d for d in past_dates}
-        for future in as_completed(futures):
-            date_str, data = future.result()
-            if not data:
-                continue
-            scoring_period = date_to_scoring_period(date_str)
-            for team in data.get("teams", []):
-                is_my_team = (team.get("id") == team_id)
-                for entry in team.get("roster", {}).get("entries", []):
-                    pool_entry = entry.get("playerPoolEntry", {})
-                    player     = pool_entry.get("player", {})
-                    name       = player.get("fullName", "")
+    if dates_to_fetch:
+        with ThreadPoolExecutor(max_workers=6) as executor:
+            futures = {executor.submit(fetch_one_day, d): d for d in dates_to_fetch}
+            for future in as_completed(futures):
+                date_str, data = future.result()
+                if not data:
+                    continue
+                scoring_period = date_to_scoring_period(date_str)
 
-                    # Track all pitchers on our team each day (for dropped player detection)
-                    if is_my_team and name:
-                        eligible_slots = set(player.get("eligibleSlots", []))
-                        if 14 in eligible_slots or 13 in eligible_slots:
-                            if date_str not in my_team_pitchers_by_day:
-                                my_team_pitchers_by_day[date_str] = {}
-                            lineup_slot = entry.get("lineupSlotId", 0)
-                            my_team_pitchers_by_day[date_str][name] = {
-                                "lineupSlotId": lineup_slot,
-                                "team": player.get("proTeamId", 0),
-                                "eligible": sorted(list(eligible_slots)),
-                            }
+                # Collect ALL pitcher data for this day (unfiltered — for caching)
+                day_fpts    = {}
+                day_saves   = {}
+                day_bench   = set()
+                day_my_team = {}
 
-                    if name not in player_names:
-                        continue
+                for team in data.get("teams", []):
+                    is_my_team = (team.get("id") == team_id)
+                    for entry in team.get("roster", {}).get("entries", []):
+                        pool_entry = entry.get("playerPoolEntry", {})
+                        player     = pool_entry.get("player", {})
+                        name       = player.get("fullName", "")
+                        if not name:
+                            continue
 
-                    # Track bench status for this specific day
-                    lineup_slot = entry.get("lineupSlotId", 0)
-                    if lineup_slot == 16:
+                        # Track all pitchers on our team (for dropped player detection)
+                        if is_my_team:
+                            eligible_slots = set(player.get("eligibleSlots", []))
+                            if 14 in eligible_slots or 13 in eligible_slots:
+                                lineup_slot = entry.get("lineupSlotId", 0)
+                                day_my_team[name] = {
+                                    "lineupSlotId": lineup_slot,
+                                    "team": player.get("proTeamId", 0),
+                                    "eligible": sorted(list(eligible_slots)),
+                                }
+
+                        # Track bench status
+                        lineup_slot = entry.get("lineupSlotId", 0)
+                        if lineup_slot == 16:
+                            day_bench.add(name)
+
+                        # Pull per-game stats
+                        for stat in player.get("stats", []):
+                            if (stat.get("statSplitTypeId") == 5 and
+                                    stat.get("scoringPeriodId") == scoring_period):
+                                fpts = stat.get("appliedTotal", 0.0)
+                                if fpts != 0:
+                                    day_fpts[name] = round(float(fpts), 1)
+                                raw_stats = stat.get("stats", {})
+                                sv = raw_stats.get("57", 0)
+                                if sv:
+                                    day_saves[name] = int(sv)
+                                break
+
+                # Apply to result dicts (filtered by player_names)
+                for name in player_names:
+                    if name in day_fpts:
+                        fpts_result[name][date_str] = day_fpts[name]
+                    if name in day_saves:
+                        saves_result[name][date_str] = day_saves[name]
+                    if name in day_bench:
                         bench_result[name].append(date_str)
+                if day_my_team:
+                    my_team_pitchers_by_day[date_str] = day_my_team
 
-                    # Pull per-game stats for this scoring period
-                    for stat in player.get("stats", []):
-                        if (stat.get("statSplitTypeId") == 5 and
-                                stat.get("scoringPeriodId") == scoring_period):
-                            fpts = stat.get("appliedTotal", 0.0)
-                            fpts_result[name][date_str] = round(float(fpts), 1)
-
-                            # Stat ID 57 = saves
-                            raw_stats = stat.get("stats", {})
-                            saves = raw_stats.get("57", 0)
-                            if saves:
-                                saves_result[name][date_str] = int(saves)
-                            break
+                # Cache this day if it's fully completed (not today)
+                if date_str < today_str:
+                    try:
+                        cache_set(f"cache:daily:{date_str}", {
+                            "fpts":    day_fpts,
+                            "saves":   day_saves,
+                            "bench":   list(day_bench),
+                            "my_team": day_my_team,
+                        })
+                    except Exception:
+                        pass
 
     return fpts_result, saves_result, bench_result, my_team_pitchers_by_day
 
