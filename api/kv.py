@@ -114,6 +114,7 @@ def get_all_locked_projections(season: int, period: int) -> dict:
     except Exception as e:
         print(f"[kv.py] get_all failed for {season}/{period}: {e}")
         return {}
+        
 def cache_get(key: str) -> dict:
     """
     Retrieve a cached JSON value from Redis.
@@ -131,3 +132,22 @@ def cache_get(key: str) -> dict:
     except Exception as e:
         print(f"[kv.py] cache_get failed for {key}: {e}")
         return None
+
+def cache_set(key: str, data: dict, ttl_seconds: int = None):
+    """
+    Store a JSON value in Redis with optional TTL.
+    ttl_seconds=None means permanent (no expiry) — use for historical data.
+    ttl_seconds=86400 means 24 hours — use for current-season data.
+    """
+    if not KV_AVAILABLE or _redis is None:
+        return
+    try:
+        import json
+        val = json.dumps(data)
+        if ttl_seconds:
+            _redis.set(key, val, ex=ttl_seconds)
+        else:
+            _redis.set(key, val)
+        print(f"[kv.py] Cached {key} ({len(val)} bytes, TTL={ttl_seconds or 'permanent'})")
+    except Exception as e:
+        print(f"[kv.py] cache_set failed for {key}: {e}")

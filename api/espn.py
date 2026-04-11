@@ -14,7 +14,7 @@ from datetime import datetime, timedelta, timezone
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__)))
 from mlb import get_starts_for_players, get_team_woba, MATCHUP_PERIODS
-from kv import get_locked_projection, set_locked_projection, get_all_locked_projections
+from kv import get_locked_projection, set_locked_projection, get_all_locked_projections, cache_get, cache_set
 from savant import fetch_expected_stats
 
 
@@ -471,17 +471,43 @@ def get_league_data(team_id: int, week: int) -> dict:
     year_int = int(os.environ.get("ESPN_SEASON", "2026"))
     team_woba_factors = get_team_woba(year_int)
 
-    # ── Fetch Savant expected stats (both years, parallel) ────────────────
+    # ── Fetch Savant expected stats (cached) ──────────────────────────────
+    # Previous year: permanent cache (data is final)
+    # Current year: 24-hour TTL (updates daily)
     savant_previous = {}
     savant_current  = {}
     try:
-        with ThreadPoolExecutor(max_workers=2) as executor:
-            f_sav_cur  = executor.submit(fetch_expected_stats, year_int)
-            f_sav_prev = executor.submit(fetch_expected_stats, year_int - 1)
-            savant_current  = f_sav_cur.result() or {}
-            savant_previous = f_sav_prev.result() or {}
-    except Exception as e:
-        print(f"[espn.py] Savant fetch failed: {e}")
+        savant_previous = cache_get(f"cache:savant:{year_int - 1}") or {}
+        savant_current  = cache_get(f"cache:savant:{year_int}") or {}
+    except Exception:
+        pass
+
+    if not savant_previous or not savant_current:
+        try:
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                futures = {}
+                if not savant_previous:
+                    futures[executor.submit(fetch_expected_stats, year_int - 1)] = "prev"
+                if not savant_current:
+                    futures[executor.submit(fetch_expected_stats, year_int)] = "cur"
+                for future in as_completed(futures):
+                    label = futures[future]
+                    result = future.result() or {}
+                    if label == "prev":
+                        savant_previous = result
+                        try:
+                            cache_set(f"cache:savant:{year_int - 1}", result)
+                        except Exception:
+                            pass
+                    else:
+                        savant_current = result
+                        try:
+                            cache_set(f"cache:savant:{year_int}", result, ttl_seconds=86400)
+                        except Exception:
+                            pass
+        except Exception as e:
+            print(f"[espn.py] Savant fetch failed: {e}")
+
     print(f"[espn.py] Savant: {len(savant_current)} current, {len(savant_previous)} previous")
 
     # ── Matchup period metadata ──────────────────────────────────────────
