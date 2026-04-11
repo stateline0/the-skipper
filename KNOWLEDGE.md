@@ -249,34 +249,47 @@ https://baseballsavant.mlb.com/leaderboard/pitch-arsenal-stats?type=pitcher&pitc
 
 ---
 
-## Upstash KV (Redis)
-`Confidence: 9/10 · Last assessed: April 10, 2026`
+Upstash KV (Redis)
+Confidence: 9/10 · Last assessed: April 11, 2026
+Connection
 
-### Connection
+Client: upstash-redis Python library
+Credentials: KV_REST_API_URL and KV_REST_API_TOKEN environment variables
+Vercel removed native KV — Upstash for Redis is the direct replacement
 
-- Client: `upstash-redis` Python library
-- Credentials: `KV_REST_API_URL` and `KV_REST_API_TOKEN` environment variables
-- Vercel removed native KV — Upstash for Redis is the direct replacement
-
-### Key schema
-
-```
+Key schemas
+Locked projections (write-once, permanent):
 proj:{season}:{period}:{player-slug}:{date} → float
-```
+Example: proj:2026:3:garrett-crochet:2026-04-07 → 17.6
+Data caching (TTL-based):
+cache:savant:{year}      → JSON dict of expected stats by pitcher name
+cache:mlb-stats:{year}   → JSON dict of season pitching stats by pitcher name  
+cache:daily:{date}       → JSON dict {fpts, saves, bench, my_team} for all league pitchers
+Cache TTL strategy
+Key patternTTLRationalecache:savant:2025PermanentLast year's data is finalcache:savant:202624 hoursUpdates daily during seasoncache:mlb-stats:2025PermanentLast year's data is finalcache:mlb-stats:202624 hoursUpdates daily during seasoncache:daily:2026-04-06PermanentCompleted day's stats never changecache:daily:{today}Never cachedGames may be in progressproj:*PermanentWrite-once, never overwritten (NX flag)
+Performance impact
 
-Example: `proj:2026:3:garrett-crochet:2026-04-07` → `17.6`
+Uncached request: ~4.5s (fetches Savant, MLB Stats, and daily FPTS from external APIs)
+Fully cached request: ~2.1s (only fetches today's data and roster from ESPN)
+56% reduction in response time
 
-### Write-once pattern
+Write-once pattern (locked projections)
 
-- `NX` flag on `set` ensures locked values are never overwritten — atomic, safe for concurrent writes
-- Once a projection is locked at game time, it is frozen permanently
+NX flag on set ensures locked values are never overwritten — atomic, safe for concurrent writes
+Once a projection is locked at game time, it is frozen permanently
 
-### Storage settings
+Storage settings
 
-- Eviction is OFF — locked projections are stored permanently (eviction would silently delete keys)
-- Free tier: 500,000 commands/month, 256MB storage
-- Data browser: Vercel → Storage → the-skipper-kv → Open in Upstash
+Eviction is OFF — locked projections and daily caches are stored permanently
+Free tier: 500,000 commands/month, 256MB storage
+Data browser: Vercel → Storage → the-skipper-kv → Open in Upstash
 
+Helper functions (api/kv.py)
+
+get_locked_projection() / set_locked_projection() — per-start projection locks
+get_all_locked_projections() — fetch all locks for a period (prefix query)
+cache_get(key) → parsed JSON dict or None
+cache_set(key, data, ttl_seconds=None) → store JSON with optional TTL
 ---
 
 ## League Settings (Good Season Imanagas)
@@ -311,39 +324,54 @@ Example: `proj:2026:3:garrett-crochet:2026-04-07` → `17.6`
 
 ---
 
-## Projection Model (Option B)
-`Confidence: 7/10 · Last assessed: April 10, 2026`
+Projection Model (Savant Hybrid)
+Confidence: 8/10 · Last assessed: April 11, 2026
+Approach
+Hybrid model combining Savant expected stats (luck-adjusted) with MLB Stats API counting stats (skill-based), blended across 2025 and 2026 seasons, adjusted for opponent quality.
+Per-start component sources
+ComponentSourceWhyIP per startMLB Stats APISkill-based — actual IP/game is a reliable talent indicatorK per startMLB Stats APIHighly skill-based — strikeout rate is one of the most stable pitcher statsBB per startMLB Stats APIHighly skill-based — walk rate stabilizes quicklyHBP per startMLB Stats APISkill-basedH per startSavant xBALuck-influenced — actual hits depend on BABIP which has high variance. xBA × batters_faced removes thisER per startSavant xERALuck-influenced — actual ERA depends on sequencing and BABIP. xERA × (IP/9) removes thisW per startMLB Stats API × 0.5Very noisy — wins depend on run support and bullpen. Discounted 50%L per startMLB Stats API × 0.5Very noisy — same reasoning as winsSV per startMLB Stats APISkill-based for closers
+Fallback behavior
+When Savant data is unavailable for a pitcher (below minimum PA threshold or not in Savant data):
 
-### Approach
+Falls back to pure counting-stat model (H and ER from actual stats, W/L not discounted)
+Log shows [stats] vs [savant] for each pitcher to indicate which model was used
+RPs always use counting-stat model (Savant data less relevant for relief appearances)
 
-Blend 2025 and 2026 MLB season stats to project fantasy points per start, adjusted for opponent quality.
+Blend weight (year-over-year)
 
-### Blend weight
+Ramps from 100% last year to 100% this year as pitcher accumulates innings in 2026
+SPs: full trust at 50 IP (~9 starts, ~6 weeks)
+RPs: full trust at 20 IP (~20 appearances, ~6 weeks)
+Formula: this_year_weight = min(1.0, ip_2026 / threshold)
+Both years' stats get Savant adjustments independently before blending
 
-- Ramps from 100% last year to 100% this year as pitcher accumulates innings in 2026
-- SPs: full trust at 50 IP (~9 starts, ~6 weeks)
-- RPs: full trust at 20 IP (~20 appearances, ~6 weeks)
-- Formula: `this_year_weight = min(1.0, ip_2026 / threshold)`
+Minimum sample thresholds
 
-### Minimum sample thresholds
+SPs: 3 starts minimum before trusting per-game averages
+RPs: 5 appearances minimum
+Below threshold: falls back to other year's data, or 0.0 if neither year qualifies
 
-- SPs: 3 starts minimum before trusting per-game averages
-- RPs: 5 appearances minimum
-- Below threshold: projection falls back to other year's data, or 0.0 if neither year has enough data
+Opponent quality adjustment
 
-### Opponent quality adjustment
+Team wOBA factors from MLB Stats API, normalized to league average
+Applied per-start: each start's projection scaled by opponent's factor
+10-game minimum threshold before trusting team wOBA
+RPs excluded from matchup adjustment
 
-- Team wOBA (weighted on-base average) factors from MLB Stats API
-- Normalized to league average: factor = team_wOBA / league_avg (1.0 = average opponent)
-- Applied per-start: each start's projection is scaled by the opponent's factor
-- 10-game minimum threshold before trusting team wOBA
-- RPs excluded from matchup adjustment (appearance rate driven by game state, not opponent)
+Projection locking
 
-### Projection locking
+At game time (today or past), per-start projections locked into Upstash KV
+Locked projections never recalculated — frozen at time of the game
+Enables future model accuracy analysis: actual - projected per start
 
-- At game time (today or past), per-start projections are locked into Upstash KV
-- Locked projections are never recalculated — they freeze the model's prediction at the time of the game
-- Enables future model accuracy analysis: `actual - projected` per start
+Model architecture roadmap
+
+Layer 1 ✅ COMPLETE — Savant xERA/xBA hybrid base rate
+Layer 2 PENDING — Recent form weighting (rolling last 3-4 starts)
+Layer 3 PENDING — Park factors
+Layer 4 PENDING — Platoon splits
+Layer 5 PENDING — Rest & workload
+Accuracy tracking PENDING — Compare locked projections vs actual FPTS
 
 ---
 
