@@ -472,12 +472,17 @@ def get_league_data(team_id: int, week: int) -> dict:
     team_woba_factors = get_team_woba(year_int)
 
     # ── Fetch Savant expected stats (both years, parallel) ────────────────
-    with ThreadPoolExecutor(max_workers=2) as executor:
-        f_sav_cur  = executor.submit(fetch_expected_stats, year_int)
-        f_sav_prev = executor.submit(fetch_expected_stats, year_int - 1)
-        savant_current  = f_sav_cur.result()
-        savant_previous = f_sav_prev.result()
-    print(f"[espn.py] Savant data: {len(savant_current)} current, {len(savant_previous)} previous")
+    savant_previous = {}
+    savant_current  = {}
+    try:
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            f_sav_cur  = executor.submit(fetch_expected_stats, year_int)
+            f_sav_prev = executor.submit(fetch_expected_stats, year_int - 1)
+            savant_current  = f_sav_cur.result() or {}
+            savant_previous = f_sav_prev.result() or {}
+    except Exception as e:
+        print(f"[espn.py] Savant fetch failed: {e}")
+    print(f"[espn.py] Savant: {len(savant_current)} current, {len(savant_previous)} previous")
 
     # ── Matchup period metadata ──────────────────────────────────────────
     mp            = MATCHUP_PERIODS.get(week, {})
