@@ -1,6 +1,6 @@
 import Head from 'next/head'
 import { useState, useEffect, useCallback, useRef } from 'react'
-const CACHE_VERSION = 4 // bump this whenever the API response shape changes
+const CACHE_VERSION = 5 // bump this whenever the API response shape changes
 import { useRouter } from 'next/router'
 import ScheduleGrid from '../components/ScheduleGrid'
 
@@ -61,6 +61,7 @@ export default function MyTeam() {
   const [rosterSPs, setRosterSPs] = useState<RosterSP[]>([])
   const [limit, setLimit] = useState(12)
   const [confirmedStarts, setConfirmedStarts] = useState(0)
+  const [actualStarts, setActualStarts] = useState(0)
   const [weekStart, setWeekStart] = useState('')
   const [weekEnd, setWeekEnd] = useState('')
   const [teamName, setTeamName] = useState('')
@@ -108,6 +109,7 @@ export default function MyTeam() {
       if (!data.matchupDates || data.matchupDates.length === 0) return // stale, wait for period
       setRosterSPs(data.rosterSPs || [])
       setConfirmedStarts(data.confirmedStarts || 0)
+      setActualStarts(data.actualStarts || 0)
       setWeekStart(data.weekStart || '')
       setWeekEnd(data.weekEnd || '')
       setTeamName(data.teamName || '')
@@ -162,12 +164,26 @@ export default function MyTeam() {
       const roster: RosterSP[] = data.rosterSPs.map((p: any) => ({
         ...p, starts: p.starts ?? 0, projFpts: p.projFpts ?? 0,
       }))
-      const starts = roster.reduce((a, p) => a + p.starts, 0)
+      const now = new Date()
+      const today = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')}`
+      const spRoster = roster.filter((p: any) => (p.position || p.slot) === 'SP')
+      // Actual starts: past/today starts with confirmed=true, for SP-position players only
+      const actual = spRoster.reduce((a: number, p: any) => {
+        const pastStarts = (p.startDates || []).filter((s: any) => s.date <= today && s.confirmed)
+        return a + pastStarts.length
+      }, 0)
+      // Projected starts: actual + future confirmed/probable starts
+      const projected = spRoster.reduce((a: number, p: any) => {
+        const allStarts = (p.startDates || []).filter((s: any) => s.confirmed || s.date > today)
+        return a + allStarts.length
+      }, 0)
+      const starts = projected
 
       const toCache = {
         version: CACHE_VERSION,
         rosterSPs: roster,
         confirmedStarts: starts,
+        actualStarts: actual,
         weekStart: data.weekStart || '',
         weekEnd: data.weekEnd || '',
         teamName: data.teamName || '',
@@ -184,6 +200,7 @@ export default function MyTeam() {
 
       setRosterSPs(roster)
       setConfirmedStarts(starts)
+      setActualStarts(actual)
       setWeekStart(data.weekStart || '')
       setWeekEnd(data.weekEnd || '')
       setTeamName(data.teamName || '')
@@ -298,16 +315,15 @@ export default function MyTeam() {
             {/* Metrics */}
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 12, marginBottom: 16 }}>
               <MetricCard label="STARTS LIMIT" value={limit} />
-              <MetricCard label="SCHEDULED" value={confirmedStarts}
+              <MetricCard label="ACTUAL STARTS" value={actualStarts} />
+              <MetricCard label="PROJECTED STARTS" value={confirmedStarts}
                 accent={confirmedStarts >= limit ? 'ok' : confirmedStarts >= limit * 0.7 ? 'warn' : 'bad'} />
-              <MetricCard label="STILL NEEDED" value={needed}
-                accent={needed === 0 ? 'ok' : needed <= 3 ? 'warn' : 'bad'} />
-              <MetricCard label="ROSTERED SPs" value={rosterSPs.length} />
+              <MetricCard label="ROSTERED SPs" value={rosterStarterSPs.length} />
             </div>
 
             {/* Progress bar */}
             <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, fontFamily: 'var(--mono)', color: 'var(--ink-3)', marginBottom: 4 }}>
-              <span>Starts utilization</span><span>{confirmedStarts} / {limit}</span>
+              <span>Projected starts vs limit</span><span>{confirmedStarts} / {limit}</span>
             </div>
             <ProgressBar value={confirmedStarts} max={limit} />
             <div style={{ marginBottom: 16 }} />
