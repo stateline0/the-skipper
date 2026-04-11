@@ -314,13 +314,14 @@ def get_starts_for_players(player_names, matchup_period, team_map=None):
         key = full_name.strip().lower()
         if key in pitcher_starts:
             entry = pitcher_starts[key]
-            # Add opponent to each startDate using the schedule + team_map
+            # Add opponent and is_home to each startDate using the schedule + team_map
             if team_map and full_name in team_map:
                 team_abbrev = team_map[full_name]
                 for sd in entry["startDates"]:
                     day = schedule.get(sd["date"], {})
                     game = day.get(team_abbrev, {})
                     sd["opponent"] = game.get("opponent", "")
+                    sd["is_home"]  = game.get("is_home", True)
             result[full_name] = entry
         else:
             result[full_name] = {"starts": 0, "startDates": []}
@@ -441,9 +442,242 @@ def get_team_woba(season: int = 2026) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Game Logs — per-start stats for recent form weighting (Layer 2).
+#
+# Fetches game-by-game pitching stats from MLB Stats API. Returns each
+# pitcher's individual game lines so we can compute a weighted rolling
+# average of their last N starts.
+#
+# The endpoint returns ALL pitchers' game logs in one call (no need to
+# look up individual player IDs), making it efficient for our use case.
+#
+# Endpoint: /api/v1/stats?stats=gameLog&playerPool=all&group=pitching
+#           &season=YYYY&gameType=R&limit=1000
+# ---------------------------------------------------------------------------
+
+import unicodedata as _unicodedata
+
+def _strip_accents_mlb(s: str) -> str:
+    """Normalize accented characters for name matching."""
+    return ''.join(
+        c for c in _unicodedata.normalize('NFD', s)
+        if _unicodedata.category(c) != 'Mn'
+    ).lower()
+
+
+def fetch_game_logs(season: int) -> dict:
+    """
+    Fetch per-game pitching stats for all pitchers in a season.
+
+    Returns: {
+        "garrett crochet": [
+            {"date": "2026-04-07", "ip": 6.0, "h": 4, "er": 1, "so": 8,
+             "bb": 2, "hb": 0, "w": 1, "l": 0, "sv": 0, "gs": 1},
+            ...
+        ],
+        ...
+    }
+
+    Games are sorted by date (most recent last) so we can easily
+    grab the last N starts for recent form weighting.
+    """
+    try:
+        r = requests.get(
+            "https://statsapi.mlb.com/api/v1/stats",
+            params={
+                "stats": "gameLog",
+                "playerPool": "all",
+                "group": "pitching",
+                "season": str(season),
+                "gameType": "R",
+                "limit": 5000,
+            },
+            headers={"User-Agent": "Mozilla/5.0"},
+            timeout=20,
+        )
+        if r.status_code != 200:
+            print(f"[mlb.py] Game logs returned HTTP {r.status_code}")
+            return {}
+
+        splits = r.json().get("stats", [{}])[0].get("splits", [])
+        print(f"[mlb.py] Game logs: {len(splits)} total entries for {season}")
+
+        result = {}
+        for split in splits:
+            player = split.get("player", {})
+            full_name = player.get("fullName", "")
+            if not full_name:
+                continue
+
+            stat = split.get("stat", {})
+            game_date = split.get("date", "")
+            if not game_date:
+                continue
+
+            name_key = _strip_accents_mlb(full_name)
+
+            # Parse IP from string format (e.g., "6.2" = 6 innings + 2 outs)
+            ip_str = str(stat.get("inningsPitched", "0.0"))
+            try:
+                parts = ip_str.split(".")
+                ip = int(parts[0]) + (int(parts[1]) / 3 if len(parts) > 1 else 0)
+            except Exception:
+                ip = 0.0
+
+            game_entry = {
+                "date": game_date,
+                "ip":   ip,
+                "h":    int(stat.get("hits", 0)),
+                "er":   int(stat.get("earnedRuns", 0)),
+                "so":   int(stat.get("strikeOuts", 0)),
+                "bb":   int(stat.get("baseOnBalls", 0)),
+                "hb":   int(stat.get("hitBatsmen", 0)),
+                "w":    int(stat.get("wins", 0)),
+                "l":    int(stat.get("losses", 0)),
+                "sv":   int(stat.get("saves", 0)),
+                "gs":   int(stat.get("gamesStarted", 0)),
+            }
+
+            if name_key not in result:
+                result[name_key] = []
+            result[name_key].append(game_entry)
+
+        # Sort each pitcher's games by date (oldest first, most recent last)
+        for name_key in result:
+            result[name_key].sort(key=lambda g: g["date"])
+
+        print(f"[mlb.py] Game logs: {len(result)} unique pitchers")
+        return result
+
+    except Exception as e:
+        print(f"[mlb.py] fetch_game_logs failed: {e}")
+        return {}
+
+
+def compute_recent_form_fpts(games: list, n_starts: int = 4) -> float:
+    """
+    Compute a weighted-average FPTS from a pitcher's last N starts.
+
+    Weights: most recent = 40%, second = 30%, third = 20%, fourth = 10%
+    This captures hot/cold streaks without overreacting to one bad outing.
+
+    Only considers games where gs=1 (actual starts, not relief appearances).
+    Returns None if the pitcher has fewer than n_starts starts.
+
+    The FPTS formula matches our league scoring:
+      IP×3 + K×1 + H×(-1) + BB×(-1) + ER×(-2) + HBP×(-1) + W×5 + L×(-5) + SV×5
+    """
+    # Filter to only starts (gs=1), not relief appearances
+    starts = [g for g in games if g.get("gs", 0) >= 1]
+
+    if len(starts) < n_starts:
+        return None
+
+    # Take the last n_starts
+    recent = starts[-n_starts:]
+
+    # Weights: most recent gets highest weight
+    # recent[-1] = most recent, recent[-2] = second most recent, etc.
+    weights = [0.10, 0.20, 0.30, 0.40]  # oldest to most recent
+
+    weighted_fpts = 0.0
+    for i, game in enumerate(recent):
+        fpts = (
+            game["ip"]  *  3 +
+            game["so"]  *  1 +
+            game["h"]   * -1 +
+            game["bb"]  * -1 +
+            game["er"]  * -2 +
+            game["hb"]  * -1 +
+            game["w"]   *  5 +
+            game["l"]   * -5 +
+            game["sv"]  *  5
+        )
+        weighted_fpts += fpts * weights[i]
+
+    return round(weighted_fpts, 1)
+
+
+# ---------------------------------------------------------------------------
 # HTTP handler — /api/mlb?period=N
 # Useful for testing the data independently of espn.py
 # ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# Park Factors — Statcast 3-year rolling Runs factor from Baseball Savant.
+#
+# Keyed by team abbreviation = the team whose HOME park is used.
+# 100 = league average. >100 = hitter-friendly (bad for pitchers).
+# <100 = pitcher-friendly (good for pitchers).
+#
+# Source: baseballsavant.mlb.com/leaderboard/statcast-park-factors
+# These are stable year-over-year (driven by dimensions & elevation),
+# so hardcoding is the standard approach (FanGraphs does the same).
+#
+# Last updated: April 2026 (3-year rolling: 2023-2025)
+# ---------------------------------------------------------------------------
+
+PARK_FACTORS = {
+    "ARI":  104,  # Chase Field — retractable roof, hot + dry
+    "ATL":  100,  # Truist Park — neutral
+    "ATH":   96,  # Sutter Health Park — pitcher-friendly (Sacramento)
+    "BAL":  103,  # Camden Yards — recent LF wall changes boosted offense
+    "BOS":  107,  # Fenway Park — short Green Monster, lots of doubles
+    "CHC":  104,  # Wrigley Field — wind blowing out = HR park
+    "CIN":  108,  # Great American Ball Park — small, HR-friendly
+    "CLE":   97,  # Progressive Field — pitcher-friendly
+    "COL":  115,  # Coors Field — elevation makes this #1 hitter park
+    "CWS":  101,  # Guaranteed Rate Field — slightly above average
+    "DET":   98,  # Comerica Park — spacious outfield
+    "HOU":  101,  # Daikin Park (formerly Minute Maid) — Crawford Boxes in LF
+    "KC":   100,  # Kauffman Stadium — neutral
+    "LAA":  100,  # Angel Stadium — neutral
+    "LAD":   94,  # Dodger Stadium — pitcher-friendly, marine layer
+    "MIA":   96,  # loanDepot Park — pitcher-friendly, roof closed
+    "MIL":  104,  # American Family Field — retractable roof
+    "MIN":  102,  # Target Field — slightly hitter-friendly
+    "NYM":   97,  # Citi Field — pitcher-friendly
+    "NYY":  107,  # Yankee Stadium — short RF porch, lots of HR
+    "PHI":  104,  # Citizens Bank Park — hitter-friendly
+    "PIT":   96,  # PNC Park — pitcher-friendly
+    "SD":    95,  # Petco Park — pitcher-friendly, marine layer
+    "SEA":   93,  # T-Mobile Park — most pitcher-friendly in AL
+    "SF":    92,  # Oracle Park — marine layer, spacious
+    "STL":   99,  # Busch Stadium — slightly pitcher-friendly
+    "TB":    96,  # Tropicana Field — dome, pitcher-friendly
+    "TEX":  101,  # Globe Life Field — retractable roof
+    "TOR":  103,  # Rogers Centre — slightly hitter-friendly
+    "WSH":  100,  # Nationals Park — neutral
+}
+
+
+def get_park_factor(team_abbrev: str) -> float:
+    """
+    Returns the park factor as a multiplier for a specific team's home park.
+    100 in the table = 1.0 (neutral). 115 (Coors) = 1.15 (bad for pitchers).
+
+    For fantasy pitching projections, a higher park factor means FEWER
+    fantasy points (more runs, hits allowed), so we INVERT it:
+      - Coors (115) → 1.15 → pitcher scores ~15% worse
+      - Oracle Park (92) → 0.92 → pitcher scores ~8% better
+
+    But wait — park factors measure RUNS, not fantasy points directly.
+    Fantasy scoring has a mix of positive (IP, K) and negative (H, ER, BB) stats.
+    Only the negative stats (H, ER) are park-dependent. K rate and IP are
+    mostly park-independent.
+
+    So we dampen the park factor effect by 50%:
+      - Coors: 1.0 + (1.15 - 1.0) * 0.5 = 1.075 (7.5% worse, not 15%)
+      - Oracle: 1.0 + (0.92 - 1.0) * 0.5 = 0.96 (4% better, not 8%)
+
+    This reflects that roughly half of FPTS come from park-independent stats.
+    """
+    raw = PARK_FACTORS.get(team_abbrev, 100)
+    raw_factor = raw / 100.0
+    # Dampen toward 1.0 by 50% — only H/ER are park-dependent
+    dampened = 1.0 + (raw_factor - 1.0) * 0.5
+    return round(dampened, 4)
+
 
 class handler(BaseHTTPRequestHandler):
     def do_GET(self):
