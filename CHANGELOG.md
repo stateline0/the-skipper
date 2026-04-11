@@ -2,6 +2,49 @@
 
 ---
 
+## Session 13 — April 11, 2026
+
+Projection model layers 2+3, projection breakdown tooltip, option_b rename. One PR shipped (#60).
+
+### Key learnings this session
+- MLB Stats API `gameLog` stat type with `playerPool=all` returns per-game stats for ALL pitchers in one call — no need to look up individual player IDs.
+- Baseball Savant park factors page is JS-rendered — no CSV endpoint available. Hardcoding 3-year rolling values is the standard approach (FanGraphs does the same). Park factors are driven by physical dimensions and elevation, so they barely change year to year.
+- Park factors affect only ~half of fantasy stats (H, ER are park-dependent; IP, K, BB are not). Dampening the raw factor by 50% gives a more accurate FPTS adjustment than applying the full run-environment factor.
+- `position: absolute` tooltips get clipped by parent `overflow: auto` containers (like our horizontally-scrollable table). `position: fixed` with `getBoundingClientRect()` coordinates escapes any overflow container.
+- `git commit --amend --no-edit` replaces the last commit with updated files — keeps the PR clean when fixing small issues after initial commit.
+- When adding a 4th return value to a function, every caller must be updated — grep for all call sites before committing.
+
+### Layer 2: Recent form weighting (PR #60)
+- `fetch_game_logs()` in `mlb.py`: fetches per-game pitching stats from MLB Stats API (`stats=gameLog&playerPool=all`) — single call for all pitchers
+- `compute_recent_form_fpts()`: filters to actual starts (gs=1), takes last 4, weights at 10/20/30/40% (oldest→newest)
+- Blended into projection: 60% season base rate + 40% recent form
+- Only applied when pitcher has 4+ starts (avoids overreaction to small samples)
+- Game logs cached with 24hr TTL (`cache:game-logs:2026`)
+
+### Layer 3: Park factors (PR #60)
+- `PARK_FACTORS` dict in `mlb.py`: 3-year rolling Runs factors from Baseball Savant for all 30 teams (100 = neutral)
+- `get_park_factor()`: converts to multiplier and dampens 50% — Coors (115) → 1.075, Oracle Park (92) → 0.96
+- Applied per-start alongside wOBA opponent adjustment: `fpts × wOBA_factor × park_factor`
+- `is_home` field added to `startDates` in `get_starts_for_players()` — determines whose park the game is at
+- Home starts use pitcher's team park, away starts use opponent's park
+
+### Projection breakdown tooltip (PR #60)
+- New `components/ProjectionTooltip.tsx` — reusable hover popover with two modes:
+  - **Total mode** (Proj FPTS column): shows season base, model type, year blend, recent form, per-start wOBA/park adjustments, total
+  - **Start mode** (schedule grid cells): shows base rate, lineup factor, park factor, projected per-start
+- Uses `position: fixed` to escape `overflow: auto` table containers
+- Dark theme (`--ink` background) with color-coded factors: green = favorable, red = unfavorable
+- `projectionDetails` and `faProjectionDetails` added to API response
+- Wired into both My Team and Free Agents pages via `ScheduleGrid` prop
+
+### Cleanup (PR #60)
+- Renamed `option_b_inputs` → `projection_inputs` and `fa_option_b_inputs` → `fa_projection_inputs` throughout `espn.py`
+- Removed all "Option B" terminology from comments and docstrings
+- Bumped `CACHE_VERSION`: my-team 6→7, free-agents 3→4
+- Initialized `fa_fpts_per_start` and `fa_proj_details` before conditional FA block to prevent undefined reference
+
+---
+
 ## Session 12 — April 11, 2026
 
 ESPN API deep-dive, projection model upgrade to Savant-powered hybrid, tile redesign, dropped streamers, caching infrastructure. Eleven PRs shipped (#49–#59).

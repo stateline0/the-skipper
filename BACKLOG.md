@@ -6,17 +6,6 @@ Last updated: April 11, 2026
 
 ## 🔜 Next session priorities
 
-### Projection model — Layer 2: Recent form weighting
-- [ ] Fetch per-start game logs from MLB Stats API
-- [ ] Compute rolling weighted average: last start 40%, second 30%, third 20%, fourth 10%
-- [ ] Blend with season base rate: 60% season + 40% recent form
-- [ ] Captures hot/cold streaks without overreacting to single outings
-
-### Projection model — Layer 3: Park factors
-- [ ] Source park factor data (Baseball Savant has park factors endpoint)
-- [ ] Adjust per-start projection by park: Coors +25%, Oracle Park -10%, etc.
-- [ ] Simple multiplier: projection × park_factor
-
 ### Model accuracy tracking
 - [ ] Dashboard showing projected vs actual FPTS per start
 - [ ] Mean absolute error (MAE) per pitcher and overall
@@ -30,7 +19,7 @@ Last updated: April 11, 2026
 - [ ] Required foundation for model accuracy dashboard
 
 ### espn.py full rewrite
-- [ ] File has accumulated many patches and is ~900 lines
+- [ ] File has accumulated many patches and is ~1100 lines
 - [ ] Clean separation of data fetching, projection model, and API response building
 - [ ] Should be done when a significant change touches multiple sections
 
@@ -67,6 +56,17 @@ Last updated: April 11, 2026
 - [ ] Dropped players show projFpts 0.0 — could pull locked projections from KV
 
 ---
+
+## ✅ Completed (session 13 — April 11, 2026)
+
+- [x] Layer 2: Recent form weighting — `fetch_game_logs()`, `compute_recent_form_fpts()`, 60/40 season+recent blend (PR #60)
+- [x] Layer 3: Park factors — `PARK_FACTORS` dict (30 teams), `get_park_factor()` dampened 50%, per-start multiplier (PR #60)
+- [x] `is_home` field added to startDates for correct home/away park identification (PR #60)
+- [x] Game log caching — 24hr TTL (`cache:game-logs:YYYY`) (PR #60)
+- [x] Projection tooltip — `ProjectionTooltip` component with total + per-start breakdown modes (PR #60)
+- [x] Tooltip wired into both My Team and Free Agents pages (PR #60)
+- [x] Renamed `option_b_inputs` → `projection_inputs` throughout (PR #60)
+- [x] Bumped CACHE_VERSION on both pages (PR #60)
 
 ## ✅ Completed (session 12 — April 11, 2026)
 

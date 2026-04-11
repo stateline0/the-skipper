@@ -172,6 +172,16 @@ https://statsapi.mlb.com
 - Full lowercase name matching (`full_name.strip().lower()`) — never last-name-only (causes collisions like Shane Smith / Shane Baz)
 - Accent normalization via `unicodedata.normalize('NFD')` required for cross-source matching
 
+### Game logs (per-game stats)
+`Confidence: 8/10 · Last assessed: April 11, 2026`
+
+- Endpoint: `/api/v1/stats?stats=gameLog&playerPool=all&group=pitching&season=YYYY&gameType=R&limit=5000`
+- Returns per-game pitching lines for ALL pitchers in a single call — no need to look up player IDs
+- Each split contains: `player.fullName`, `date`, `stat.inningsPitched`, `stat.hits`, `stat.earnedRuns`, `stat.strikeOuts`, `stat.baseOnBalls`, `stat.hitBatsmen`, `stat.wins`, `stat.losses`, `stat.saves`, `stat.gamesStarted`
+- `gamesStarted` field distinguishes actual starts (gs=1) from relief appearances (gs=0)
+- Used by Layer 2 (recent form weighting) to compute rolling weighted average of last 4 starts
+- Cached with 24hr TTL (`cache:game-logs:YYYY`)
+
 ### Team abbreviation quirks
 `Confidence: 9/10 · Last assessed: April 9, 2026`
 
@@ -264,9 +274,10 @@ Example: proj:2026:3:garrett-crochet:2026-04-07 → 17.6
 Data caching (TTL-based):
 cache:savant:{year}      → JSON dict of expected stats by pitcher name
 cache:mlb-stats:{year}   → JSON dict of season pitching stats by pitcher name  
+cache:game-logs:{year}   → JSON dict of per-game pitching stats by pitcher name
 cache:daily:{date}       → JSON dict {fpts, saves, bench, my_team} for all league pitchers
 Cache TTL strategy
-Key patternTTLRationalecache:savant:2025PermanentLast year's data is finalcache:savant:202624 hoursUpdates daily during seasoncache:mlb-stats:2025PermanentLast year's data is finalcache:mlb-stats:202624 hoursUpdates daily during seasoncache:daily:2026-04-06PermanentCompleted day's stats never changecache:daily:{today}Never cachedGames may be in progressproj:*PermanentWrite-once, never overwritten (NX flag)
+Key patternTTLRationalecache:savant:2025PermanentLast year's data is finalcache:savant:202624 hoursUpdates daily during seasoncache:mlb-stats:2025PermanentLast year's data is finalcache:mlb-stats:202624 hoursUpdates daily during seasoncache:game-logs:202624 hoursNew games happen dailycache:daily:2026-04-06PermanentCompleted day's stats never changecache:daily:{today}Never cachedGames may be in progressproj:*PermanentWrite-once, never overwritten (NX flag)
 Performance impact
 
 Uncached request: ~4.5s (fetches Savant, MLB Stats, and daily FPTS from external APIs)
@@ -325,9 +336,9 @@ cache_set(key, data, ttl_seconds=None) → store JSON with optional TTL
 ---
 
 Projection Model (Savant Hybrid)
-Confidence: 8/10 · Last assessed: April 11, 2026
+Confidence: 9/10 · Last assessed: April 11, 2026
 Approach
-Hybrid model combining Savant expected stats (luck-adjusted) with MLB Stats API counting stats (skill-based), blended across 2025 and 2026 seasons, adjusted for opponent quality.
+Hybrid model combining Savant expected stats (luck-adjusted) with MLB Stats API counting stats (skill-based), blended across 2025 and 2026 seasons, adjusted for opponent quality, recent form, and park factors.
 Per-start component sources
 ComponentSourceWhyIP per startMLB Stats APISkill-based — actual IP/game is a reliable talent indicatorK per startMLB Stats APIHighly skill-based — strikeout rate is one of the most stable pitcher statsBB per startMLB Stats APIHighly skill-based — walk rate stabilizes quicklyHBP per startMLB Stats APISkill-basedH per startSavant xBALuck-influenced — actual hits depend on BABIP which has high variance. xBA × batters_faced removes thisER per startSavant xERALuck-influenced — actual ERA depends on sequencing and BABIP. xERA × (IP/9) removes thisW per startMLB Stats API × 0.5Very noisy — wins depend on run support and bullpen. Discounted 50%L per startMLB Stats API × 0.5Very noisy — same reasoning as winsSV per startMLB Stats APISkill-based for closers
 Fallback behavior
@@ -358,17 +369,51 @@ Applied per-start: each start's projection scaled by opponent's factor
 10-game minimum threshold before trusting team wOBA
 RPs excluded from matchup adjustment
 
+Recent form weighting (Layer 2)
+`Confidence: 8/10 · Last assessed: April 11, 2026`
+
+Per-game pitching stats fetched via MLB Stats API (`stats=gameLog&playerPool=all`)
+Single API call returns all pitchers' game logs for the season
+`compute_recent_form_fpts()` filters to starts (gs=1), takes last 4
+Weights: 10% oldest → 20% → 30% → 40% most recent
+Blended with season base rate: 60% season + 40% recent form
+Only applied when pitcher has 4+ starts this year — prevents overreaction to small samples
+RPs excluded (not enough starts to weight meaningfully)
+Cached with 24hr TTL (`cache:game-logs:YYYY`)
+
+Park factors (Layer 3)
+`Confidence: 8/10 · Last assessed: April 11, 2026`
+
+3-year rolling Runs factors from Baseball Savant, hardcoded in `PARK_FACTORS` dict (30 teams)
+100 = league average, >100 = hitter-friendly (bad for pitchers), <100 = pitcher-friendly
+Dampened 50% before applying — only H/ER are park-dependent, K/IP are not
+Formula: `dampened = 1.0 + (raw/100 - 1.0) * 0.5`
+Example: Coors (115) → 1.075 (7.5% worse), Oracle Park (92) → 0.96 (4% better)
+Applied per-start: `fpts × wOBA_factor × park_factor`
+Park determined by home team: home start = pitcher's team park, away start = opponent's park
+`is_home` field in startDates enables correct park identification
+Savant park factors page is JS-rendered (no CSV endpoint) — hardcoding is standard approach
+
 Projection locking
 
 At game time (today or past), per-start projections locked into Upstash KV
 Locked projections never recalculated — frozen at time of the game
 Enables future model accuracy analysis: actual - projected per start
 
+Projection breakdown tooltip
+
+`ProjectionTooltip` component in `components/ProjectionTooltip.tsx`
+Two modes: total (Proj FPTS column) and per-start (schedule grid cells)
+Total mode shows: season base, model type, year blend, recent form, per-start adjustments, total
+Start mode shows: base rate, lineup wOBA factor, park factor, projected
+Uses `position: fixed` to escape `overflow: auto` table containers
+`projectionDetails` and `faProjectionDetails` added to API response from `get_projected_fpts()`
+
 Model architecture roadmap
 
 Layer 1 ✅ COMPLETE — Savant xERA/xBA hybrid base rate
-Layer 2 PENDING — Recent form weighting (rolling last 3-4 starts)
-Layer 3 PENDING — Park factors
+Layer 2 ✅ COMPLETE — Recent form weighting (rolling last 4 starts)
+Layer 3 ✅ COMPLETE — Park factors (dampened 50%)
 Layer 4 PENDING — Platoon splits
 Layer 5 PENDING — Rest & workload
 Accuracy tracking PENDING — Compare locked projections vs actual FPTS
