@@ -4,28 +4,47 @@
 
 ## Session 12 — April 11, 2026
 
-Projection sequencing fix, bench/IL normalization based on thorough ESPN API investigation, and KNOWLEDGE.md. One PR shipped (#49).
+ESPN API deep-dive, projection sequencing fix, bench/IL normalization, tile redesign, dropped streamers, Baseball Savant data fetcher. Six PRs shipped (#49–#54).
 
 ### Key learnings this session
-- ESPN `lineupSlotId` is per-day accurate — fetching `mRoster` with a specific `scoringPeriodId` returns that day's exact lineup slot. Verified: 98 data points across 7 days × 14 players, zero mismatches against ESPN website screenshots.
-- `player.injured` (boolean) is the reliable IL detection signal. The string field `playerPoolEntry.injuryStatus` returns empty `""` for all rostered players — useless for IL detection.
-- `eligibleSlots` determines SP vs RP (stable player attribute). `lineupSlotId` is a daily lineup decision — never use it for position classification.
-- Bench status is a daily lineup management decision with zero impact on projections, start counting, or any Skipper logic. The only bench-related display is the strikethrough on actual FPTS for days a pitcher was benched.
-- The transaction lag re-fetch (`scoringPeriodId + 1`) returns tomorrow's lineup slots, not today's. This is correct API behavior — it returns the lineup for the requested day.
-- Free agent `injuryStatus` (string) works fine and returns values like `FIFTEEN_DAY_DL`. Only the rostered player path is broken.
-- When investigating API behavior, build a debug endpoint, fetch real data, and compare side-by-side against the source of truth (ESPN website). Never assume — verify with evidence.
+- ESPN `lineupSlotId` is per-day accurate — verified 98 data points across 7 days × 14 players, zero mismatches against ESPN website screenshots.
+- `player.injured` (boolean) is the reliable IL signal. `playerPoolEntry.injuryStatus` returns empty `""` for all rostered players.
+- `eligibleSlots` determines SP vs RP (stable). `lineupSlotId` is a daily lineup decision — never use for position classification.
+- Bench status is irrelevant to The Skipper — daily lineup management, not a player attribute. Only bench-related display is strikethrough on actual FPTS.
+- Transaction lag re-fetch (`scoringPeriodId + 1`) returns tomorrow's lineup slots. Correct API behavior.
+- `new Date().toISOString().slice(0,10)` returns UTC date — causes wrong day for late-evening users in US time zones. Use local date construction instead.
+- Baseball Savant CSV endpoints (`&csv=true`) are public, no auth, return rich Statcast data. CSV has BOM prefix and combined `"last_name, first_name"` column.
+- When a file accumulates too many patches, do a clean rewrite rather than more patches — prevents broken variable references and declaration ordering bugs.
 
 ### Projection sequencing + bench/IL normalization (PR #49)
-- `api/espn.py`: moved transaction lag re-fetch before `option_b_inputs` — lineup slots now fresh
-- `api/espn.py`: removed bench/IL skip from `option_b_inputs` — all pitchers get projections
-- `api/espn.py`: removed bench/IL branch from roster parsing — identical treatment for all pitchers
-- `api/espn.py`: `get_slot_label()` now uses `eligibleSlots` + `player.injured` instead of `lineupSlotId`
-- `api/espn.py`: `get_status()` simplified to `player.injured` boolean
-- `api/espn.py`: added `position` field (SP/RP) independent of IL slot
-- `api/espn.py`: fixed `get_projected_fpts()` empty return (2 → 3 values)
-- `pages/my-team.tsx`: filter uses `position` field — IL players now appear in correct grid section
-- `KNOWLEDGE.md`: new file — ESPN API reference with confidence ratings and last-assessed dates
-- `.gitignore`: added `.DS_Store`
+- Moved transaction lag re-fetch before `option_b_inputs`
+- Removed all bench/IL special-casing from projections — all pitchers treated identically
+- `get_slot_label()` and `get_status()` now use `player.injured` + `eligibleSlots`
+- Added `position` field (SP/RP) independent of IL slot
+- Fixed IL players missing from My Team starters grid
+- Created `KNOWLEDGE.md` with confidence-rated ESPN API reference
+
+### Docs update (PR #50)
+- Updated BACKLOG and CHANGELOG, replaced inline API reference with KNOWLEDGE.md pointer
+
+### Tile redesign (PR #51)
+- ACTUAL STARTS: past/today confirmed starts for SP-position players
+- PROJECTED STARTS: actual + future starts (replaces SCHEDULED)
+- ROSTERED SPs: SP-position count only (was counting all pitchers)
+- Fixed UTC date bug in tile calculation — now uses local time
+
+### Dropped streamers (PRs #52, #53)
+- `get_actual_fpts()` tracks which pitchers were on our team each past day
+- Detects players dropped mid-period by comparing past vs current roster
+- David Peterson appears with EX badge and -2.0 Act FPTS from his starts
+- Sort order: active SPs → EX (dropped) → IL
+- Clean rewrite of `my-team.tsx` to fix accumulated patch bugs
+
+### Baseball Savant data fetcher (PR #54)
+- `api/savant.py`: fetches expected stats, Statcast leaderboard, pitch arsenal
+- Public CSV endpoints — no auth, no scraping
+- Verified: 250 pitchers with expected stats, 144 with Statcast data
+- Foundation for advanced projection model replacing Option B
 
 ---
 

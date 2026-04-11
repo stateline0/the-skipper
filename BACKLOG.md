@@ -189,41 +189,58 @@ Last updated: April 11, 2026
 
 ## 🔜 Next session priorities
 
-### Tile redesign — My Team page
-- [ ] ROSTERED SPs tile: fix count to only include SP-position players (currently counts all pitchers)
-- [ ] Replace SCHEDULED and STILL NEEDED tiles with:
-  - ACTUAL STARTS — starts already completed this period
-  - PROJECTED STARTS — actual + probable future starts (compare against limit)
-- [ ] Progress bar should track projected starts vs limit
+### Projection model — Layer 1: Savant-based base rate
+- [ ] Replace counting-stat averages with xwOBA/xERA from Baseball Savant as the base rate
+- [ ] `api/savant.py` data fetcher is built and verified (250 pitchers, PR #54)
+- [ ] Convert xERA to expected FPTS per start using league scoring formula
+- [ ] Use woba_diff (xwOBA - wOBA) as a luck adjustment signal
+- [ ] Blend 2025 + 2026 Savant data using same IP-based ramp as current model
+- [ ] Compare accuracy vs Option B baseline using locked projections in KV
 
-### Dropped streamers
-- [ ] Players dropped mid-period who started a game should remain visible in the SP grid
-- [ ] Show with a special slot badge (e.g. `EX-SP`) to indicate they are no longer rostered
-- [ ] Sort dropped streamers to the bottom of the starters table
-- [ ] Detect by finding players with actual FPTS in the period who are no longer in roster entries
+### Projection model — Layer 2: Recent form weighting
+- [ ] Fetch per-start game logs from MLB Stats API
+- [ ] Compute rolling weighted average: last start 40%, second 30%, third 20%, fourth 10%
+- [ ] Blend with season base rate: 60% season + 40% recent form
+- [ ] Captures hot/cold streaks without overreacting to single outings
+
+### Projection model — Layer 3: Park factors
+- [ ] Source park factor data (Baseball Savant has park factors endpoint)
+- [ ] Adjust per-start projection by park: Coors +25%, Oracle Park -10%, etc.
+- [ ] Simple multiplier: projection × park_factor
+
+### Projection model — Layer 4: Platoon splits
+- [ ] Pitcher performance vs left-heavy vs right-heavy lineups
+- [ ] Team handedness composition from MLB Stats API
+- [ ] Smaller adjustment but valuable for edge cases
+
+### Projection model — Layer 5: Rest & workload
+- [ ] Days since last start (4 vs 5+ day rest performance)
+- [ ] Season pitch count trajectory (fatigue effects)
+- [ ] Most meaningful mid-to-late season
+
+### Model accuracy tracking
+- [ ] Dashboard showing projected vs actual FPTS per start
+- [ ] Mean absolute error (MAE) per pitcher and overall
+- [ ] Directional accuracy (did we correctly predict above/below average?)
+- [ ] Factor contribution analysis
+- [ ] Uses locked projections in KV as ground truth
 
 ### Store actual FPTS in Upstash KV
 - [ ] Store actual FPTS per pitcher per start date in KV alongside locked projections
 - [ ] Key schema: `actual:{season}:{period}:{player-slug}:{date}` → float
-- [ ] Enables model accuracy analysis: `actual - projected` per start
-- [ ] Reduces ESPN API calls for historical period views (read from KV instead of re-fetching)
-- [ ] Required foundation for future model accuracy dashboard
+- [ ] Required foundation for model accuracy dashboard
 
-### Projection model improvements — near term
-- [ ] Recent form weighting (MEDIUM impact) — weight last 3-4 starts more heavily than season average
-  - Game log data already fetched for actualFpts — infrastructure mostly in place
-
-### Projected FPTS model — Option C (target mid-May)
-- [ ] Replace Option B inputs with Statcast metrics from Baseball Savant
-- [ ] Key inputs: xFIP, SIERA, xERA, SwStr%, CSW%
-- [ ] Only meaningful after ~50 innings of 2026 data
+### Dropped streamers refinement
+- [ ] Pull locked projections from KV for dropped players' past starts
+- [ ] Show proj FPTS for the starts they made while rostered
 
 ---
 
 ## 🐛 Known bugs
 
 - [ ] Free agent actual FPTS only available for players who were rostered at time of start — ESPN API limitation, no fix available
-- [ ] `vercel dev` does not serve Python API routes locally (Vercel CLI v50+ known issue). Always test Python changes against production URL
+- [ ] `vercel dev` does not serve Python API routes locally (Vercel CLI v50+ known issue)
+- [ ] Dropped players show projFpts 0.0 — could pull locked projections from KV
 
 ---
 
