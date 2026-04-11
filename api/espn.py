@@ -15,6 +15,7 @@ from datetime import datetime, timedelta, timezone
 sys.path.insert(0, os.path.join(os.path.dirname(__file__)))
 from mlb import get_starts_for_players, get_team_woba, MATCHUP_PERIODS
 from kv import get_locked_projection, set_locked_projection, get_all_locked_projections
+from savant import fetch_expected_stats
 
 
 SEASON_START = datetime(2026, 3, 25)
@@ -121,65 +122,65 @@ def today_has_started(schedule: dict) -> bool:
 
 def get_projected_fpts(player_starts: list, team_woba_factors: dict = None,
                        season: int = 2026, period: int = 1,
-                       today_str: str = "") -> tuple:
+                       today_str: str = "",
+                       savant_current: dict = None,
+                       savant_previous: dict = None) -> tuple:
     """
-    Project fantasy points per pitcher by blending 2025 and 2026 season stats,
-    adjusted for opponent quality using team wOBA factors.
-
-    Blend weight shifts from 100% last year to 100% this year as the pitcher
-    accumulates innings in 2026. Threshold for full trust = 50 IP for SPs, 20 IP for RPs.
-
-    player_starts: [{"name": "Garrett Crochet", "starts": 2, "is_rp": False,
-                     "startDates": [{"date": "...", "opponent": "COL", ...}]}, ...]
-    team_woba_factors: { "LAD": 1.08, "CWS": 0.91, ... } — relative to league avg
-
+    Project fantasy points per pitcher using a hybrid model:
+      - Skill-based stats (IP, K, BB, HBP) from MLB Stats API season averages
+      - Luck-adjusted stats (H, ER) from Baseball Savant (xBA, xERA)
+      - W/L from MLB Stats API but discounted 50% (too team-dependent)
+      - Opponent quality adjustment via team wOBA factors
+      - Year-over-year blending (2025 ↔ 2026) by innings pitched
+ 
+    When Savant data is unavailable for a pitcher, falls back to pure
+    counting-stat model (Option B) so every pitcher gets a projection.
+ 
+    player_starts: [{"name": "...", "starts": 2, "is_rp": False,
+                     "startDates": [{"date": "...", "opponent": "COL"}]}, ...]
+    team_woba_factors: { "LAD": 1.08, "CWS": 0.91, ... }
+    savant_current:  { "sandy alcantara": {"xwoba": .186, "xera": 1.36, "xba": .156, ...} }
+    savant_previous: { "sandy alcantara": {"xwoba": .300, "xera": 3.80, "xba": .240, ...} }
+ 
     Returns tuple:
-      proj_fpts:     { "Garrett Crochet": 34.2, ... }
-      proj_blend:    { "Garrett Crochet": 0.3, ... }
+      proj_fpts:      { "Garrett Crochet": 34.2, ... }
+      proj_blend:     { "Garrett Crochet": 0.3, ... }  ← this-year weight
       fpts_per_start: { "Garrett Crochet": 17.1, ... }  ← baseline, pre-matchup
-
-    League scoring settings (Good Season Imanagas):
-      IP:  +3    H:  -1    ER: -2    BB: -1
-      HB:  -1    K:  +1    W:  +5    L:  -5    SV: +5
     """
     team_woba_factors = team_woba_factors or {}
+    savant_current    = savant_current or {}
+    savant_previous   = savant_previous or {}
     if not player_starts:
         return {}, {}, {}
-
+ 
     starts_by_name = {strip_accents(p["name"]): p for p in player_starts}
-
-    def fetch_season_stats(season: int) -> dict:
-        """Fetch season pitching stats. Returns { fullname_lower: stat_dict }"""
+ 
+    # ── Fetch MLB Stats API season data (both years, parallel) ────────────
+    def fetch_season_stats(yr: int) -> dict:
         try:
             r = requests.get(
                 "https://statsapi.mlb.com/api/v1/stats",
                 params={
-                    "stats":      "season",
-                    "playerPool": "all",
-                    "group":      "pitching",
-                    "season":     str(season),
-                    "gameType":   "R",
-                    "limit":      1000,
+                    "stats": "season", "playerPool": "all",
+                    "group": "pitching", "season": str(yr),
+                    "gameType": "R", "limit": 1000,
                 },
                 headers={"User-Agent": "Mozilla/5.0"},
                 timeout=15,
             )
             if r.status_code != 200:
-                print(f"[espn.py] MLB Stats API {season} returned {r.status_code}")
                 return {}
             splits = r.json().get("stats", [{}])[0].get("splits", [])
-            result = {}
-            for split in splits:
-                name = split.get("player", {}).get("fullName", "")
-                if name:
-                    result[strip_accents(name)] = split.get("stat", {})
-            return result
+            return {
+                strip_accents(s.get("player", {}).get("fullName", "")):
+                    s.get("stat", {})
+                for s in splits if s.get("player", {}).get("fullName")
+            }
         except Exception as e:
-            print(f"[espn.py] Failed to fetch {season} MLB stats: {e}")
+            print(f"[espn.py] Failed to fetch {yr} MLB stats: {e}")
             return {}
-
+ 
     def parse_ip(ip_str) -> float:
-        """Convert IP string like '34.2' to actual innings (34.667)."""
         try:
             parts = str(ip_str).split(".")
             full  = int(parts[0])
@@ -187,26 +188,57 @@ def get_projected_fpts(player_starts: list, team_woba_factors: dict = None,
             return full + outs / 3
         except Exception:
             return 0.0
-
+ 
     def per_game_avgs(stat: dict, games: int, is_rp: bool = False) -> dict:
-        """Calculate per-game averages from season totals. Works for both SP and RP.
-        Requires minimum sample size to avoid wild projections from tiny samples:
-        SPs need at least 3 starts, RPs need at least 5 appearances."""
+        """Per-game averages from MLB Stats API season totals.
+        Minimum sample: 3 starts for SPs, 5 appearances for RPs."""
         min_games = 5 if is_rp else 3
         if games < min_games:
             return None
+        ip = parse_ip(stat.get("inningsPitched", "0.0")) / games
+        h  = int(stat.get("hits",         0)) / games
+        bb = int(stat.get("baseOnBalls",   0)) / games
+        hb = int(stat.get("hitBatsmen",    0)) / games
         return {
-            "ip": parse_ip(stat.get("inningsPitched", "0.0")) / games,
-            "so": int(stat.get("strikeOuts",        0)) / games,
-            "h":  int(stat.get("hits",              0)) / games,
-            "bb": int(stat.get("baseOnBalls",       0)) / games,
-            "er": int(stat.get("earnedRuns",        0)) / games,
-            "hb": int(stat.get("hitBatsmen",        0)) / games,
-            "w":  int(stat.get("wins",              0)) / games,
-            "l":  int(stat.get("losses",            0)) / games,
-            "sv": int(stat.get("saves",             0)) / games,
+            "ip": ip,
+            "so": int(stat.get("strikeOuts", 0)) / games,
+            "h":  h,
+            "bb": bb,
+            "er": int(stat.get("earnedRuns", 0)) / games,
+            "hb": hb,
+            "w":  int(stat.get("wins",       0)) / games,
+            "l":  int(stat.get("losses",     0)) / games,
+            "sv": int(stat.get("saves",      0)) / games,
+            # Extra fields needed for Savant hybrid
+            "batters_faced": ip * 3 + h + bb + hb,  # approximate TBF per game
         }
-
+ 
+    def apply_savant_adjustments(avgs: dict, savant_data: dict) -> dict:
+        """
+        Replace luck-influenced stats with Savant expected values.
+        - H per start → xBA × batters_faced (removes BABIP luck)
+        - ER per start → xERA × (IP / 9) (removes sequencing luck)
+        - W/L → discounted 50% (team-dependent noise)
+        Returns a new dict with adjusted values.
+        """
+        adjusted = dict(avgs)  # copy
+        xba  = savant_data.get("xba", 0)
+        xera = savant_data.get("xera", 0)
+ 
+        if xba > 0 and adjusted["batters_faced"] > 0:
+            # Expected hits = xBA × batters faced per game
+            adjusted["h"] = xba * adjusted["batters_faced"]
+ 
+        if xera > 0 and adjusted["ip"] > 0:
+            # Expected ER = xERA × (IP per game / 9)
+            adjusted["er"] = xera * (adjusted["ip"] / 9)
+ 
+        # Discount W/L by 50% — heavily team-dependent
+        adjusted["w"] *= 0.5
+        adjusted["l"] *= 0.5
+ 
+        return adjusted
+ 
     def apply_formula(avgs: dict) -> float:
         """Apply league scoring formula to per-game averages."""
         return (
@@ -220,69 +252,84 @@ def get_projected_fpts(player_starts: list, team_woba_factors: dict = None,
             avgs["l"]  * -5 +
             avgs["sv"] *  5
         )
-
+ 
     # Fetch both seasons in parallel
     with ThreadPoolExecutor(max_workers=2) as executor:
-        f2026 = executor.submit(fetch_season_stats, 2026)
-        f2025 = executor.submit(fetch_season_stats, 2025)
-        stats_2026 = f2026.result()
-        stats_2025 = f2025.result()
-
+        f_cur  = executor.submit(fetch_season_stats, 2026)
+        f_prev = executor.submit(fetch_season_stats, 2025)
+        stats_2026 = f_cur.result()
+        stats_2025 = f_prev.result()
+ 
     proj_fpts      = {}
     proj_blend     = {}
     fpts_per_start = {}
-
+ 
     for name_lower, player_info in starts_by_name.items():
         full_name        = player_info["name"]
         projected_starts = player_info["starts"]
         is_rp            = player_info.get("is_rp", False)
-
+ 
         stat_26 = stats_2026.get(name_lower, {})
         stat_25 = stats_2025.get(name_lower, {})
-
-        # For SPs use gamesStarted; for RPs use gamesPlayed (appearances)
+ 
         if is_rp:
             gs_26 = int(stat_26.get("gamesPlayed", 0))
             gs_25 = int(stat_25.get("gamesPlayed", 0))
         else:
             gs_26 = int(stat_26.get("gamesStarted", 0))
             gs_25 = int(stat_25.get("gamesStarted", 0))
-
+ 
         ip_26 = parse_ip(stat_26.get("inningsPitched", "0.0"))
-
-        # Blend weight: ramp from 0% to 100% this year as IP crosses threshold.
-        # SPs reach full trust at 50 IP (~9 starts, ~6 weeks).
-        # RPs reach full trust at 20 IP (~20 appearances, ~6 weeks).
+ 
+        # Blend weight: ramp from 0% to 100% this year as IP crosses threshold
         ip_threshold     = 20.0 if is_rp else 50.0
         this_year_weight = min(1.0, ip_26 / ip_threshold)
         last_year_weight = 1.0 - this_year_weight
-
+ 
         avgs_26 = per_game_avgs(stat_26, gs_26, is_rp)
         avgs_25 = per_game_avgs(stat_25, gs_25, is_rp)
-
+ 
         if avgs_26 is None and avgs_25 is None:
             proj_fpts[full_name]  = 0.0
             proj_blend[full_name] = 0.0
             continue
         elif avgs_26 is None:
-            blended          = avgs_25
             this_year_weight = 0.0
             last_year_weight = 1.0
         elif avgs_25 is None:
-            blended          = avgs_26
             this_year_weight = 1.0
             last_year_weight = 0.0
-        else:
+ 
+        # ── Apply Savant adjustments to each year's averages ──────────
+        # Look up Savant expected stats for this pitcher (both years)
+        savant_26 = savant_current.get(name_lower, {})
+        savant_25 = savant_previous.get(name_lower, {})
+        used_savant = False
+ 
+        if avgs_26 is not None:
+            if savant_26 and savant_26.get("xera", 0) > 0 and not is_rp:
+                avgs_26 = apply_savant_adjustments(avgs_26, savant_26)
+                used_savant = True
+        if avgs_25 is not None:
+            if savant_25 and savant_25.get("xera", 0) > 0 and not is_rp:
+                avgs_25 = apply_savant_adjustments(avgs_25, savant_25)
+                used_savant = True
+ 
+        # ── Blend years ───────────────────────────────────────────────
+        if avgs_26 is not None and avgs_25 is not None:
             blended = {
                 s: avgs_26[s] * this_year_weight + avgs_25[s] * last_year_weight
                 for s in avgs_26
             }
-
+        elif avgs_26 is not None:
+            blended = avgs_26
+        else:
+            blended = avgs_25
+ 
         fpts_per_game = apply_formula(blended)
-
-        # Apply opponent quality adjustment per start using team wOBA factors.
-        # For each projected start, look up the opponent and scale fpts_per_game.
-        # Missing opponent or factor → use 1.0 (no adjustment).
+        model_label = "savant" if used_savant else "stats"
+ 
+        # ── Opponent quality adjustment ───────────────────────────────
         start_dates = player_info.get("startDates", [])
         if not is_rp and start_dates and team_woba_factors:
             adjusted_total = 0.0
@@ -300,14 +347,12 @@ def get_projected_fpts(player_starts: list, team_woba_factors: dict = None,
         else:
             projected = round(fpts_per_game * projected_starts, 1)
             avg_factor = 1.0
-
+ 
         proj_fpts[full_name]      = projected
         proj_blend[full_name]     = round(this_year_weight, 2)
         fpts_per_start[full_name] = round(fpts_per_game, 1)
-
-        # ── Per-start locking ─────────────────────────────────────────────
-        # For starts that are today or past, lock fpts_per_game into KV
-        # so the projection is frozen at game time. Future starts stay live.
+ 
+        # ── Per-start locking ─────────────────────────────────────────
         if today_str and start_dates and not is_rp:
             for sd in start_dates:
                 date = sd.get("date", "")
@@ -316,11 +361,11 @@ def get_projected_fpts(player_starts: list, team_woba_factors: dict = None,
                     if existing is None:
                         set_locked_projection(season, period, full_name, date,
                                               round(fpts_per_game, 1))
-
-        print(f"[espn.py] {full_name}: {round(this_year_weight*100)}% '26 / "
-              f"{round(last_year_weight*100)}% '25 | "
-              f"{fpts_per_game:.1f} pts/game × factor {avg_factor:.3f} = {projected}")
-
+ 
+        print(f"[espn.py] {full_name} [{model_label}]: "
+              f"{round(this_year_weight*100)}% '26 / {round(last_year_weight*100)}% '25 | "
+              f"{fpts_per_game:.1f} pts/game × {avg_factor:.3f} = {projected}")
+ 
     return proj_fpts, proj_blend, fpts_per_start
 
 
@@ -425,6 +470,19 @@ def get_league_data(team_id: int, week: int) -> dict:
     # ── Team wOBA factors for opponent quality adjustment ─────────────────
     year_int = int(os.environ.get("ESPN_SEASON", "2026"))
     team_woba_factors = get_team_woba(year_int)
+
+    # ── Fetch Savant expected stats (both years, parallel) ────────────────
+    savant_previous = {}
+    savant_current  = {}
+    try:
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            f_sav_cur  = executor.submit(fetch_expected_stats, year_int)
+            f_sav_prev = executor.submit(fetch_expected_stats, year_int - 1)
+            savant_current  = f_sav_cur.result() or {}
+            savant_previous = f_sav_prev.result() or {}
+    except Exception as e:
+        print(f"[espn.py] Savant fetch failed: {e}")
+    print(f"[espn.py] Savant: {len(savant_current)} current, {len(savant_previous)} previous")
 
     # ── Matchup period metadata ──────────────────────────────────────────
     mp            = MATCHUP_PERIODS.get(week, {})
@@ -573,6 +631,8 @@ def get_league_data(team_id: int, week: int) -> dict:
         option_b_inputs, team_woba_factors,
         season=year_int, period=week,
         today_str=datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+        savant_current=savant_current,
+        savant_previous=savant_previous,
     )
 
     # ── Parse roster ──────────────────────────────────────────────────────
@@ -695,6 +755,8 @@ def get_league_data(team_id: int, week: int) -> dict:
             fa_option_b_inputs, team_woba_factors,
             season=year_int, period=week,
             today_str=datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+            savant_current=savant_current,
+            savant_previous=savant_previous,
         )
 
         inj_label_map = {

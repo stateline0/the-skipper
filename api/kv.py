@@ -114,3 +114,20 @@ def get_all_locked_projections(season: int, period: int) -> dict:
     except Exception as e:
         print(f"[kv.py] get_all failed for {season}/{period}: {e}")
         return {}
+def cache_get(key: str) -> dict:
+    """
+    Retrieve a cached JSON value from Redis.
+    Returns the parsed dict, or None if not found or expired.
+    Redis handles TTL expiry automatically — if the key expired, get() returns None.
+    """
+    if not KV_AVAILABLE or _redis is None:
+        return None
+    try:
+        val = _redis.get(key)
+        if val is None:
+            return None
+        import json
+        return json.loads(val)
+    except Exception as e:
+        print(f"[kv.py] cache_get failed for {key}: {e}")
+        return None
