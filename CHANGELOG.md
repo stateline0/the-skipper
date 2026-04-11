@@ -2,6 +2,33 @@
 
 ---
 
+## Session 12 — April 11, 2026
+
+Projection sequencing fix, bench/IL normalization based on thorough ESPN API investigation, and KNOWLEDGE.md. One PR shipped (#49).
+
+### Key learnings this session
+- ESPN `lineupSlotId` is per-day accurate — fetching `mRoster` with a specific `scoringPeriodId` returns that day's exact lineup slot. Verified: 98 data points across 7 days × 14 players, zero mismatches against ESPN website screenshots.
+- `player.injured` (boolean) is the reliable IL detection signal. The string field `playerPoolEntry.injuryStatus` returns empty `""` for all rostered players — useless for IL detection.
+- `eligibleSlots` determines SP vs RP (stable player attribute). `lineupSlotId` is a daily lineup decision — never use it for position classification.
+- Bench status is a daily lineup management decision with zero impact on projections, start counting, or any Skipper logic. The only bench-related display is the strikethrough on actual FPTS for days a pitcher was benched.
+- The transaction lag re-fetch (`scoringPeriodId + 1`) returns tomorrow's lineup slots, not today's. This is correct API behavior — it returns the lineup for the requested day.
+- Free agent `injuryStatus` (string) works fine and returns values like `FIFTEEN_DAY_DL`. Only the rostered player path is broken.
+- When investigating API behavior, build a debug endpoint, fetch real data, and compare side-by-side against the source of truth (ESPN website). Never assume — verify with evidence.
+
+### Projection sequencing + bench/IL normalization (PR #49)
+- `api/espn.py`: moved transaction lag re-fetch before `option_b_inputs` — lineup slots now fresh
+- `api/espn.py`: removed bench/IL skip from `option_b_inputs` — all pitchers get projections
+- `api/espn.py`: removed bench/IL branch from roster parsing — identical treatment for all pitchers
+- `api/espn.py`: `get_slot_label()` now uses `eligibleSlots` + `player.injured` instead of `lineupSlotId`
+- `api/espn.py`: `get_status()` simplified to `player.injured` boolean
+- `api/espn.py`: added `position` field (SP/RP) independent of IL slot
+- `api/espn.py`: fixed `get_projected_fpts()` empty return (2 → 3 values)
+- `pages/my-team.tsx`: filter uses `position` field — IL players now appear in correct grid section
+- `KNOWLEDGE.md`: new file — ESPN API reference with confidence ratings and last-assessed dates
+- `.gitignore`: added `.DS_Store`
+
+---
+
 ## Session 11 — April 10, 2026
 
 Upstash KV locked projections, full-name pitcher matching, bench player start fix, and multiple bug fixes. Seven PRs shipped (#41–#47).
