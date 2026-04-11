@@ -93,8 +93,9 @@ export default function MyTeam() {
 
   // Starters grid: SP-position roster players + dropped streamers at the bottom
   const rosterStarterSPs = [
-    ...rosterSPs.filter(p => (p.position || p.slot) === 'SP'),
+    ...rosterSPs.filter(p => (p.position || p.slot) === 'SP' && p.slot !== 'IL'),
     ...droppedPlayers,
+    ...rosterSPs.filter(p => (p.position || p.slot) === 'SP' && p.slot === 'IL'),
   ]
   const rosterRelievers = rosterSPs.filter(p => (p.position || p.slot) === 'RP')
 
