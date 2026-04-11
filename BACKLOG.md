@@ -1,6 +1,32 @@
 # The Skipper — Backlog
 
-Last updated: April 10, 2026
+Last updated: April 11, 2026
+
+---
+
+## ✅ Completed (session April 11, 2026)
+
+### Projection sequencing + bench/IL normalization (PR #49)
+- [x] Moved transaction lag re-fetch before `option_b_inputs` — lineup slots now fresh when building projection inputs
+- [x] Removed bench/IL skip from `option_b_inputs` — all pitchers get projections computed
+- [x] Removed bench/IL branch from roster parsing — all pitchers treated identically for projections and start counting
+- [x] `get_slot_label()` now uses `eligibleSlots` + `player.injured` instead of `lineupSlotId`
+- [x] `get_status()` simplified to use `player.injured` boolean
+- [x] Added `position` field (SP/RP) to roster entries, independent of IL slot
+- [x] Fixed IL players (Pepiot, Kelly) missing from My Team starters grid
+- [x] Fixed `get_projected_fpts()` empty return: 2 values → 3
+
+### ESPN API investigation
+- [x] Built `debug_roster.py` endpoint to fetch per-day lineup slots across full matchup period
+- [x] Verified `lineupSlotId` is per-day accurate: 98 data points across 7 days × 14 players, 0 mismatches vs ESPN website
+- [x] Confirmed `player.injured` (boolean) is the reliable IL signal — `injuryStatus` string is empty for all rostered players
+- [x] Confirmed `eligibleSlots` determines SP vs RP (stable attribute), not `lineupSlotId` (daily lineup decision)
+- [x] Confirmed bench status is a daily lineup decision with no impact on The Skipper's projections
+
+### Documentation
+- [x] Created `KNOWLEDGE.md` — permanent reference for API behavior, architecture decisions, league settings
+- [x] Each section includes confidence rating (1-10) and last-assessed date
+- [x] Added `.DS_Store` to `.gitignore`
 
 ---
 
@@ -163,13 +189,8 @@ Last updated: April 10, 2026
 
 ## 🔜 Next session priorities
 
-### Proj FPTS column bugs — Joe Ryan / Garrett Crochet showing 0.0
-- [ ] Proj FPTS column should sum all starts (past locked + future projected) for the full period
-- [ ] Past starts with a locked projection should contribute to the column total even when no future starts remain
-- [ ] Past start cells should always show their locked projection value
-
 ### Tile redesign — My Team page
-- [ ] ROSTERED SPs tile: fix count to only include `slot === 'SP'` players (currently counts all pitchers)
+- [ ] ROSTERED SPs tile: fix count to only include SP-position players (currently counts all pitchers)
 - [ ] Replace SCHEDULED and STILL NEEDED tiles with:
   - ACTUAL STARTS — starts already completed this period
   - PROJECTED STARTS — actual + probable future starts (compare against limit)
@@ -180,12 +201,6 @@ Last updated: April 10, 2026
 - [ ] Show with a special slot badge (e.g. `EX-SP`) to indicate they are no longer rostered
 - [ ] Sort dropped streamers to the bottom of the starters table
 - [ ] Detect by finding players with actual FPTS in the period who are no longer in roster entries
-
-### Proj FPTS locking — proper sequencing fix
-- [ ] Root cause: `option_b_inputs` is built before the transaction lag re-fetch, so lineup slots can be stale
-- [ ] Fix part 1: move transaction lag re-fetch to top of `get_league_data`, before `option_b_inputs` is built
-- [ ] Fix part 2: decouple "show starts" from lineup slot — confirmed starts should always display regardless of slot
-- [ ] Only use lineup slot for bench-day strikethrough UI and IL opacity
 
 ### Store actual FPTS in Upstash KV
 - [ ] Store actual FPTS per pitcher per start date in KV alongside locked projections
@@ -207,11 +222,8 @@ Last updated: April 10, 2026
 
 ## 🐛 Known bugs
 
-- [ ] Proj FPTS column shows 0.0 for pitchers whose only starts are in the past (Joe Ryan, Garrett Crochet)
-- [ ] Lineup slot stale data: `option_b_inputs` built before transaction lag re-fetch — can cause incorrect bench/active classification
 - [ ] Free agent actual FPTS only available for players who were rostered at time of start — ESPN API limitation, no fix available
 - [ ] `vercel dev` does not serve Python API routes locally (Vercel CLI v50+ known issue). Always test Python changes against production URL
-- [ ] ESPN API requires espn_s2 and SWID cookies — cannot be called directly from local machine for debugging
 
 ---
 
@@ -272,104 +284,6 @@ Open `http://localhost:3000`. Python API routes only work at `https://the-skippe
 
 ---
 
-## 📚 ESPN API reference
+## 📚 Reference
 
-### Base URL
-```
-https://lm-api-reads.fantasy.espn.com/apis/v3/games/flb/seasons/{year}/segments/0/leagues/{league_id}
-```
-
-### Key views
-- `mRoster` — full roster with player entries and stats
-- `mTeam` — team metadata
-- `mMatchupScore` — matchup scoring data
-- `kona_player_info` — projected stats, requires `x-fantasy-filter` header
-
-### Scoring periods
-- ESPN uses a daily scoring period counter starting from opening day
-- 2026: March 25 = period 1
-- Formula: `scoringPeriodId = (date - 2026-03-25).days + 1`
-
-### Per-game stats
-- `statSplitTypeId=5` = per-game log entries
-- `appliedTotal` = actual fantasy points earned that game
-- Stat ID 57 = saves
-- No single call returns full history — use parallel fetching via `ThreadPoolExecutor`
-
-### Lineup slots
-- Slot 13 = P (pitcher, any)
-- Slot 14 = SP
-- Slot 16 = Bench
-- Slot 17 = IL
-- `injuryStatus` field is empty string for all players in this league
-
-### Free agent filtering
-- `filterSlotIds: [14]` must be set before `limit` — otherwise limit applies across all positions
-- Without slot filter: ~29 SPs out of 100 results. With filter: 100 SPs.
-
-### Auth
-- Requires `espn_s2` and `SWID` cookies
-- Must use `lm-api-reads.fantasy.espn.com` not `fantasy.espn.com`
-- CloudFront blocks requests without a browser-like `User-Agent` header
-- Cannot be called directly from local machine — always test against production
-
-### Known limitations
-- `matchupPeriodDates` not returned for this league → all 22 period dates hardcoded in `api/config.py`
-- Roster locked to current scoring period once first game starts → fixed by transaction lag fix
-- Free agent actual FPTS only available if player was rostered at time of start
-- ESPN caches roster data server-side — cache-busting params have no effect
-- `lineupSlotId` reflects ESPN's scoring period snapshot, not current live lineup
-
-### PRO_TEAM_MAP (2026 verified)
-```
-1=BAL, 2=BOS, 3=LAA, 4=CWS, 5=CLE, 6=DET, 7=KC, 8=MIL, 9=MIN, 10=NYY,
-11=ATH, 12=SEA, 13=TEX, 14=TOR, 15=ATL, 16=CHC, 17=CIN, 18=HOU, 19=LAD,
-20=WSH, 21=NYM, 22=PHI, 23=PIT, 24=STL, 25=SD, 26=SF, 27=COL, 28=MIA,
-29=ARI, 30=TB, 31=FA, 32=FA
-```
----
-
----
-
-## 📚 MLB Stats API reference
-
-- Base: `https://statsapi.mlb.com`
-- Confirms probable pitchers 1-2 days out only
-- Free, no auth required
-- Season stats endpoint: `/api/v1/stats?stats=season&playerPool=all&group=pitching&season=YYYY&gameType=R&limit=1000`
-- IP stored as string e.g. "34.2" meaning 34 innings + 2 outs = 34.667 actual innings
-- Minimum sample thresholds: 3 starts for SPs, 5 appearances for RPs before trusting per-game averages
-- Player names may use accented characters — normalize with `strip_accents()` before matching
-- Uses `AZ` for Arizona — normalize to `ARI` when matching against our schedule data
-
-## 📚 ESPN Scoreboard API reference
-
-- Base: `https://site.api.espn.com/apis/site/v2/sports/baseball/mlb/scoreboard?dates=YYYYMMDD`
-- Public, no auth required
-- Returns probable starters up to 7 days out
-- Uses `CHW` for White Sox (not `CWS`) — normalization required
-- Probable pitcher matching now uses full lowercase name as key (not last name only)
-
-## 📚 Upstash KV reference
-
-- Client: `upstash-redis` Python library
-- Credentials: `KV_REST_API_URL` and `KV_REST_API_TOKEN` env vars
-- Key schema: `proj:{season}:{period}:{player-slug}:{date}` → float
-- NX flag on set ensures locked values are never overwritten
-- Eviction is OFF — locked projections are stored permanently
-- Free tier: 500,000 commands/month, 256MB storage
-- Data browser: Vercel → Storage → the-skipper-kv → Open in Upstash
-
-## 📚 League scoring settings (Good Season Imanagas)
-
-| Stat | Points |
-|---|---|
-| Innings Pitched (IP) | +3 |
-| Strikeouts (K) | +1 |
-| Hits Allowed (H) | -1 |
-| Earned Runs (ER) | -2 |
-| Walks Issued (BB) | -1 |
-| Hit Batsmen (HB) | -1 |
-| Wins (W) | +5 |
-| Losses (L) | -5 |
-| Saves (SV) | +5 |
+All API reference documentation, architecture decisions, league settings, and development workflow are maintained in **[KNOWLEDGE.md](KNOWLEDGE.md)** — the single source of truth for technical reference. Each section includes a confidence rating (1-10) and last-assessed date.
