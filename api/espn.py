@@ -13,7 +13,7 @@ from urllib.parse import urlparse, parse_qs
 from datetime import datetime, timedelta, timezone
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__)))
-from mlb import get_starts_for_players, get_team_woba, MATCHUP_PERIODS
+from mlb import get_starts_for_players, get_team_woba, MATCHUP_PERIODS, fetch_game_logs, compute_recent_form_fpts, get_park_factor
 from kv import get_locked_projection, set_locked_projection, get_all_locked_projections, cache_get, cache_set
 from savant import fetch_expected_stats
 
@@ -153,23 +153,27 @@ def get_projected_fpts(player_starts: list, team_woba_factors: dict = None,
                       savant_current: dict = None,
                       savant_previous: dict = None,
                       mlb_stats_current: dict = None,
-                      mlb_stats_previous: dict = None) -> tuple:
+                      mlb_stats_previous: dict = None,
+                      game_logs: dict = None) -> tuple:
     """
     Project fantasy points per pitcher using a hybrid model:
       - Skill-based stats (IP, K, BB, HBP) from MLB Stats API season averages
       - Luck-adjusted stats (H, ER) from Baseball Savant (xBA, xERA)
       - W/L from MLB Stats API but discounted 50% (too team-dependent)
       - Opponent quality adjustment via team wOBA factors
+      - Park factor adjustment per start (Layer 3)
       - Year-over-year blending (2025 ↔ 2026) by innings pitched
+      - Recent form weighting: 60% season / 40% last-4-starts (Layer 2)
  
     When Savant data is unavailable for a pitcher, falls back to pure
-    counting-stat model (Option B) so every pitcher gets a projection.
+    counting-stat model so every pitcher gets a projection.
  
     player_starts: [{"name": "...", "starts": 2, "is_rp": False,
-                     "startDates": [{"date": "...", "opponent": "COL"}]}, ...]
+                     "startDates": [{"date": "...", "opponent": "COL", "is_home": True}]}, ...]
     team_woba_factors: { "LAD": 1.08, "CWS": 0.91, ... }
     savant_current:  { "sandy alcantara": {"xwoba": .186, "xera": 1.36, "xba": .156, ...} }
     savant_previous: { "sandy alcantara": {"xwoba": .300, "xera": 3.80, "xba": .240, ...} }
+    game_logs:       { "sandy alcantara": [{"date": "...", "ip": 6.0, ...}, ...] }
  
     Returns tuple:
       proj_fpts:      { "Garrett Crochet": 34.2, ... }
@@ -179,6 +183,7 @@ def get_projected_fpts(player_starts: list, team_woba_factors: dict = None,
     team_woba_factors = team_woba_factors or {}
     savant_current    = savant_current or {}
     savant_previous   = savant_previous or {}
+    game_logs         = game_logs or {}
     if not player_starts:
         return {}, {}, {}
  
@@ -330,14 +335,47 @@ def get_projected_fpts(player_starts: list, team_woba_factors: dict = None,
         fpts_per_game = apply_formula(blended)
         model_label = "savant" if used_savant else "stats"
  
-        # ── Opponent quality adjustment ───────────────────────────────
+        # ── Layer 2: Recent form weighting ─────────────────────────────
+        # If we have game logs with 4+ starts, compute a weighted average
+        # of the last 4 starts (40/30/20/10) and blend with season rate.
+        # Blend: 60% season base rate + 40% recent form.
+        # This captures hot/cold streaks without overreacting.
+        recent_form_fpts = None
+        if not is_rp and game_logs:
+            pitcher_games = game_logs.get(name_lower, [])
+            if pitcher_games:
+                recent_form_fpts = compute_recent_form_fpts(pitcher_games, n_starts=4)
+
+        if recent_form_fpts is not None:
+            # Blend: 60% season model + 40% recent form
+            season_fpts = fpts_per_game
+            fpts_per_game = season_fpts * 0.6 + recent_form_fpts * 0.4
+            print(f"[espn.py]   ↳ {full_name} recent form: {recent_form_fpts:.1f} | "
+                  f"season: {season_fpts:.1f} → blended: {fpts_per_game:.1f}")
+
+        # ── Opponent quality + Park factor adjustment (Layers 1 & 3) ───
+        # Each start gets two multipliers:
+        #   1. wOBA factor — how good is the opposing lineup?
+        #   2. Park factor — is this a hitter or pitcher park?
+        # The park is determined by WHO IS HOME:
+        #   - If our pitcher is home → our pitcher's team park
+        #   - If our pitcher is away → opponent's team park
         start_dates = player_info.get("startDates", [])
-        if not is_rp and start_dates and team_woba_factors:
+        if not is_rp and start_dates:
             adjusted_total = 0.0
             for sd in start_dates:
-                opp    = sd.get("opponent", "")
-                factor = team_woba_factors.get(opp, 1.0)
-                adjusted_total += fpts_per_game * factor
+                opp       = sd.get("opponent", "")
+                is_home   = sd.get("is_home", True)
+                # wOBA factor: how strong is the opposing lineup
+                woba_factor = team_woba_factors.get(opp, 1.0) if team_woba_factors else 1.0
+                # Park factor: the HOME team's park is used
+                park_team   = opp if not is_home else player_info.get("team", "")
+                # If we don't know the pitcher's team, fall back to neutral
+                if not park_team:
+                    park_factor = 1.0
+                else:
+                    park_factor = get_park_factor(park_team)
+                adjusted_total += fpts_per_game * woba_factor * park_factor
             projected = round(adjusted_total, 1)
             avg_factor = round(adjusted_total / (fpts_per_game * len(start_dates)), 3) if start_dates and fpts_per_game else 1.0
         elif is_rp:
@@ -365,7 +403,8 @@ def get_projected_fpts(player_starts: list, team_woba_factors: dict = None,
  
         print(f"[espn.py] {full_name} [{model_label}]: "
               f"{round(this_year_weight*100)}% '26 / {round(last_year_weight*100)}% '25 | "
-              f"{fpts_per_game:.1f} pts/game × {avg_factor:.3f} = {projected}")
+              f"{fpts_per_game:.1f} pts/game × {avg_factor:.3f} = {projected}"
+              f"{' [recent form applied]' if recent_form_fpts is not None else ''}")
  
     return proj_fpts, proj_blend, fpts_per_start
 
@@ -614,6 +653,28 @@ def get_league_data(team_id: int, week: int) -> dict:
 
     print(f"[espn.py] MLB stats: {len(mlb_stats_current)} current, {len(mlb_stats_previous)} previous")
 
+    # ── Fetch game logs for recent form weighting (Layer 2, cached) ───────
+    # Current year only — we only care about recent form in this season.
+    # 24hr TTL since new games happen daily.
+    game_logs_current = {}
+    try:
+        game_logs_current = cache_get(f"cache:game-logs:{year_int}") or {}
+    except Exception:
+        pass
+
+    if not game_logs_current:
+        try:
+            game_logs_current = fetch_game_logs(year_int) or {}
+            if game_logs_current:
+                try:
+                    cache_set(f"cache:game-logs:{year_int}", game_logs_current, ttl_seconds=86400)
+                except Exception:
+                    pass
+        except Exception as e:
+            print(f"[espn.py] Game logs fetch failed: {e}")
+
+    print(f"[espn.py] Game logs: {len(game_logs_current)} pitchers with game-level data")
+
     # ── Matchup period metadata ──────────────────────────────────────────
     mp            = MATCHUP_PERIODS.get(week, {})
     week_start    = ""
@@ -726,7 +787,7 @@ def get_league_data(team_id: int, week: int) -> dict:
         else:
             print(f"[espn.py] Re-fetch failed (HTTP {r2.status_code}) — keeping original roster")
 
-    # ── Option B projection inputs ────────────────────────────────────────
+    # ── Projection model inputs ─────────────────────────────────────────
     # Built AFTER transaction lag re-fetch so lineup slots are fresh.
     # Include ALL pitchers (including bench/IL) — they need projections
     # for locked past starts. The bench/IL zeroing only affects future
@@ -737,7 +798,7 @@ def get_league_data(team_id: int, week: int) -> dict:
         end_d   = datetime.strptime(mp["end"],   "%Y-%m-%d").date()
         days_in_period = (end_d - start_d).days + 1
 
-    option_b_inputs = []
+    projection_inputs = []
     for entry in roster_entries:
         pool_entry     = entry.get("playerPoolEntry", {})
         player         = pool_entry.get("player", {})
@@ -749,22 +810,25 @@ def get_league_data(team_id: int, week: int) -> dict:
             continue
         is_rp = (14 not in eligible_slots and 13 in eligible_slots)
         pitcher_data = starts_map.get(full_name, {})
-        option_b_inputs.append({
+        pro_team_id  = player.get("proTeamId", 0)
+        projection_inputs.append({
             "name":           full_name,
             "starts":         pitcher_data.get("starts", 0),
             "startDates":     pitcher_data.get("startDates", []),
             "is_rp":          is_rp,
             "days_in_period": days_in_period,
+            "team":           PRO_TEAM_MAP.get(pro_team_id, ""),
         })
 
     proj_fpts_by_name, proj_blend_by_name, fpts_per_start_roster = get_projected_fpts(
-        option_b_inputs, team_woba_factors,
+        projection_inputs, team_woba_factors,
         season=year_int, period=week,
         today_str=datetime.now(timezone.utc).strftime("%Y-%m-%d"),
         savant_current=savant_current,
         savant_previous=savant_previous,
         mlb_stats_current=mlb_stats_current,
         mlb_stats_previous=mlb_stats_previous,
+        game_logs=game_logs_current,
     )
 
     # ── Parse roster ──────────────────────────────────────────────────────
@@ -865,8 +929,8 @@ def get_league_data(team_id: int, week: int) -> dict:
                 fa_team_map[name] = PRO_TEAM_MAP.get(pro_id, "")
         fa_starts_map, _ = get_starts_for_players(fa_names, week, team_map=fa_team_map)
 
-        # Build Option B inputs for free agents — same model as roster players
-        fa_option_b_inputs = []
+        # Build projection inputs for free agents — same model as roster players
+        fa_projection_inputs = []
         for p in fa_players_raw:
             player         = p.get("player", {})
             fa_name        = player.get("fullName", "")
@@ -875,22 +939,25 @@ def get_league_data(team_id: int, week: int) -> dict:
             if not fa_name:
                 continue
             fa_pitcher_data = fa_starts_map.get(fa_name, {})
-            fa_option_b_inputs.append({
+            pro_team_id     = player.get("proTeamId", 0)
+            fa_projection_inputs.append({
                 "name":           fa_name,
                 "starts":         fa_pitcher_data.get("starts", 0),
                 "startDates":     fa_pitcher_data.get("startDates", []),
                 "is_rp":          is_rp,
                 "days_in_period": days_in_period,
+                "team":           PRO_TEAM_MAP.get(pro_team_id, ""),
             })
 
         fa_proj_fpts, fa_proj_blend, fa_fpts_per_start = get_projected_fpts(
-            fa_option_b_inputs, team_woba_factors,
+            fa_projection_inputs, team_woba_factors,
             season=year_int, period=week,
             today_str=datetime.now(timezone.utc).strftime("%Y-%m-%d"),
             savant_current=savant_current,
             savant_previous=savant_previous,
             mlb_stats_current=mlb_stats_current,
             mlb_stats_previous=mlb_stats_previous,
+            game_logs=game_logs_current,
         )
 
         inj_label_map = {
