@@ -198,6 +198,57 @@ https://site.api.espn.com/apis/site/v2/sports/baseball/mlb/scoreboard?dates=YYYY
 
 ---
 
+## Baseball Savant (Statcast)
+`Confidence: 9/10 · Last assessed: April 11, 2026`
+
+### CSV endpoints
+
+Baseball Savant provides public CSV downloads via `&csv=true` parameter. No auth required.
+
+**Expected Statistics (xwOBA, xBA, xSLG, xERA):**
+https://baseballsavant.mlb.com/leaderboard/expected_statistics?type=pitcher&year={year}&position=&team=&filterType=pa&min={min_pa}&csv=true
+
+**Statcast Leaderboard (EV, barrel rate, sweet spot %):**
+https://baseballsavant.mlb.com/leaderboard/statcast?type=pitcher&year={year}&position=&team=&min={min_bbe}&csv=true
+
+**Pitch Arsenal Stats (whiff %, run value per pitch type):**
+https://baseballsavant.mlb.com/leaderboard/pitch-arsenal-stats?type=pitcher&pitchType=&year={year}&team=&min={min_pa}&csv=true
+
+### CSV format quirks
+
+- CSV begins with a BOM character (`\ufeff`) — strip before parsing
+- Player name is a single combined column: `"last_name, first_name"` with values like `"Alcantara, Sandy"`
+- Parse by splitting on comma: `"Last, First"` → `"first last"` lowercase
+- Accent normalization required for cross-source matching (same `strip_accents()` as MLB Stats API)
+
+### Data availability (verified April 11, 2026)
+
+- Expected stats: 250 pitchers (min 25 PA)
+- Statcast leaderboard: 144 pitchers (min 25 BBE)
+- Pitch arsenal: 44 pitchers (min 25 PA, one row per pitch type)
+- Data available from 2015 onward
+- Updates daily during the season
+
+### Key metrics for projection model
+
+| Metric | Source | What it measures | Why it matters |
+|---|---|---|---|
+| xwOBA | Expected stats | Expected weighted on-base average allowed | Single best predictor of pitcher quality — removes luck and defense |
+| xERA | Expected stats | Expected ERA from quality of contact | More stable than actual ERA, especially early season |
+| woba_diff | Expected stats | xwOBA minus actual wOBA | Positive = unlucky pitcher (due for improvement), negative = lucky |
+| Barrel % | Statcast | Rate of barrels (optimal EV + launch angle) allowed | Hard contact quality — lower = better pitcher |
+| EV50 | Statcast | Avg exit velocity of softest 50% of batted balls | Measures weak contact generation — lower = better |
+| Whiff % | Arsenal | Swinging strike rate per pitch type | Stuff quality — higher = better |
+| CSW % | Arsenal | Called strikes + whiffs rate | Overall pitch deception — higher = better |
+
+### Limitations
+
+- Arsenal data has fewer qualifying pitchers early in season (need enough PAs per pitch type)
+- Does NOT provide xFIP or SIERA (those are FanGraphs proprietary) — but xwOBA and xERA are equally or more predictive
+- Pitch-level data (via Statcast Search) is available but returns up to 25,000 rows per query — too heavy for real-time use in a serverless function
+
+---
+
 ## Upstash KV (Redis)
 `Confidence: 9/10 · Last assessed: April 10, 2026`
 
