@@ -14,7 +14,8 @@ from datetime import datetime, timedelta, timezone
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__)))
 from mlb import get_starts_for_players, get_team_woba, MATCHUP_PERIODS, fetch_game_logs, compute_recent_form_fpts, get_park_factor
-from kv import get_locked_projection, set_locked_projection, get_all_locked_projections, cache_get, cache_set
+from kv import (get_locked_projection, set_locked_projection, get_all_locked_projections,
+                set_locked_projection_v2, cache_get, cache_set)
 from savant import fetch_expected_stats
 
 
@@ -419,14 +420,54 @@ def get_projected_fpts(player_starts: list, team_woba_factors: dict = None,
         }
  
         # ── Per-start locking ─────────────────────────────────────────
+        # Lock projections for starts that have happened (today or past).
+        # V1: stores a single float (fpts_per_game) — used by frontend
+        # V2: stores full stat breakdown as JSON — used for accuracy tracking
         if today_str and start_dates and not is_rp:
             for sd in start_dates:
                 date = sd.get("date", "")
                 if date and date <= today_str:
                     existing = get_locked_projection(season, period, full_name, date)
                     if existing is None:
+                        # V1: float for frontend compatibility
                         set_locked_projection(season, period, full_name, date,
                                               round(fpts_per_game, 1))
+                        # V2: full breakdown for accuracy tracking
+                        opp       = sd.get("opponent", "")
+                        is_home   = sd.get("is_home", True)
+                        woba_f    = team_woba_factors.get(opp, 1.0) if team_woba_factors else 1.0
+                        park_tm   = opp if not is_home else player_info.get("team", "")
+                        park_f    = get_park_factor(park_tm) if park_tm else 1.0
+                        start_proj = fpts_per_game * woba_f * park_f
+                        breakdown = {
+                            "fpts": round(start_proj, 1),
+                            "stats": {
+                                "ip": round(blended["ip"], 2),
+                                "so": round(blended["so"], 2),
+                                "h":  round(blended["h"], 2),
+                                "bb": round(blended["bb"], 2),
+                                "er": round(blended["er"], 2),
+                                "hb": round(blended["hb"], 2),
+                                "w":  round(blended["w"], 3),
+                                "l":  round(blended["l"], 3),
+                                "sv": round(blended["sv"], 3),
+                            },
+                            "matchup": {
+                                "opponent": opp,
+                                "woba":     round(woba_f, 3),
+                                "park":     round(park_f, 3),
+                                "parkTeam": park_tm,
+                                "isHome":   is_home,
+                            },
+                            "model": {
+                                "type":         model_label,
+                                "blendWeight":  round(this_year_weight, 2),
+                                "recentForm":   round(recent_form_fpts, 1) if recent_form_fpts is not None else None,
+                                "seasonBase":   season_base,
+                                "adjustedBase": adjusted_base,
+                            },
+                        }
+                        set_locked_projection_v2(season, period, full_name, date, breakdown)
  
         print(f"[espn.py] {full_name} [{model_label}]: "
               f"{round(this_year_weight*100)}% '26 / {round(last_year_weight*100)}% '25 | "
