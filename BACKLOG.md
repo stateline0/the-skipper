@@ -6,20 +6,23 @@ Last updated: April 11, 2026
 
 ## 🔜 Next session priorities
 
-### Model accuracy tracking
+### Implement ESPN stat ID mapping + store actual per-stat results
+- [ ] Add `ESPN_PITCHING_STAT_IDS` constant to `espn.py`: {34: outs, 48: so, 37: h, 42: bb, 45: er, 46: hb, 32: w, 33: l, 57: sv}
+- [ ] Extract individual stats from ESPN `raw_stats` dict in `get_actual_fpts()`
+- [ ] Store actual per-stat results in KV: `actual:{season}:{period}:{player-slug}:{date}` → JSON
+- [ ] Only store for completed games (not today/in-progress)
+- [ ] Pairs with `proj2:` keys for direct projected-vs-actual comparison
+
+### Model accuracy tracking dashboard
 - [ ] Dashboard showing projected vs actual FPTS per start
+- [ ] Per-stat accuracy: projected K vs actual K, projected ER vs actual ER, etc.
 - [ ] Mean absolute error (MAE) per pitcher and overall
 - [ ] Directional accuracy (did we correctly predict above/below average?)
-- [ ] Factor contribution analysis
-- [ ] Uses locked projections in KV as ground truth
-
-### Store actual FPTS in Upstash KV for accuracy analysis
-- [ ] Store actual FPTS per pitcher per start date in KV alongside locked projections
-- [ ] Key schema: `actual:{season}:{period}:{player-slug}:{date}` → float
-- [ ] Required foundation for model accuracy dashboard
+- [ ] Factor contribution analysis (how much did wOBA/park adjustments help?)
+- [ ] Uses v2 locked projections (`proj2:`) + actual stats (`actual:`) from KV as ground truth
 
 ### espn.py full rewrite
-- [ ] File has accumulated many patches and is ~1100 lines
+- [ ] File has accumulated many patches and is ~1150 lines
 - [ ] Clean separation of data fetching, projection model, and API response building
 - [ ] Should be done when a significant change touches multiple sections
 
@@ -35,6 +38,27 @@ Last updated: April 11, 2026
 - [ ] Days since last start (4 vs 5+ day rest performance)
 - [ ] Season pitch count trajectory (fatigue effects)
 - [ ] Most meaningful mid-to-late season
+
+### Vegas odds for W/L projection
+- [ ] Integrate free betting odds API (The Odds API or ESPN scoreboard lines)
+- [ ] Use implied win probability to improve W/L projections (currently discounted 50%)
+- [ ] Could replace flat 50% discount with game-specific probabilities
+
+### Weekly planner / decision automation
+- [ ] AI-powered weekly optimization: recommend add/drop sequence and start/sit decisions
+- [ ] Teach Anthropic API about ESPN transaction rules (daily locks, waiver priority)
+- [ ] Hybrid mode: AI suggests plan, user picks A/B for key decisions, AI outputs full sequence
+- [ ] Prerequisite: accuracy tracking (need to trust projections before automating decisions)
+
+### Prospect monitor
+- [ ] Track top MLB prospects approaching call-up
+- [ ] MLB Stats API minor league rosters + prospect rankings
+- [ ] Alert when top-50 prospect + 40-man roster + corresponding MLB spot opening
+- [ ] 12-24 hour edge over league competitors
+
+### Hitter nudge engine
+- [ ] Lighter-weight than pitcher optimizer — "this waiver wire guy is outperforming your current 2B"
+- [ ] Not a full streamer optimizer, more of a watchlist with performance alerts
 
 ### Dropped streamers refinement
 - [ ] Pull locked projections from KV for dropped players' past starts
@@ -56,6 +80,14 @@ Last updated: April 11, 2026
 - [ ] Dropped players show projFpts 0.0 — could pull locked projections from KV
 
 ---
+
+## ✅ Completed (session 14 — April 11, 2026)
+
+- [x] V2 projection locking — `set_locked_projection_v2()` stores full JSON breakdown per start (PR #64)
+- [x] V2 key schema: `proj2:{season}:{period}:{player-slug}:{date}` → JSON (PR #64)
+- [x] V2 stores per-stat projections, matchup context, and model metadata (PR #64)
+- [x] V1 float locking preserved for frontend compatibility (PR #64)
+- [x] ESPN stat ID mapping discovered and verified: 34=outs, 48=K, 37=H, 42=BB, 45=ER, 46=HBP, 32=W, 33=L, 57=SV
 
 ## ✅ Completed (session 13 — April 11, 2026)
 
@@ -90,9 +122,12 @@ See CHANGELOG.md for full history of PRs #1-#47.
 
 ## 💡 Future ideas
 
-- Hitter optimizer
-- Trade analyzer
-- Push notifications when probable pitchers change
+- Trade analyzer with forward-looking schedule context
+- Waiver wire rankings personalized to roster needs and matchup context
+- Live game decision engine (real-time starts limit optimization)
+- Schedule advantage alerts (2-3 week lookahead for favorable/unfavorable stretches)
+- Opponent scouting report per matchup period
+- Push notifications for pitcher changes, injury news, prospect call-ups
 - Multi-user support / league sharing
 - Mobile app (React Native)
 - Pay for a proper probable pitchers data source once serving real users

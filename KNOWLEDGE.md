@@ -96,6 +96,27 @@ Determines whether a player is an SP, RP, or dual-eligible. This is a player att
 - No single call returns full history — use parallel fetching via `ThreadPoolExecutor`
 - Omitting `scoringPeriodId` returns only the 2 most recent stat entries
 
+### Per-game stat ID mapping (scoring stats)
+`Confidence: 10/10 · Last assessed: April 11, 2026`
+
+ESPN's `raw_stats` dict uses numeric string keys. These are the stat IDs that map to our league's scoring formula, verified by cross-referencing Joe Ryan's April 11 box score (7 IP, 2H, 2R, 2ER, 1BB, 5K, 1HR, 1HBP, W) against raw API output:
+
+| Stat ID | Stat | Scoring Weight | Notes |
+|---|---|---|---|
+| `"34"` | Outs recorded | ÷3 → IP × +3 | 21 outs = 7.0 IP |
+| `"48"` | Strikeouts (K) | +1 | |
+| `"37"` | Hits allowed (H) | -1 | |
+| `"42"` | Walks (BB) | -1 | |
+| `"45"` | Earned runs (ER) | -2 | |
+| `"46"` | Hit batsmen (HBP) | -1 | |
+| `"32"` | Wins (W) | +5 | |
+| `"33"` | Losses (L) | -5 | |
+| `"57"` | Saves (SV) | +5 | Previously confirmed |
+
+Other stat IDs observed but not used in scoring: 35 (batters faced), 36 (pitches), 39 (HR allowed), 44 (runs), 53 (quality starts?), 82 (unknown).
+
+Verification: `appliedTotal = 23.0` = 7×3 + 5×1 + 2×(-1) + 1×(-1) + 2×(-2) + 1×(-1) + 1×5 = 21 + 5 - 2 - 1 - 4 - 1 + 5 = 23 ✅
+
 ### Multiple views in one request
 `Confidence: 9/10 · Last assessed: March 28, 2026`
 
@@ -268,9 +289,17 @@ Credentials: KV_REST_API_URL and KV_REST_API_TOKEN environment variables
 Vercel removed native KV — Upstash for Redis is the direct replacement
 
 Key schemas
-Locked projections (write-once, permanent):
+Locked projections v1 (write-once, permanent):
 proj:{season}:{period}:{player-slug}:{date} → float
 Example: proj:2026:3:garrett-crochet:2026-04-07 → 17.6
+
+Locked projections v2 (write-once, permanent):
+proj2:{season}:{period}:{player-slug}:{date} → JSON
+Example: proj2:2026:3:garrett-crochet:2026-04-07 → {"fpts": 16.4, "stats": {...}, "matchup": {...}, "model": {...}}
+
+Actual stats (planned, not yet implemented):
+actual:{season}:{period}:{player-slug}:{date} → JSON with per-stat actuals from ESPN API
+
 Data caching (TTL-based):
 cache:savant:{year}      → JSON dict of expected stats by pitcher name
 cache:mlb-stats:{year}   → JSON dict of season pitching stats by pitcher name  
@@ -297,8 +326,10 @@ Data browser: Vercel → Storage → the-skipper-kv → Open in Upstash
 
 Helper functions (api/kv.py)
 
-get_locked_projection() / set_locked_projection() — per-start projection locks
-get_all_locked_projections() — fetch all locks for a period (prefix query)
+get_locked_projection() / set_locked_projection() — per-start projection locks (v1, float)
+get_all_locked_projections() — fetch all v1 locks for a period (prefix query)
+set_locked_projection_v2() — per-start projection locks (v2, JSON breakdown)
+get_locked_projection_v2() / get_all_locked_projections_v2() — read v2 locks
 cache_get(key) → parsed JSON dict or None
 cache_set(key, data, ttl_seconds=None) → store JSON with optional TTL
 ---
@@ -395,10 +426,21 @@ Park determined by home team: home start = pitcher's team park, away start = opp
 Savant park factors page is JS-rendered (no CSV endpoint) — hardcoding is standard approach
 
 Projection locking
+`Confidence: 9/10 · Last assessed: April 11, 2026`
 
-At game time (today or past), per-start projections locked into Upstash KV
-Locked projections never recalculated — frozen at time of the game
-Enables future model accuracy analysis: actual - projected per start
+**V1 (float):** At game time (today or past), per-start `fpts_per_game` locked into Upstash KV as a float.
+Key schema: `proj:{season}:{period}:{player-slug}:{date}` → float
+Used by frontend to display locked projections in past/today cells.
+
+**V2 (JSON breakdown):** Full per-stat projection + matchup context + model metadata locked as JSON.
+Key schema: `proj2:{season}:{period}:{player-slug}:{date}` → JSON object
+Stores: `fpts` (matchup-adjusted), `stats` (ip/so/h/bb/er/hb/w/l/sv), `matchup` (opponent/woba/park/parkTeam/isHome), `model` (type/blendWeight/recentForm/seasonBase/adjustedBase)
+Used for accuracy tracking — compare per-stat projections against actual results.
+
+Both v1 and v2 use NX flag (write-once, never overwritten).
+V1 and v2 are written simultaneously in `espn.py` per-start locking block.
+
+**Planned:** `actual:{season}:{period}:{player-slug}:{date}` → JSON with actual per-stat results from ESPN API, using stat ID mapping.
 
 Projection breakdown tooltip
 
@@ -416,7 +458,7 @@ Layer 2 ✅ COMPLETE — Recent form weighting (rolling last 4 starts)
 Layer 3 ✅ COMPLETE — Park factors (dampened 50%)
 Layer 4 PENDING — Platoon splits
 Layer 5 PENDING — Rest & workload
-Accuracy tracking PENDING — Compare locked projections vs actual FPTS
+Accuracy tracking IN PROGRESS — V2 locking done, stat ID mapping done, actual stats storage + dashboard pending
 
 ---
 

@@ -2,6 +2,40 @@
 
 ---
 
+## Session 14 — April 11, 2026
+
+V2 projection locking with per-stat breakdown, ESPN stat ID mapping discovery. One PR shipped (#64).
+
+### Key learnings this session
+- Upstash Redis stores JSON natively via `json.dumps()` — same NX (write-once) flag works for JSON values as for floats.
+- `proj2:` key prefix separates v2 rich data from v1 floats — both systems coexist without breaking the frontend.
+- ESPN per-game `raw_stats` dict uses numeric string keys (e.g., `"34"`, `"57"`) — stat ID mapping not publicly documented.
+- Verified ESPN stat ID mapping by cross-referencing `raw_stats` output against Joe Ryan's confirmed box score (7 IP, 2H, 2R, 2ER, 1BB, 5K, 1HR, 1HBP, W).
+- Vercel free tier doesn't show full serverless function log output — use direct API calls via terminal (`python3 -c "..."`) to inspect ESPN response data instead.
+- Today's data is never cached by `get_actual_fpts()` (`date_str >= today_str` → always fetches fresh) — useful for diagnostic data extraction.
+- `git commit --amend` on `main` after a squash merge causes local/remote divergence — fix with `git reset --hard origin/main`.
+
+### V2 projection locking (PR #64)
+- `api/kv.py`: new functions `set_locked_projection_v2()`, `get_locked_projection_v2()`, `get_all_locked_projections_v2()`
+- Key schema: `proj2:{season}:{period}:{player-slug}:{date}` → JSON object
+- Each locked projection now stores:
+  - `fpts`: matchup-adjusted per-start projection
+  - `stats`: per-stat projections (ip, so, h, bb, er, hb, w, l, sv)
+  - `matchup`: opponent, wOBA factor, park factor, park team, home/away
+  - `model`: model type, blend weight, recent form, season base, adjusted base
+- V1 float locking unchanged — frontend compatibility preserved
+- V2 confirmed working in Upstash data browser
+
+### ESPN stat ID mapping (discovered, not yet implemented)
+- Extracted raw ESPN per-game stat dict via terminal API call for Joe Ryan (April 11 vs DET)
+- Complete mapping for all 9 scoring stats confirmed:
+  - 34 = outs recorded (÷3 for IP), 48 = strikeouts, 37 = hits allowed
+  - 42 = walks, 45 = earned runs, 46 = hit batsmen
+  - 32 = wins, 33 = losses, 57 = saves
+- Verified: `appliedTotal = 23.0` matches formula output exactly with these IDs
+
+---
+
 ## Session 13 — April 11, 2026
 
 Projection model layers 2+3, projection breakdown tooltip, option_b rename. One PR shipped (#60).
