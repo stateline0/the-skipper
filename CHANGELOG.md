@@ -2,6 +2,25 @@
 
 ---
 
+## Session 16 - April 12, 2026
+
+### Mobile-responsive layout (PR #69)
+- Sidebar collapses on mobile (768px and below), hidden by default
+- Hamburger button (☰/✕) in header toggles sidebar open/closed
+- Dark overlay behind sidebar when open — tapping outside closes it
+- Nav link clicks auto-close the sidebar after navigating
+- Reduced content padding on mobile for more breathing room
+- iPad portrait gets mobile layout, iPad landscape gets full desktop layout
+- Moved layout-structural styles from inline React to globals.css to enable @media queries
+
+### Key learnings this session
+- React inline `style={}` props cannot use `@media` queries — responsive breakpoints require real CSS (in a .css file or CSS-in-JS library)
+- 768px is the standard mobile breakpoint — iPad portrait hits this exactly, iPad landscape (1024px) gets desktop layout
+- `position: fixed` with `left: -260px` / `left: 0` + `transition` is the standard pattern for slide-in mobile sidebars
+- Keep visual/branding changes (color scheme) in separate PRs from structural/layout changes for cleaner review and easier rollback
+
+---
+
 ## Session 15 — April 12, 2026
 
 ESPN stat ID verification, actual per-stat storage, accuracy tracking dashboard. Three PRs shipped (#66–#68).

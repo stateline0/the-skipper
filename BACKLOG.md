@@ -22,6 +22,9 @@ Last updated: April 12, 2026
 - [ ] Clean separation of data fetching, projection model, and API response building
 - [ ] Should be done when a significant change touches multiple sections
 
+### Color Scheme Refresh
+- [ ] Color scheme refresh — assess and update the site's color palette
+
 ---
 
 ## 📋 Backlog (lower priority)
@@ -65,6 +68,10 @@ Last updated: April 12, 2026
 - [ ] Dropped players show projFpts 0.0 — could pull locked projections from KV
 
 ---
+
+## ✅ Completed (session 16 — April 12, 2026)
+- [x] Sidebar collapses on mobile (PR #69)
+- [x] Top header gets hamburger menu on small screens (PR #69)
 
 ## ✅ Completed (session 15 — April 12, 2026)
 
