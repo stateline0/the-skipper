@@ -16,6 +16,22 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__)))
 from mlb import get_starts_for_players, get_team_woba, MATCHUP_PERIODS, fetch_game_logs, compute_recent_form_fpts, get_park_factor
 from kv import (get_locked_projection, set_locked_projection, get_all_locked_projections,
                 set_locked_projection_v2, cache_get, cache_set)
+
+# ESPN per-game stat ID mapping for pitching scoring stats.
+# Verified against Joe Ryan (W, 7IP/2H/2ER/1BB/1HBP/5K = 23.0 FPTS)
+# and Kyle Harrison (L, 4.1IP/4H/2ER/1BB/1HBP/1K = -1.0 FPTS).
+# See KNOWLEDGE.md for full verification details.
+ESPN_PITCHING_STAT_IDS = {
+    "34": "outs",  # outs recorded (divide by 3 for IP)
+    "48": "so",    # strikeouts
+    "37": "h",     # hits allowed
+    "42": "bb",    # walks
+    "45": "er",    # earned runs
+    "46": "hb",    # hit batsmen
+    "53": "w",     # wins (per-game, not season total)
+    "54": "l",     # losses (per-game, not season total)
+    "57": "sv",    # saves
+}
 from savant import fetch_expected_stats
 
 
@@ -565,6 +581,7 @@ def get_actual_fpts(past_dates: list, player_names: set, headers: dict, cookies:
                 day_saves   = {}
                 day_bench   = set()
                 day_my_team = {}
+                day_actual_stats = {}
 
                 for team in data.get("teams", []):
                     is_my_team = (team.get("id") == team_id)
@@ -602,6 +619,25 @@ def get_actual_fpts(past_dates: list, player_names: set, headers: dict, cookies:
                                 sv = raw_stats.get("57", 0)
                                 if sv:
                                     day_saves[name] = int(sv)
+                                # Extract per-stat actuals for accuracy tracking
+                                if raw_stats and fpts != 0:
+                                    outs = raw_stats.get("34", 0)
+                                    actual_breakdown = {
+                                        "fpts": round(float(fpts), 1),
+                                        "stats": {
+                                            "ip": round(float(outs) / 3, 2),
+                                            "so": float(raw_stats.get("48", 0)),
+                                            "h":  float(raw_stats.get("37", 0)),
+                                            "bb": float(raw_stats.get("42", 0)),
+                                            "er": float(raw_stats.get("45", 0)),
+                                            "hb": float(raw_stats.get("46", 0)),
+                                            "w":  float(raw_stats.get("53", 0)),
+                                            "l":  float(raw_stats.get("54", 0)),
+                                            "sv": float(raw_stats.get("57", 0)),
+                                        },
+                                    }
+                                    if not day_actual_stats.get(name):
+                                        day_actual_stats[name] = actual_breakdown
                                 break
 
                 # Apply to result dicts (filtered by player_names)
@@ -619,10 +655,11 @@ def get_actual_fpts(past_dates: list, player_names: set, headers: dict, cookies:
                 if date_str < today_str:
                     try:
                         cache_set(f"cache:daily:{date_str}", {
-                            "fpts":    day_fpts,
-                            "saves":   day_saves,
-                            "bench":   list(day_bench),
-                            "my_team": day_my_team,
+                            "fpts":         day_fpts,
+                            "saves":        day_saves,
+                            "bench":        list(day_bench),
+                            "my_team":      day_my_team,
+                            "actual_stats": day_actual_stats,
                         })
                     except Exception:
                         pass
