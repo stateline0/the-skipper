@@ -96,29 +96,6 @@ Determines whether a player is an SP, RP, or dual-eligible. This is a player att
 - No single call returns full history — use parallel fetching via `ThreadPoolExecutor`
 - Omitting `scoringPeriodId` returns only the 2 most recent stat entries
 
-### Per-game stat ID mapping (scoring stats)
-`Confidence: 10/10 · Last assessed: April 11, 2026`
-
-ESPN's `raw_stats` dict uses numeric string keys. These are the stat IDs that map to our league's scoring formula, verified by cross-referencing Joe Ryan's April 11 box score (7 IP, 2H, 2R, 2ER, 1BB, 5K, 1HR, 1HBP, W) against raw API output:
-
-| Stat ID | Stat | Scoring Weight | Notes |
-|---|---|---|---|
-|| `"34"` | Outs recorded | ÷3 → IP × +3 | 21 outs = 7.0 IP |
-| `"48"` | Strikeouts (K) | +1 | |
-| `"37"` | Hits allowed (H) | -1 | Harrison H=4 ≠ ER=2 confirms this is H not ER |
-| `"42"` | Walks (BB) | -1 | |
-| `"45"` | Earned runs (ER) | -2 | Harrison ER=2 ≠ H=4 confirms this is ER not H |
-| `"46"` | Hit batsmen (HBP) | -1 | Confirmed via play-by-play (not shown in condensed box) |
-| `"53"` | Wins (W) | +5 | Ryan W=1 (stat 53=1), Harrison W=0 (stat 53=0) |
-| `"54"` | Losses (L) | -5 | Harrison L=1 (stat 54=1), Ryan L=0 (stat 54=0) |
-| `"57"` | Saves (SV) | +5 | Previously confirmed |
-
-Other stat IDs observed but not used in scoring: 32 (season W total), 33 (season L total), 35 (batters faced), 36 (pitches), 39 (HR allowed?), 44 (runs), 82 (unknown).
-
-Verification (two pitchers):
-- Joe Ryan (W, 7IP/2H/2ER/1BB/1HBP/5K): `23.0` = 21 + 5 - 2 - 1 - 4 - 1 + 5 = 23 ✅
-- Kyle Harrison (L, 4.1IP/4H/2ER/1BB/1HBP/1K): `-1.0` = 13 + 1 - 4 - 1 - 4 - 1 - 5 = -1 ✅
-
 ### Multiple views in one request
 `Confidence: 9/10 · Last assessed: March 28, 2026`
 
@@ -291,17 +268,9 @@ Credentials: KV_REST_API_URL and KV_REST_API_TOKEN environment variables
 Vercel removed native KV — Upstash for Redis is the direct replacement
 
 Key schemas
-Locked projections v1 (write-once, permanent):
+Locked projections (write-once, permanent):
 proj:{season}:{period}:{player-slug}:{date} → float
 Example: proj:2026:3:garrett-crochet:2026-04-07 → 17.6
-
-Locked projections v2 (write-once, permanent):
-proj2:{season}:{period}:{player-slug}:{date} → JSON
-Example: proj2:2026:3:garrett-crochet:2026-04-07 → {"fpts": 16.4, "stats": {...}, "matchup": {...}, "model": {...}}
-
-Actual stats (planned, not yet implemented):
-actual:{season}:{period}:{player-slug}:{date} → JSON with per-stat actuals from ESPN API
-
 Data caching (TTL-based):
 cache:savant:{year}      → JSON dict of expected stats by pitcher name
 cache:mlb-stats:{year}   → JSON dict of season pitching stats by pitcher name  
@@ -328,10 +297,8 @@ Data browser: Vercel → Storage → the-skipper-kv → Open in Upstash
 
 Helper functions (api/kv.py)
 
-get_locked_projection() / set_locked_projection() — per-start projection locks (v1, float)
-get_all_locked_projections() — fetch all v1 locks for a period (prefix query)
-set_locked_projection_v2() — per-start projection locks (v2, JSON breakdown)
-get_locked_projection_v2() / get_all_locked_projections_v2() — read v2 locks
+get_locked_projection() / set_locked_projection() — per-start projection locks
+get_all_locked_projections() — fetch all locks for a period (prefix query)
 cache_get(key) → parsed JSON dict or None
 cache_set(key, data, ttl_seconds=None) → store JSON with optional TTL
 ---
@@ -428,21 +395,10 @@ Park determined by home team: home start = pitcher's team park, away start = opp
 Savant park factors page is JS-rendered (no CSV endpoint) — hardcoding is standard approach
 
 Projection locking
-`Confidence: 9/10 · Last assessed: April 11, 2026`
 
-**V1 (float):** At game time (today or past), per-start `fpts_per_game` locked into Upstash KV as a float.
-Key schema: `proj:{season}:{period}:{player-slug}:{date}` → float
-Used by frontend to display locked projections in past/today cells.
-
-**V2 (JSON breakdown):** Full per-stat projection + matchup context + model metadata locked as JSON.
-Key schema: `proj2:{season}:{period}:{player-slug}:{date}` → JSON object
-Stores: `fpts` (matchup-adjusted), `stats` (ip/so/h/bb/er/hb/w/l/sv), `matchup` (opponent/woba/park/parkTeam/isHome), `model` (type/blendWeight/recentForm/seasonBase/adjustedBase)
-Used for accuracy tracking — compare per-stat projections against actual results.
-
-Both v1 and v2 use NX flag (write-once, never overwritten).
-V1 and v2 are written simultaneously in `espn.py` per-start locking block.
-
-**Planned:** `actual:{season}:{period}:{player-slug}:{date}` → JSON with actual per-stat results from ESPN API, using stat ID mapping.
+At game time (today or past), per-start projections locked into Upstash KV
+Locked projections never recalculated — frozen at time of the game
+Enables future model accuracy analysis: actual - projected per start
 
 Projection breakdown tooltip
 
@@ -453,6 +409,26 @@ Start mode shows: base rate, lineup wOBA factor, park factor, projected
 Uses `position: fixed` to escape `overflow: auto` table containers
 `projectionDetails` and `faProjectionDetails` added to API response from `get_projected_fpts()`
 
+Accuracy tracking dashboard
+`Confidence: 9/10 · Last assessed: April 12, 2026`
+
+`api/accuracy.py` endpoint reads `proj2:` keys and `cache:daily:` actual_stats, matches by player slug.
+`pages/accuracy.tsx` displays summary tiles, per-stat MAE bar chart, and expandable per-start comparisons.
+Period selector allows viewing any matchup period.
+
+Matching logic: proj2 keys use slugs, actual_stats uses full names. Matching done by slugifying actual names.
+
+Limitations:
+- Only league-rostered pitchers have actual stats (free agents not in `mRoster` data)
+- V2 projections only exist from session 14 onward — older starts only have v1 floats
+- Data accumulates over time — dashboard becomes more useful as more starts complete
+
+Summary metrics computed:
+- MAE (mean absolute error) — average |projected - actual| across all matched starts
+- Directional accuracy — % of starts where we correctly predicted above/below average
+- Per-stat MAE — average error for each individual stat (IP, K, H, BB, ER, HBP, W, L, SV)
+- Per-stat bias — average signed error (positive = over-projecting, negative = under-projecting)
+
 Model architecture roadmap
 
 Layer 1 ✅ COMPLETE — Savant xERA/xBA hybrid base rate
@@ -460,7 +436,7 @@ Layer 2 ✅ COMPLETE — Recent form weighting (rolling last 4 starts)
 Layer 3 ✅ COMPLETE — Park factors (dampened 50%)
 Layer 4 PENDING — Platoon splits
 Layer 5 PENDING — Rest & workload
-Accuracy tracking IN PROGRESS — V2 locking done, stat ID mapping done, actual stats storage + dashboard pending
+Accuracy tracking PENDING — Compare locked projections vs actual FPTS
 
 ---
 

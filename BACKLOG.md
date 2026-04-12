@@ -1,25 +1,21 @@
 # The Skipper — Backlog
 
-Last updated: April 11, 2026
+Last updated: April 12, 2026
 
 ---
 
 ## 🔜 Next session priorities
 
-### Implement ESPN stat ID mapping + store actual per-stat results
-- [ ] Add `ESPN_PITCHING_STAT_IDS` constant to `espn.py`: {34: outs, 48: so, 37: h, 42: bb, 45: er, 46: hb, 32: w, 33: l, 57: sv}
-- [ ] Extract individual stats from ESPN `raw_stats` dict in `get_actual_fpts()`
-- [ ] Store actual per-stat results in KV: `actual:{season}:{period}:{player-slug}:{date}` → JSON
-- [ ] Only store for completed games (not today/in-progress)
-- [ ] Pairs with `proj2:` keys for direct projected-vs-actual comparison
+### Weekly planner / decision automation MVP
+- [ ] AI-powered weekly optimization: recommend add/drop sequence and start/sit decisions
+- [ ] Teach Anthropic API about ESPN transaction rules (daily locks, waiver priority)
+- [ ] Hybrid mode: AI suggests plan, user picks A/B for key decisions, AI outputs full sequence
+- [ ] Uses projection model data as input
 
-### Model accuracy tracking dashboard
-- [ ] Dashboard showing projected vs actual FPTS per start
-- [ ] Per-stat accuracy: projected K vs actual K, projected ER vs actual ER, etc.
-- [ ] Mean absolute error (MAE) per pitcher and overall
-- [ ] Directional accuracy (did we correctly predict above/below average?)
-- [ ] Factor contribution analysis (how much did wOBA/park adjustments help?)
-- [ ] Uses v2 locked projections (`proj2:`) + actual stats (`actual:`) from KV as ground truth
+### Vegas odds for W/L projection
+- [ ] Integrate free betting odds API (The Odds API or ESPN scoreboard lines)
+- [ ] Use implied win probability to improve W/L projections (currently discounted 50%)
+- [ ] Could replace flat 50% discount with game-specific probabilities
 
 ### espn.py full rewrite
 - [ ] File has accumulated many patches and is ~1150 lines
@@ -38,17 +34,6 @@ Last updated: April 11, 2026
 - [ ] Days since last start (4 vs 5+ day rest performance)
 - [ ] Season pitch count trajectory (fatigue effects)
 - [ ] Most meaningful mid-to-late season
-
-### Vegas odds for W/L projection
-- [ ] Integrate free betting odds API (The Odds API or ESPN scoreboard lines)
-- [ ] Use implied win probability to improve W/L projections (currently discounted 50%)
-- [ ] Could replace flat 50% discount with game-specific probabilities
-
-### Weekly planner / decision automation
-- [ ] AI-powered weekly optimization: recommend add/drop sequence and start/sit decisions
-- [ ] Teach Anthropic API about ESPN transaction rules (daily locks, waiver priority)
-- [ ] Hybrid mode: AI suggests plan, user picks A/B for key decisions, AI outputs full sequence
-- [ ] Prerequisite: accuracy tracking (need to trust projections before automating decisions)
 
 ### Prospect monitor
 - [ ] Track top MLB prospects approaching call-up
@@ -75,44 +60,43 @@ Last updated: April 11, 2026
 
 ## 🐛 Known bugs
 
-- [ ] Free agent actual FPTS only available for players who were rostered at time of start — ESPN API limitation
+- [ ] Free agent actual FPTS only available for players who were rostered at time of start — ESPN API limitation (affects accuracy dashboard too)
 - [ ] `vercel dev` does not serve Python API routes locally (Vercel CLI v50+ known issue)
 - [ ] Dropped players show projFpts 0.0 — could pull locked projections from KV
 
 ---
 
+## ✅ Completed (session 15 — April 12, 2026)
+
+- [x] ESPN stat ID mapping verified (10/10 confidence) — W/L corrected to stat 53/54 (PR #66)
+- [x] `ESPN_PITCHING_STAT_IDS` constant added to `espn.py` (PR #66)
+- [x] Actual per-stat extraction in `get_actual_fpts()` — all 9 scoring stats from ESPN raw_stats (PR #66)
+- [x] `actual_stats` stored in daily cache alongside fpts/saves/bench/my_team (PR #66)
+- [x] Accuracy dashboard: `api/accuracy.py` endpoint + `pages/accuracy.tsx` page (PR #67/68)
+- [x] Summary tiles, per-stat MAE bar chart with bias, expandable per-start comparison table
+- [x] Added to sidebar navigation (PR #67/68)
+- [x] Old daily caches cleared to re-populate with actual_stats
+
 ## ✅ Completed (session 14 — April 11, 2026)
 
 - [x] V2 projection locking — `set_locked_projection_v2()` stores full JSON breakdown per start (PR #64)
 - [x] V2 key schema: `proj2:{season}:{period}:{player-slug}:{date}` → JSON (PR #64)
-- [x] V2 stores per-stat projections, matchup context, and model metadata (PR #64)
 - [x] V1 float locking preserved for frontend compatibility (PR #64)
-- [x] ESPN stat ID mapping discovered and verified: 34=outs, 48=K, 37=H, 42=BB, 45=ER, 46=HBP, 32=W, 33=L, 57=SV
 
 ## ✅ Completed (session 13 — April 11, 2026)
 
-- [x] Layer 2: Recent form weighting — `fetch_game_logs()`, `compute_recent_form_fpts()`, 60/40 season+recent blend (PR #60)
-- [x] Layer 3: Park factors — `PARK_FACTORS` dict (30 teams), `get_park_factor()` dampened 50%, per-start multiplier (PR #60)
-- [x] `is_home` field added to startDates for correct home/away park identification (PR #60)
-- [x] Game log caching — 24hr TTL (`cache:game-logs:YYYY`) (PR #60)
-- [x] Projection tooltip — `ProjectionTooltip` component with total + per-start breakdown modes (PR #60)
-- [x] Tooltip wired into both My Team and Free Agents pages (PR #60)
+- [x] Layer 2: Recent form weighting (PR #60)
+- [x] Layer 3: Park factors (PR #60)
+- [x] Projection tooltip with total + per-start breakdown modes (PR #60)
 - [x] Renamed `option_b_inputs` → `projection_inputs` throughout (PR #60)
-- [x] Bumped CACHE_VERSION on both pages (PR #60)
 
 ## ✅ Completed (session 12 — April 11, 2026)
 
-- [x] Projection sequencing fix — option_b_inputs after transaction lag re-fetch (PR #49)
-- [x] Bench/IL normalization — all pitchers treated identically for projections (PR #49)
-- [x] KNOWLEDGE.md created with confidence-rated API reference (PR #49)
-- [x] Tile redesign — actual starts, projected starts, SP-only count (PR #51)
-- [x] Dropped streamer detection — EX badge, sort order fix (PRs #52, #53)
-- [x] Baseball Savant data fetcher — `api/savant.py` verified (PR #54)
-- [x] Savant-powered hybrid projection model — xBA/xERA replace luck-influenced stats (PR #56)
-- [x] Savant data caching — 2025 permanent, 2026 24hr TTL (PR #57)
-- [x] MLB Stats API caching — same pattern (PR #58)
-- [x] Daily actual FPTS caching — completed days permanent (PR #59)
-- [x] Response time reduced from ~4.8s to ~2.1s (56% improvement)
+- [x] Savant-powered hybrid projection model (PR #56)
+- [x] All caching infrastructure — Savant, MLB Stats, daily FPTS (PRs #57-59)
+- [x] Dropped streamer detection (PRs #52-53)
+- [x] KNOWLEDGE.md, tile redesign, bench/IL normalization (PRs #49-51, 54-55)
+- [x] Response time reduced from ~4.8s to ~2.1s
 
 ## ✅ Completed (sessions 1-11)
 
