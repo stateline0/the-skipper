@@ -103,19 +103,21 @@ ESPN's `raw_stats` dict uses numeric string keys. These are the stat IDs that ma
 
 | Stat ID | Stat | Scoring Weight | Notes |
 |---|---|---|---|
-| `"34"` | Outs recorded | ÷3 → IP × +3 | 21 outs = 7.0 IP |
+|| `"34"` | Outs recorded | ÷3 → IP × +3 | 21 outs = 7.0 IP |
 | `"48"` | Strikeouts (K) | +1 | |
-| `"37"` | Hits allowed (H) | -1 | |
+| `"37"` | Hits allowed (H) | -1 | Harrison H=4 ≠ ER=2 confirms this is H not ER |
 | `"42"` | Walks (BB) | -1 | |
-| `"45"` | Earned runs (ER) | -2 | |
-| `"46"` | Hit batsmen (HBP) | -1 | |
-| `"32"` | Wins (W) | +5 | |
-| `"33"` | Losses (L) | -5 | |
+| `"45"` | Earned runs (ER) | -2 | Harrison ER=2 ≠ H=4 confirms this is ER not H |
+| `"46"` | Hit batsmen (HBP) | -1 | Confirmed via play-by-play (not shown in condensed box) |
+| `"53"` | Wins (W) | +5 | Ryan W=1 (stat 53=1), Harrison W=0 (stat 53=0) |
+| `"54"` | Losses (L) | -5 | Harrison L=1 (stat 54=1), Ryan L=0 (stat 54=0) |
 | `"57"` | Saves (SV) | +5 | Previously confirmed |
 
-Other stat IDs observed but not used in scoring: 35 (batters faced), 36 (pitches), 39 (HR allowed), 44 (runs), 53 (quality starts?), 82 (unknown).
+Other stat IDs observed but not used in scoring: 32 (season W total), 33 (season L total), 35 (batters faced), 36 (pitches), 39 (HR allowed?), 44 (runs), 82 (unknown).
 
-Verification: `appliedTotal = 23.0` = 7×3 + 5×1 + 2×(-1) + 1×(-1) + 2×(-2) + 1×(-1) + 1×5 = 21 + 5 - 2 - 1 - 4 - 1 + 5 = 23 ✅
+Verification (two pitchers):
+- Joe Ryan (W, 7IP/2H/2ER/1BB/1HBP/5K): `23.0` = 21 + 5 - 2 - 1 - 4 - 1 + 5 = 23 ✅
+- Kyle Harrison (L, 4.1IP/4H/2ER/1BB/1HBP/1K): `-1.0` = 13 + 1 - 4 - 1 - 4 - 1 - 5 = -1 ✅
 
 ### Multiple views in one request
 `Confidence: 9/10 · Last assessed: March 28, 2026`
