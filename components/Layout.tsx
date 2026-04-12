@@ -2,12 +2,13 @@ import Link from 'next/link'
 import { useRouter } from 'next/router'
 import { signOut, useSession } from 'next-auth/react'
 
-// These are the four main nav items
+// These are the five main nav items
 // 'href' is the URL, 'label' is what shows in the sidebar
 const NAV_ITEMS = [
   { href: '/dashboard',        label: 'Dashboard',        icon: '⚡' },
   { href: '/my-team',          label: 'My Team',           icon: '⚾' },
   { href: '/free-agents',      label: 'Free Agents',       icon: '🔍' },
+  { href: '/accuracy',         label: 'Accuracy',          icon: '📊' },
   { href: '/recommendations',  label: 'Recommendations',   icon: '🤖' },
 ]
 
