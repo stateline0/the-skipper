@@ -2,6 +2,36 @@
 
 ---
 
+## Session 15 — April 12, 2026
+
+ESPN stat ID verification, actual per-stat storage, accuracy tracking dashboard. Three PRs shipped (#66–#68).
+
+### Key learnings this session
+- ESPN per-game stat IDs for W/L are 53/54 (per-game), NOT 32/33 (which are season cumulative totals). Verified by cross-referencing two pitchers with opposite W/L outcomes.
+- ESPN condensed box score doesn't show HBP column — must check detailed pitching notes or play-by-play. Both Joe Ryan and Kyle Harrison had 1 HBP that was invisible in the condensed view but confirmed by the formula check.
+- When verifying stat ID mappings, always use two pitchers with different values for ambiguous stats (e.g., H=4 vs ER=2 for Harrison definitively distinguished stat 37 from stat 45).
+- `actual_stats` in daily cache only contains league-rostered players — free agents don't appear in `mRoster` view. Known ESPN API limitation.
+- Adding `actual_stats` to daily cache doesn't break old cached days — they simply don't have the field, and code handles the absence gracefully.
+
+### Verified ESPN stat ID mapping (PR #66)
+- Corrected W/L from stat 32/33 to stat 53/54
+- Verified all 9 scoring stats against two box scores:
+  - Joe Ryan (W, 7IP/2H/2ER/1BB/1HBP/5K) = 23.0 FPTS ✅
+  - Kyle Harrison (L, 4.1IP/4H/2ER/1BB/1HBP/1K) = -1.0 FPTS ✅
+- `ESPN_PITCHING_STAT_IDS` constant added to `espn.py`
+
+### Actual per-stat extraction (PR #66)
+- `get_actual_fpts()` now extracts all 9 scoring stats from ESPN `raw_stats` per game
+- Stored in daily cache as `actual_stats` field: `{player_name: {fpts, stats: {ip, so, h, bb, er, hb, w, l, sv}}}`
+- Structure mirrors v2 projection breakdown for direct comparison
+
+### Accuracy tracking dashboard (PR #67/68)
+- New `api/accuracy.py` serverless endpoint
+- New `pages/accuracy.tsx` dashboard with summary tiles, per-stat MAE bar chart, expandable start rows
+- Added "Accuracy" to sidebar navigation
+
+---
+
 ## Session 14 — April 11, 2026
 
 V2 projection locking with per-stat breakdown, ESPN stat ID mapping discovery. One PR shipped (#64).
@@ -10,29 +40,17 @@ V2 projection locking with per-stat breakdown, ESPN stat ID mapping discovery. O
 - Upstash Redis stores JSON natively via `json.dumps()` — same NX (write-once) flag works for JSON values as for floats.
 - `proj2:` key prefix separates v2 rich data from v1 floats — both systems coexist without breaking the frontend.
 - ESPN per-game `raw_stats` dict uses numeric string keys (e.g., `"34"`, `"57"`) — stat ID mapping not publicly documented.
-- Verified ESPN stat ID mapping by cross-referencing `raw_stats` output against Joe Ryan's confirmed box score (7 IP, 2H, 2R, 2ER, 1BB, 5K, 1HR, 1HBP, W).
-- Vercel free tier doesn't show full serverless function log output — use direct API calls via terminal (`python3 -c "..."`) to inspect ESPN response data instead.
-- Today's data is never cached by `get_actual_fpts()` (`date_str >= today_str` → always fetches fresh) — useful for diagnostic data extraction.
+- Today's data is never cached by `get_actual_fpts()` (`date_str >= today_str` → always fetches fresh).
 - `git commit --amend` on `main` after a squash merge causes local/remote divergence — fix with `git reset --hard origin/main`.
 
 ### V2 projection locking (PR #64)
 - `api/kv.py`: new functions `set_locked_projection_v2()`, `get_locked_projection_v2()`, `get_all_locked_projections_v2()`
 - Key schema: `proj2:{season}:{period}:{player-slug}:{date}` → JSON object
-- Each locked projection now stores:
-  - `fpts`: matchup-adjusted per-start projection
-  - `stats`: per-stat projections (ip, so, h, bb, er, hb, w, l, sv)
-  - `matchup`: opponent, wOBA factor, park factor, park team, home/away
-  - `model`: model type, blend weight, recent form, season base, adjusted base
 - V1 float locking unchanged — frontend compatibility preserved
-- V2 confirmed working in Upstash data browser
 
-### ESPN stat ID mapping (discovered, not yet implemented)
-- Extracted raw ESPN per-game stat dict via terminal API call for Joe Ryan (April 11 vs DET)
-- Complete mapping for all 9 scoring stats confirmed:
-  - 34 = outs recorded (÷3 for IP), 48 = strikeouts, 37 = hits allowed
-  - 42 = walks, 45 = earned runs, 46 = hit batsmen
-  - 32 = wins, 33 = losses, 57 = saves
-- Verified: `appliedTotal = 23.0` matches formula output exactly with these IDs
+### ESPN stat ID mapping (discovered, later corrected in session 15)
+- Extracted raw ESPN per-game stat dict via terminal API call for Joe Ryan
+- Initial mapping obtained — W/L corrected from 32/33 to 53/54 in session 15
 
 ---
 
@@ -63,19 +81,12 @@ Projection model layers 2+3, projection breakdown tooltip, option_b rename. One 
 - Home starts use pitcher's team park, away starts use opponent's park
 
 ### Projection breakdown tooltip (PR #60)
-- New `components/ProjectionTooltip.tsx` — reusable hover popover with two modes:
-  - **Total mode** (Proj FPTS column): shows season base, model type, year blend, recent form, per-start wOBA/park adjustments, total
-  - **Start mode** (schedule grid cells): shows base rate, lineup factor, park factor, projected per-start
+- New `components/ProjectionTooltip.tsx` — reusable hover popover with two modes
 - Uses `position: fixed` to escape `overflow: auto` table containers
-- Dark theme (`--ink` background) with color-coded factors: green = favorable, red = unfavorable
-- `projectionDetails` and `faProjectionDetails` added to API response
-- Wired into both My Team and Free Agents pages via `ScheduleGrid` prop
 
 ### Cleanup (PR #60)
-- Renamed `option_b_inputs` → `projection_inputs` and `fa_option_b_inputs` → `fa_projection_inputs` throughout `espn.py`
-- Removed all "Option B" terminology from comments and docstrings
+- Renamed `option_b_inputs` → `projection_inputs` throughout `espn.py`
 - Bumped `CACHE_VERSION`: my-team 6→7, free-agents 3→4
-- Initialized `fa_fpts_per_start` and `fa_proj_details` before conditional FA block to prevent undefined reference
 
 ---
 
@@ -87,98 +98,25 @@ ESPN API deep-dive, projection model upgrade to Savant-powered hybrid, tile rede
 - ESPN `lineupSlotId` is per-day accurate — verified 98 data points across 7 days × 14 players, zero mismatches against ESPN website screenshots.
 - `player.injured` (boolean) is the reliable IL signal. `playerPoolEntry.injuryStatus` returns empty `""` for all rostered players.
 - `eligibleSlots` determines SP vs RP (stable). `lineupSlotId` is a daily lineup decision — never use for position classification.
-- Bench status is irrelevant to The Skipper — daily lineup management, not a player attribute.
-- `new Date().toISOString().slice(0,10)` returns UTC date — causes wrong day for late-evening users in US time zones. Use local date construction instead.
-- Baseball Savant CSV endpoints (`&csv=true`) are public, no auth, return rich Statcast data. CSV has BOM prefix and combined `"last_name, first_name"` column.
-- When a file accumulates too many patches, do a clean rewrite rather than more patches.
+- Baseball Savant CSV endpoints (`&csv=true`) are public, no auth, return rich Statcast data.
 - Savant xERA and xBA are more predictive than raw ERA/BA — they remove BABIP luck and sequencing variance.
-- W/L should be discounted 50% in projections — too team-dependent (run support, bullpen quality).
 - Caching static data (2025 stats) permanently and current data with 24hr TTL cuts response time by 50%+.
-- `cache_set` must be defined at module top level in `kv.py` — indentation errors silently hide functions from importers.
-- When importing new functions, add them to the top-level import line — runtime imports inside functions can fail in Vercel's module loading.
 
-### Projection sequencing + bench/IL normalization (PR #49)
-- Moved transaction lag re-fetch before `option_b_inputs`
-- Removed all bench/IL special-casing from projections — all pitchers treated identically
-- `get_slot_label()` and `get_status()` now use `player.injured` + `eligibleSlots`
-- Added `position` field (SP/RP) independent of IL slot
-- Fixed IL players missing from My Team starters grid
-- Created `KNOWLEDGE.md` with confidence-rated ESPN API reference
-
-### Docs update (PR #50)
-- Updated BACKLOG and CHANGELOG, replaced inline API reference with KNOWLEDGE.md pointer
-
-### Tile redesign (PR #51)
-- ACTUAL STARTS: past/today confirmed starts for SP-position players
-- PROJECTED STARTS: actual + future starts (replaces SCHEDULED)
-- ROSTERED SPs: SP-position count only (was counting all pitchers)
-- Fixed UTC date bug in tile calculation — now uses local time
-
-### Dropped streamers (PRs #52, #53)
-- `get_actual_fpts()` tracks which pitchers were on our team each past day
-- Detects players dropped mid-period by comparing past vs current roster
-- David Peterson appears with EX badge and -2.0 Act FPTS from his starts
-- Sort order: active SPs → EX (dropped) → IL
-- Clean rewrite of `my-team.tsx` to fix accumulated patch bugs
-
-### Baseball Savant data fetcher (PR #54)
-- `api/savant.py`: fetches expected stats, Statcast leaderboard, pitch arsenal
-- Public CSV endpoints — no auth, no scraping
-- Verified: 250 pitchers with expected stats, 144 with Statcast data
-
-### Docs with model roadmap (PR #55)
-- Full 5-layer projection model architecture documented in BACKLOG
-- Savant data source documented in KNOWLEDGE.md
-
-### Savant-powered hybrid projection model (PR #56)
-- H per start → xBA × batters faced (removes BABIP luck)
-- ER per start → xERA × (IP/9) (removes sequencing luck)
-- K, BB, HBP, IP unchanged from MLB Stats API (skill-based)
-- W/L discounted 50% (too team-dependent)
-- Falls back to counting-stat model when Savant data unavailable
-- Notable changes: Gavin Williams 13.7→10.2, Shane Baz 6.5→8.3, Dylan Cease 12.7→13.9
-
-### Savant data caching (PR #57)
-- 2025 Savant data cached permanently in Upstash KV
-- 2026 Savant data cached with 24hr TTL
-- `cache_get()` and `cache_set()` added to `api/kv.py`
-
-### MLB Stats API caching (PR #58)
-- Extracted `fetch_season_stats` to top-level function
-- 2025 MLB stats cached permanently, 2026 with 24hr TTL
-- Uncached ~4.5s → cached ~2.3s
-
-### Daily actual FPTS caching (PR #59)
-- Completed days cached permanently as `cache:daily:{date}`
-- Caches unfiltered data (all league pitchers) so cache works for any player set
-- Today never cached (live games)
-- Performance: first load ~4.4s → cached ~2.1s
+### Major changes
+- Projection sequencing + bench/IL normalization (PR #49)
+- KNOWLEDGE.md created with confidence-rated API reference (PR #49)
+- Tile redesign (PR #51)
+- Dropped streamer detection (PRs #52, #53)
+- Baseball Savant data fetcher (PR #54)
+- Savant-powered hybrid projection model (PR #56)
+- Savant data caching (PR #57), MLB Stats API caching (PR #58), Daily actual FPTS caching (PR #59)
+- Response time reduced from ~4.8s to ~2.1s (56% improvement)
 
 ---
 
 ## Session 11 — April 10, 2026
 
-Upstash KV locked projections, full-name pitcher matching, bench player start fix, and multiple bug fixes. Seven PRs shipped (#41–#47).
-
-### Key learnings this session
-- Vercel removed native KV — Upstash for Redis is the direct replacement, same `upstash-redis` Python library, same REST API pattern.
-- Upstash Eviction must be OFF for projection storage — eviction silently deletes keys when storage fills up.
-- Redis NX flag (`set key value nx=True`) is the correct pattern for write-once locks.
-- Key schema design matters: `proj:{season}:{period}:{slug}:{date}` makes prefix queries trivial.
-- Last-name-only pitcher matching was fragile — full-name matching eliminates surname collisions.
-- `git reset --hard origin/main` is the correct fix when local main diverges from origin after a squash merge.
-
-### Upstash KV infrastructure (PR #41, #42)
-- `api/kv.py`: new module with `get_locked_projection()`, `set_locked_projection()` (NX flag), `get_all_locked_projections()`
-- `api/espn.py`: locks `fpts_per_game` into KV for each past/today start
-- Frontend: `lockedProjections` wired through state, cache, and ScheduleGrid
-
-### Full-name probable pitcher matching (PR #43)
-- Replaced last-name-only key with `full_name.strip().lower()` throughout `mlb.py`
-- Fixes Shane Baz and Shane Smith probable pitcher detection
-
-### Bench player starts fix (PR #46)
-- Bench player `startDates` filter changed from `< today_str` to `<= today_str`
+Upstash KV locked projections, full-name pitcher matching, bench player start fix. Seven PRs shipped (#41–#47).
 
 ---
 
@@ -186,29 +124,11 @@ Upstash KV locked projections, full-name pitcher matching, bench player start fi
 
 Opponent quality adjustment using team wOBA factors. One PR shipped (#39).
 
-### Opponent quality adjustment
-- `api/mlb.py`: `get_team_woba()` — fetches team hitting stats, computes wOBA factors relative to league average
-- Per-start opponent adjustment applied in `get_projected_fpts()`
-- RPs excluded from matchup adjustment
-
 ---
 
 ## Session 9 — April 9, 2026
 
-Sortable free agents table, SP slot filter fix, FA actual FPTS, and projection model fixes. One PR shipped (#37).
-
-### Sortable free agents table
-- Click any column header to sort with ↓/↑ indicators
-- Checkbox toggles via name-based lookup instead of index
-
-### Fix: SP slot filter on free agent fetch
-- Added `filterSlotIds: [14]` — free agent count jumped from 29 to 100
-
-### Actual FPTS for free agents
-- `get_actual_fpts()` now fetches stats for FA names alongside roster names
-
-### Projection model fixes
-- Minimum sample size threshold: 3 starts for SPs, 5 appearances for RPs
+Sortable free agents table, SP slot filter fix, FA actual FPTS, projection model fixes. One PR shipped (#37).
 
 ---
 
@@ -216,34 +136,11 @@ Sortable free agents table, SP slot filter fix, FA actual FPTS, and projection m
 
 FA projections, per-start cell projections, actual FPTS column. One PR shipped (#35).
 
-### Free agent projections
-- Same Option B blended model as roster players
-
-### Per-start projections in schedule grid cells
-- Future start cells show per-start projection below badge
-- Past start cells show `(proj: +X.X)` below actual FPTS
-
-### Actual FPTS column
-- Sums actual points earned per pitcher across the period
-
 ---
 
 ## Session 7 — April 7, 2026
 
 Roster transaction lag fix, Option B projected FPTS model, relievers section, period dropdown fixes.
-
-### Roster transaction lag fix
-- Detect `in_progress`/`final` games → re-fetch at `scoringPeriodId + 1`
-
-### Option B projected FPTS model
-- Blended 2025/2026 MLB Stats API season stats
-- League scoring formula: IP×3, K×1, H×-1, BB×-1, ER×-2, HB×-1, W×+5, L×-5, SV×+5
-
-### Relievers section
-- Separate grid with saves tracking, bench-day strikethrough
-
-### Period dropdown + cache version system
-- Auto-fetch on period change, `CACHE_VERSION` pattern
 
 ---
 
