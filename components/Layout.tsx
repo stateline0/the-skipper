@@ -1,9 +1,9 @@
+import { useState } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/router'
 import { signOut, useSession } from 'next-auth/react'
 
 // These are the five main nav items
-// 'href' is the URL, 'label' is what shows in the sidebar
 const NAV_ITEMS = [
   { href: '/dashboard',        label: 'Dashboard',        icon: '⚡' },
   { href: '/my-team',          label: 'My Team',           icon: '⚾' },
@@ -22,36 +22,39 @@ export default function Layout({ children, weekLabel, teamName }: LayoutProps) {
   const router = useRouter()
   const { data: session } = useSession()
 
-  // Handle sign out — NextAuth's signOut() clears the session
-  // and redirects to the login page
+  // ── Mobile sidebar toggle ──
+  // This state tracks whether the sidebar is open on mobile.
+  // On desktop, the sidebar is always visible (CSS handles this),
+  // so this state only matters on small screens.
+  const [sidebarOpen, setSidebarOpen] = useState(false)
+
   async function handleSignOut() {
     await signOut({ callbackUrl: '/login' })
   }
 
+  // When a nav link is clicked, close the sidebar on mobile.
+  // On desktop this is a no-op since the sidebar is always visible.
+  function handleNavClick() {
+    setSidebarOpen(false)
+  }
+
   return (
-    <div style={{
-      display: 'flex',
-      flexDirection: 'column',
-      minHeight: '100vh',
-      background: 'var(--paper)',
-    }}>
+    <div className="layout-shell">
 
       {/* ── Top header ── */}
-      <header style={{
-        background: 'var(--white)',
-        borderBottom: '1px solid var(--border)',
-        padding: '0 24px',
-        position: 'sticky',
-        top: 0,
-        zIndex: 50,
-        height: 56,
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        boxShadow: '0 1px 0 var(--border)',
-      }}>
-        {/* Left: logo + app name */}
+      <header className="layout-header">
+        {/* Left: hamburger (mobile only) + logo + app name */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+
+          {/* Hamburger button — only visible on mobile via CSS */}
+          <button
+            className="hamburger-btn"
+            onClick={() => setSidebarOpen(!sidebarOpen)}
+            aria-label="Toggle navigation"
+          >
+            {sidebarOpen ? '✕' : '☰'}
+          </button>
+
           <div style={{
             width: 28, height: 28,
             background: 'var(--ink)',
@@ -80,31 +83,26 @@ export default function Layout({ children, weekLabel, teamName }: LayoutProps) {
       </header>
 
       {/* ── Body: sidebar + main content ── */}
-      <div style={{ display: 'flex', flex: 1 }}>
+      <div className="layout-body">
+
+        {/* Dark overlay behind sidebar on mobile — tapping it closes the sidebar */}
+        <div
+          className={`sidebar-overlay ${sidebarOpen ? 'sidebar-open' : ''}`}
+          onClick={() => setSidebarOpen(false)}
+        />
 
         {/* ── Sidebar ── */}
-        <nav style={{
-          width: 200,
-          background: 'var(--white)',
-          borderRight: '1px solid var(--border)',
-          display: 'flex',
-          flexDirection: 'column',
-          padding: '16px 0',
-          position: 'sticky',
-          top: 56, // lines up below the header
-          height: 'calc(100vh - 56px)',
-          flexShrink: 0,
-        }}>
+        <nav className={`layout-sidebar ${sidebarOpen ? 'sidebar-open' : ''}`}>
 
           {/* Nav links */}
           <div style={{ flex: 1, padding: '0 8px' }}>
             {NAV_ITEMS.map(item => {
-              // isActive = true when the current URL matches this nav item
               const isActive = router.pathname === item.href
               return (
                 <Link
                   key={item.href}
                   href={item.href}
+                  onClick={handleNavClick}
                   style={{
                     display: 'flex',
                     alignItems: 'center',
@@ -163,11 +161,7 @@ export default function Layout({ children, weekLabel, teamName }: LayoutProps) {
         </nav>
 
         {/* ── Page content ── */}
-        <main style={{
-          flex: 1,
-          padding: '28px 24px',
-          minWidth: 0, // prevents flex children from overflowing
-        }}>
+        <main className="layout-main">
           {children}
         </main>
 
