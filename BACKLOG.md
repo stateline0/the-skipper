@@ -15,19 +15,16 @@ Last updated: April 12, 2026
 ### Model Improvements
 - [ ] Track lineup and park factor adjustment accuracy separately to determine if multipliers need recalibration
 - [ ] Project and track ALL MLB starts (not just rostered/FA pitchers) for larger model evaluation sample size
+- [ ] Thread opponent probable pitcher xERA through schedule data for pitcher-adjusted win probability
+- [ ] Recent form for opposing lineup (blend season wOBA with last 7-14 day team hitting)
+- [ ] Weather impact layer (temperature + wind direction via Open-Meteo API, map parks to lat/lng)
 
-### Vegas odds for W/L projection
-- [ ] Integrate free betting odds API (The Odds API or ESPN scoreboard lines)
-- [ ] Use implied win probability to improve W/L projections (currently discounted 50%)
-- [ ] Could replace flat 50% discount with game-specific probabilities
-
-### espn.py full rewrite
-- [ ] File has accumulated many patches and is ~1150 lines
-- [ ] Clean separation of data fetching, projection model, and API response building
-- [ ] Should be done when a significant change touches multiple sections
+### espn.py further cleanup
+- [ ] `espn.py` still 496 lines — could extract roster parsing and free agent sections into separate functions
+- [ ] Consider caching team_win_data (Pythagorean) with 24hr TTL
 
 ### Color Scheme Refresh
-- [ ] Color scheme refresh — assess and update the site's color palette
+- [x] Color scheme refresh — midnight dark theme with Inter + JetBrains Mono (PR #71)
 
 ---
 
@@ -72,6 +69,15 @@ Last updated: April 12, 2026
 - [ ] Dropped players show projFpts 0.0 — could pull locked projections from KV
 
 ---
+
+## ✅ Completed (session 18 — April 12, 2026)
+- [x] espn.py refactor: split 1220-line monolith into projection.py (346), fetcher.py (435), espn.py (489) (PR #73)
+- [x] Factor contribution analysis on accuracy dashboard — shows whether wOBA, park, recent form adjustments help or hurt (PR #74)
+- [x] Refresh button on accuracy page (PR #74)
+- [x] Vegas moneyline win probability from ESPN scoreboard — zero extra API calls (PR #75)
+- [x] Pythagorean win expectation model (Log5 + pitcher xERA adjustment) as fallback (PR #75)
+- [x] Per-start W/L scaling: team_win_prob × 0.57 starter share replaces flat 50% discount (PR #75)
+- [x] Win probability shown in projection tooltip with source badge (Vegas/Pythagorean) (PR #75)
 
 ## ✅ Completed (session 17 — April 12, 2026)
 - [x] Color scheme refresh — midnight dark theme with Inter + JetBrains Mono (PR #71)

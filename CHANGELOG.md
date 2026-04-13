@@ -2,6 +2,45 @@
 
 ---
 
+## Session 18 — April 12, 2026
+
+Code architecture refactor, accuracy dashboard enhancements, and Vegas/Pythagorean win probability model. Three PRs shipped (#73–#75).
+
+### Key learnings this session
+- ESPN scoreboard API includes DraftKings moneyline odds inline — no additional API calls needed for Vegas win probabilities.
+- American odds → implied probability: negative (favorite) = |odds|/(|odds|+100), positive (underdog) = 100/(odds+100). Must normalize both sides to remove the vig (they sum to >1.0 before normalization).
+- Pythagorean win expectation (RS^1.83 / (RS^1.83 + RA^1.83)) is more predictive than raw W/L record early season because it removes luck in close games.
+- Log5 formula converts two teams' win percentages into a head-to-head probability — standard sabermetric approach.
+- Vegas moneyline odds only become available ~12-24 hours before game time. Pythagorean model fills the gap for games 3-7 days out.
+- MLB starting pitchers only get the W in ~57% of their team's wins (rest go to relievers). Must multiply team win probability by this "starter win share" to get P(pitcher W).
+- Pitcher quality adjustment: compare pitcher xERA to team ERA. A 2.50 xERA pitcher on a 4.00 ERA team → team is more likely to win when he starts (factor = team_era / pitcher_xera, capped 0.7–1.4).
+- Factor contribution analysis (counterfactual projections): compute "what would MAE be if we removed this factor" by reverse-engineering the locked projection using stored matchup context.
+- Pure refactors (no behavior change) should be separate PRs from feature work — easier to isolate bugs.
+
+### espn.py refactor (PR #73)
+- Split 1220-line `espn.py` into three focused modules:
+  - `projection.py` (346 lines) — projection model, Savant adjustments, scoring formula, per-start locking
+  - `fetcher.py` (435 lines) — ESPN data fetching, auth, pro team map, actual FPTS, cached data loading
+  - `espn.py` (489 lines) — orchestrator: get_league_data() + HTTP handler
+- Pure refactor — API response byte-for-byte identical
+
+### Factor contribution analysis + refresh button (PR #74)
+- Accuracy dashboard: new "Factor Contribution Analysis" section with 4 cards
+- Counterfactual projections: what MAE would be without wOBA, park, combined, or recent form
+- Green ✓ = factor reducing error (helping), Red ✗ = factor increasing error (hurting)
+- Refresh button added to accuracy page header
+
+### Vegas + Pythagorean win probability model (PR #75)
+- Three-tier win probability fallback chain: Vegas → Pythagorean → default 0.5
+- Vegas: DraftKings moneyline extracted from ESPN scoreboard (already called), vig removed
+- Pythagorean: `get_team_win_data()` fetches team RS/RA + ERA in parallel, computes expected W%
+- `compute_matchup_win_prob()`: Log5 head-to-head + pitcher xERA adjustment (capped 0.7–1.4)
+- Per-start W/L: `raw_w_rate × win_prob × 0.57 × 5pts` replaces `raw_w_rate × 0.5 × 5pts`
+- `winProb` and `wpSource` stored in v2 locked projections and shown in tooltip
+- Tooltip: green "Vegas" badge or blue "Pythagorean" badge next to win probability
+
+---
+
 ## April 12, 2026 (Session 2)
 
 ### Midnight dark theme + font refresh (PR #71)
