@@ -12,6 +12,10 @@ Last updated: April 12, 2026
 - [ ] Hybrid mode: AI suggests plan, user picks A/B for key decisions, AI outputs full sequence
 - [ ] Uses projection model data as input
 
+### Model Improvements
+- [ ] Track lineup and park factor adjustment accuracy separately to determine if multipliers need recalibration
+- [ ] Project and track ALL MLB starts (not just rostered/FA pitchers) for larger model evaluation sample size
+
 ### Vegas odds for W/L projection
 - [ ] Integrate free betting odds API (The Odds API or ESPN scoreboard lines)
 - [ ] Use implied win probability to improve W/L projections (currently discounted 50%)
@@ -68,6 +72,9 @@ Last updated: April 12, 2026
 - [ ] Dropped players show projFpts 0.0 — could pull locked projections from KV
 
 ---
+
+## ✅ Completed (session 17 — April 12, 2026)
+- [x] Color scheme refresh — midnight dark theme with Inter + JetBrains Mono (PR #71)
 
 ## ✅ Completed (session 16 — April 12, 2026)
 - [x] Sidebar collapses on mobile (PR #69)

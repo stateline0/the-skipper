@@ -2,6 +2,29 @@
 
 ---
 
+## April 12, 2026 (Session 2)
+
+### Midnight dark theme + font refresh (PR #71)
+- Complete visual redesign: light sage theme → dark premium "Midnight" palette
+- Deep charcoal base (#0F1114), cool gray surfaces (#161920, #1E2128), teal accent (#2EC4A0)
+- Replaced Syne font with Inter (body/headings) for clean, professional legibility
+- Replaced IBM Plex Mono with JetBrains Mono (data/labels)
+- Fixed projection tooltip: hardcoded dark surface so it's always readable
+- Fixed dashboard cookie instructions box: replaced hardcoded yellow with theme-aware variables
+- Fixed all primary button text contrast across 4 pages
+- Fixed accuracy page dropdown readability
+- All colors defined as CSS variables — entire theme changed via one file (globals.css)
+
+### Key learnings this session
+- Semantic CSS variable naming (--ink = text, --paper = background) enables full theme swaps by changing only variable values — every component automatically updates
+- Tooltips and other "floating" UI elements should use hardcoded colors, not theme variables, since they need to look consistent regardless of theme
+- `var(--white)` as a variable name becomes misleading in a dark theme (it's actually dark gray) — but renaming would touch every file, so the tradeoff is to keep the name and document the semantic meaning
+- Button text on colored backgrounds (green, teal) needs hardcoded dark color, not `var(--white)`, in dark themes
+- `git commit --amend --no-edit` adds changes to the previous commit without creating a new one — keeps PRs clean
+- Google Fonts @import in sandboxed iframes may not load — use standalone HTML files for reliable font previews
+
+---
+
 ## Session 16 - April 12, 2026
 
 ### Mobile-responsive layout (PR #69)
