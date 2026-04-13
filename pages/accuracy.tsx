@@ -82,13 +82,15 @@ export default function AccuracyPage() {
   const [period, setPeriod] = useState(2)
   const [expandedRow, setExpandedRow] = useState<string | null>(null)
 
-  useEffect(() => {
+  const fetchData = () => {
     setLoading(true)
     fetch(`/api/accuracy?season=2026&period=${period}`)
       .then(r => r.json())
       .then(d => { setData(d); setLoading(false) })
       .catch(() => setLoading(false))
-  }, [period])
+  }
+
+  useEffect(() => { fetchData() }, [period])
 
   const summary = data?.summary || {}
   const starts = data?.starts || []
@@ -110,6 +112,19 @@ export default function AccuracyPage() {
             </p>
           </div>
           <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+            <button
+              onClick={fetchData}
+              disabled={loading}
+              style={{
+                padding: '6px 14px', fontSize: 13, borderRadius: 6,
+                border: '1.5px solid var(--border-strong)', background: 'transparent',
+                cursor: loading ? 'not-allowed' : 'pointer',
+                color: 'var(--ink)', opacity: loading ? 0.5 : 1,
+                fontFamily: 'var(--sans)',
+              }}
+            >
+              {loading ? 'Refreshing...' : '↻ Refresh'}
+            </button>
             <select
               value={period}
               onChange={e => setPeriod(Number(e.target.value))}
