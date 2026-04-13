@@ -27,9 +27,27 @@ interface Summary {
   statBias?: Record<string, number>
 }
 
+interface FactorDetail {
+  maeWithout: number | null
+  maeWith: number | null
+  impact: number | null
+  helping: boolean | null
+  description: string
+  startsAnalyzed?: number
+}
+
+interface FactorAnalysis {
+  fullModelMAE: number
+  woba: FactorDetail
+  park: FactorDetail
+  matchupCombined: FactorDetail
+  recentForm: FactorDetail
+}
+
 interface AccuracyData {
   starts: StartComparison[]
   summary: Summary
+  factorAnalysis?: FactorAnalysis
   unmatchedCount?: number
   error?: string
   message?: string
@@ -64,16 +82,19 @@ export default function AccuracyPage() {
   const [period, setPeriod] = useState(2)
   const [expandedRow, setExpandedRow] = useState<string | null>(null)
 
-  useEffect(() => {
+  const fetchData = () => {
     setLoading(true)
     fetch(`/api/accuracy?season=2026&period=${period}`)
       .then(r => r.json())
       .then(d => { setData(d); setLoading(false) })
       .catch(() => setLoading(false))
-  }, [period])
+  }
+
+  useEffect(() => { fetchData() }, [period])
 
   const summary = data?.summary || {}
   const starts = data?.starts || []
+  const factors = data?.factorAnalysis
 
   return (
     <>
@@ -91,6 +112,19 @@ export default function AccuracyPage() {
             </p>
           </div>
           <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+            <button
+              onClick={fetchData}
+              disabled={loading}
+              style={{
+                padding: '6px 14px', fontSize: 13, borderRadius: 6,
+                border: '1.5px solid var(--border-strong)', background: 'transparent',
+                cursor: loading ? 'not-allowed' : 'pointer',
+                color: 'var(--ink)', opacity: loading ? 0.5 : 1,
+                fontFamily: 'var(--sans)',
+              }}
+            >
+              {loading ? 'Refreshing...' : '↻ Refresh'}
+            </button>
             <select
               value={period}
               onChange={e => setPeriod(Number(e.target.value))}
@@ -150,6 +184,47 @@ export default function AccuracyPage() {
               <SummaryTile label="DIRECTION ACC" value={summary.directionalAccuracy ? `${summary.directionalAccuracy}%` : '—'} />
               <SummaryTile label="WORST MISS" value={`${summary.maxError ?? 0} pts`} />
             </div>
+
+            {/* Factor analysis */}
+            {factors && (
+              <div style={{
+                background: 'var(--paper-2)', borderRadius: 10, padding: '16px 20px',
+                marginBottom: 24,
+              }}>
+                <div style={{
+                  fontSize: 12, fontFamily: 'var(--mono)', color: 'var(--ink-3)',
+                  marginBottom: 14, letterSpacing: '0.04em',
+                }}>
+                  FACTOR CONTRIBUTION ANALYSIS
+                </div>
+                <div style={{ fontSize: 12, color: 'var(--ink-3)', marginBottom: 14 }}>
+                  Does removing each adjustment layer make the model better or worse?
+                  Positive impact = the factor is helping reduce error.
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 10 }}>
+                  <FactorCard
+                    label="wOBA Opponent"
+                    detail={factors.woba}
+                    starts={summary.totalStarts ?? 0}
+                  />
+                  <FactorCard
+                    label="Park Factor"
+                    detail={factors.park}
+                    starts={summary.totalStarts ?? 0}
+                  />
+                  <FactorCard
+                    label="Combined Matchup"
+                    detail={factors.matchupCombined}
+                    starts={summary.totalStarts ?? 0}
+                  />
+                  <FactorCard
+                    label="Recent Form"
+                    detail={factors.recentForm}
+                    starts={factors.recentForm.startsAnalyzed ?? 0}
+                  />
+                </div>
+              </div>
+            )}
 
             {/* Per-stat MAE bar chart */}
             {summary.statMAE && (
@@ -299,6 +374,68 @@ function SummaryTile({ label, value }: { label: string; value: string | number }
       <div style={{ fontSize: 20, fontWeight: 700, letterSpacing: '-0.02em' }}>
         {value}
       </div>
+    </div>
+  )
+}
+
+function FactorCard({ label, detail, starts }: { label: string; detail: FactorDetail; starts: number }) {
+  const impact = detail.impact
+  const hasData = impact !== null && detail.maeWith !== null && detail.maeWithout !== null
+  const isHelping = detail.helping === true
+  const isHurting = detail.helping === false
+  return (
+    <div style={{
+      background: 'var(--white)', borderRadius: 8, padding: '12px 14px',
+      border: '1px solid var(--border)',
+    }}>
+      <div style={{
+        fontSize: 12, fontWeight: 600, marginBottom: 8, color: 'var(--ink)',
+      }}>
+        {label}
+      </div>
+      {hasData ? (
+        <>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 6 }}>
+            <span style={{ fontSize: 11, color: 'var(--ink-3)', fontFamily: 'var(--mono)' }}>
+              MAE with:
+            </span>
+            <span style={{ fontSize: 13, fontWeight: 600, fontFamily: 'var(--mono)' }}>
+              {detail.maeWith!.toFixed(2)}
+            </span>
+          </div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 8 }}>
+            <span style={{ fontSize: 11, color: 'var(--ink-3)', fontFamily: 'var(--mono)' }}>
+              MAE without:
+            </span>
+            <span style={{ fontSize: 13, fontWeight: 600, fontFamily: 'var(--mono)' }}>
+              {detail.maeWithout!.toFixed(2)}
+            </span>
+          </div>
+          <div style={{
+            display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+            padding: '6px 8px', borderRadius: 6,
+            background: isHelping ? 'rgba(39, 174, 96, 0.1)' : isHurting ? 'rgba(192, 57, 43, 0.1)' : 'var(--paper-2)',
+          }}>
+            <span style={{ fontSize: 11, fontFamily: 'var(--mono)', color: 'var(--ink-3)' }}>
+              Impact:
+            </span>
+            <span style={{
+              fontSize: 13, fontWeight: 700, fontFamily: 'var(--mono)',
+              color: isHelping ? '#27ae60' : isHurting ? '#c0392b' : 'var(--ink-3)',
+            }}>
+              {isHelping ? '✓ ' : isHurting ? '✗ ' : ''}
+              {impact! > 0 ? '+' : ''}{impact!.toFixed(2)} pts
+            </span>
+          </div>
+          <div style={{ fontSize: 10, color: 'var(--ink-3)', marginTop: 6 }}>
+            {starts} start{starts !== 1 ? 's' : ''} analyzed
+          </div>
+        </>
+      ) : (
+        <div style={{ fontSize: 12, color: 'var(--ink-3)', fontStyle: 'italic' }}>
+          Not enough data yet
+        </div>
+      )}
     </div>
   )
 }
