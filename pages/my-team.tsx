@@ -88,6 +88,7 @@ export default function MyTeam() {
   const [fptsPerStart, setFptsPerStart]     = useState<Record<string, number>>({})
   const [lockedProjections, setLockedProjections] = useState<Record<string, Record<string, number>>>({})
   const [projectionDetails, setProjectionDetails] = useState<Record<string, any>>({})
+  const [liveStats, setLiveStats]               = useState<Record<string, any>>({})
 
   // ── Derived values ─────────────────────────────────────────────────────
   const weekLabel = getWeekRange(weekStart, weekEnd)
@@ -142,6 +143,7 @@ export default function MyTeam() {
       setFptsPerStart(data.fptsPerStart || {})
       setLockedProjections(data.lockedProjections || {})
       setProjectionDetails(data.projectionDetails || {})
+      setLiveStats(data.liveStats || {})
     }
   }, [])
 
@@ -241,6 +243,7 @@ export default function MyTeam() {
       setFptsPerStart(data.rosterFptsPerStart || {})
       setLockedProjections(data.lockedProjections || {})
       setProjectionDetails(data.projectionDetails || {})
+      setLiveStats(data.liveStats || {})
     } catch (e: any) {
       setError(e.message || 'Failed to load roster')
     } finally {
@@ -378,6 +381,7 @@ export default function MyTeam() {
                 fptsPerStart={fptsPerStart}
                 lockedProjections={lockedProjections}
                 projectionDetails={projectionDetails}
+                liveStats={liveStats}
               />
             </div>
 
@@ -416,6 +420,7 @@ export default function MyTeam() {
                   savesData={actualSaves}
                   fptsPerStart={fptsPerStart}
                   lockedProjections={lockedProjections}
+                  liveStats={liveStats}
                 />
               </div>
             )}

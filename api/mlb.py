@@ -182,20 +182,50 @@ def fetch_espn_probables(period_start, period_end):
                         home_win_prob = None
                         away_win_prob = None
 
+                # ── Extract live game detail & score ───────────────────────
+                # ESPN scoreboard provides:
+                #   event.status.type.shortDetail → "Bot 5th", "Top 3rd", "Final"
+                #   competitor.score              → team's run total as string
+                game_detail = event.get("status", {}).get("type", {}).get("shortDetail", "")
+                home_score = None
+                away_score = None
+                for comp in competitors:
+                    side = comp.get("homeAway", "")
+                    score_str = comp.get("score", "")
+                    if score_str:
+                        try:
+                            if side == "home":
+                                home_score = int(score_str)
+                            elif side == "away":
+                                away_score = int(score_str)
+                        except (ValueError, TypeError):
+                            pass
+
                 # ── Record game in schedule dict ──────────────────────────
                 if home_abbrev and away_abbrev:
-                    schedule[iso_date][home_abbrev] = {
+                    home_entry = {
                         "opponent": away_abbrev,
                         "is_home":  True,
                         "status":   game_status,
                         "win_prob": home_win_prob,
                     }
-                    schedule[iso_date][away_abbrev] = {
+                    away_entry = {
                         "opponent": home_abbrev,
                         "is_home":  False,
                         "status":   game_status,
                         "win_prob": away_win_prob,
                     }
+                    # Only include live detail + score for non-scheduled games
+                    if game_status in ("in_progress", "final"):
+                        if game_detail:
+                            home_entry["game_detail"] = game_detail
+                            away_entry["game_detail"] = game_detail
+                        if home_score is not None and away_score is not None:
+                            # Score shown from each team's perspective: "their runs - opponent's runs"
+                            home_entry["score"] = f"{home_score}-{away_score}"
+                            away_entry["score"] = f"{away_score}-{home_score}"
+                    schedule[iso_date][home_abbrev] = home_entry
+                    schedule[iso_date][away_abbrev] = away_entry
 
                 # ── Probable pitchers (same logic as before) ──────────────
                 # Also track which pitcher is starting for each team so we can

@@ -387,14 +387,14 @@ def get_league_data(team_id: int, week: int) -> dict:
                 "checked":      player.get("ownership", {}).get("percentOwned", 0) >= 15,
             })
 
-    # ── Fetch actual FPTS for past dates ──────────────────────────────
+    # ── Fetch actual FPTS for past dates + today (for live stats) ────
     today     = datetime.now(timezone.utc).date()
     all_dates = []
     if mp:
         start = datetime.strptime(mp["start"], "%Y-%m-%d").date()
         end   = datetime.strptime(mp["end"], "%Y-%m-%d").date()
         d     = start
-        while d < today and d <= end:
+        while d <= today and d <= end:
             all_dates.append(d.strftime("%Y-%m-%d"))
             d += timedelta(days=1)
 
@@ -404,8 +404,9 @@ def get_league_data(team_id: int, week: int) -> dict:
     actual_saves = {}
     bench_days   = {}
     my_team_pitchers_by_day = {}
+    live_stats = {}
     if all_dates:
-        actual_fpts, actual_saves, bench_days, my_team_pitchers_by_day = get_actual_fpts(
+        actual_fpts, actual_saves, bench_days, my_team_pitchers_by_day, live_stats = get_actual_fpts(
             all_dates, all_pitcher_names | fa_pitcher_names, headers, cookies, team_id
         )
 
@@ -471,6 +472,7 @@ def get_league_data(team_id: int, week: int) -> dict:
         "faActualFpts":       fa_actual_fpts,
         "lockedProjections":  get_all_locked_projections(year_int, week),
         "droppedPlayers":     dropped_players,
+        "liveStats":          live_stats,
         "projectionDetails":  proj_details_roster,
         "faProjectionDetails": fa_proj_details,
     }

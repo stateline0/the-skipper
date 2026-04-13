@@ -2,7 +2,7 @@
 // Shared schedule grid used by both My Team and Free Agents pages.
 // Shows a day-by-day breakdown of each pitcher's starts for the matchup period.
 
-import { useMemo } from 'react'
+import { useMemo, useEffect } from 'react'
 import ProjectionTooltip, { ProjectionBreakdown } from './ProjectionTooltip'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -31,6 +31,16 @@ interface ScheduleEntry {
   opponent: string   // e.g. "CIN"
   is_home: boolean
   status: string     // "scheduled" | "in_progress" | "final"
+  game_detail?: string  // "Bot 5th", "Top 3rd", "Final"
+  score?: string        // "3-2" (from this team's perspective)
+}
+
+interface LiveStats {
+  fpts: number
+  stats: {
+    ip: number; so: number; h: number; bb: number; er: number
+    hb: number; w: number; l: number; sv: number
+  }
 }
 
 // schedule shape: { "2026-03-26": { "BOS": { opponent, is_home, status } } }
@@ -68,6 +78,8 @@ interface Props {
   onSortChange?: (col: string) => void
   // Projection model breakdown for tooltip: { "Garrett Crochet": { seasonBase, ... } }
   projectionDetails?: Record<string, ProjectionBreakdown>
+  // Live stats for today: { "Garrett Crochet": { fpts, stats: {ip, so, h, ...} } }
+  liveStats?: Record<string, LiveStats>
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -116,7 +128,7 @@ function todayISO(): string {
 // ─── Cell renderer ────────────────────────────────────────────────────────────
 // Returns what to show in a single pitcher × day cell.
 
-function DayCell({ pitcher, date, schedule, today, actualFpts, benchDays, actualSaves, fptsPerStart, lockedProjections, projectionDetails }: {
+function DayCell({ pitcher, date, schedule, today, actualFpts, benchDays, actualSaves, fptsPerStart, lockedProjections, projectionDetails, liveStats }: {
   pitcher: Pitcher
   date: string
   schedule: Schedule
@@ -127,6 +139,7 @@ function DayCell({ pitcher, date, schedule, today, actualFpts, benchDays, actual
   fptsPerStart?: Record<string, number>
   lockedProjections?: Record<string, Record<string, number>>
   projectionDetails?: Record<string, ProjectionBreakdown>
+  liveStats?: Record<string, LiveStats>
 }){
   const isPast   = date < today
   const isToday  = date === today
@@ -146,7 +159,8 @@ function DayCell({ pitcher, date, schedule, today, actualFpts, benchDays, actual
   // Past or live game
   if (isPast || isToday) {
     if (isStarting) {
-      // They started — show opp + indicator inline, then actual FPTS below
+      const isLive = isToday && gameInfo.status === 'in_progress'
+      const isFinal = gameInfo.status === 'final'
       const indicator = startInfo.confirmed
           ? <span style={{ fontSize: 10, color: 'var(--green)' }}>✓</span>
           : <span style={{ fontSize: 9, fontWeight: 700, fontFamily: 'var(--mono)', color: 'var(--blue)', background: 'var(--blue-light)', borderRadius: 99, padding: '0px 4px' }}>P</span>
@@ -155,12 +169,67 @@ function DayCell({ pitcher, date, schedule, today, actualFpts, benchDays, actual
       const hasFpts = fpts !== undefined && fpts !== 0
       const wasOnBench = benchDays?.[pitcher.name]?.includes(date) ?? false
       const perStart = lockedProjections?.[pitcher.name]?.[date] ?? fptsPerStart?.[pitcher.name]
+      const breakdown = projectionDetails?.[pitcher.name]
+      const startDetail = breakdown?.starts?.find((s: any) => s.date === date)
+      // Use the adjusted per-start projection (includes wOBA, park, W/L factors)
+      // Falls back to locked projection, then base rate
+      const displayProj = startDetail?.proj ?? perStart
+      const live = liveStats?.[pitcher.name]
+
       return (
         <div style={{ textAlign: 'center' }}>
+          {/* Live badge — red pulsing dot */}
+          {isLive && (
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 3, marginBottom: 2 }}>
+              <span style={{
+                display: 'inline-block', width: 6, height: 6,
+                borderRadius: '50%', background: 'var(--red)',
+                animation: 'livePulse 1.4s ease-in-out infinite',
+              }} />
+              <span style={{ fontSize: 8, fontWeight: 700, fontFamily: 'var(--mono)', color: 'var(--red)', letterSpacing: '0.08em' }}>
+                LIVE
+              </span>
+            </div>
+          )}
+
+          {/* Opponent + confirmed/projected indicator */}
           <div style={{ fontSize: 11, fontFamily: 'var(--mono)', fontWeight: 700, color, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 3 }}>
             {oppLabel} {indicator}
           </div>
-          {hasFpts && (
+
+          {/* Score + inning for live/final games */}
+          {(isLive || isFinal) && gameInfo.score && (
+            <div style={{ fontSize: 10, fontFamily: 'var(--mono)', fontWeight: 600, color: isLive ? 'var(--ink)' : 'var(--ink-3)', marginTop: 1 }}>
+              {gameInfo.score}
+              {isLive && gameInfo.game_detail && (
+                <span style={{ fontSize: 8, color: 'var(--ink-3)', marginLeft: 3 }}>
+                  {gameInfo.game_detail}
+                </span>
+              )}
+            </div>
+          )}
+
+          {/* Live FPTS (from ESPN live stats) */}
+          {isLive && live && (
+            <div style={{
+              fontSize: 11, fontFamily: 'var(--mono)', fontWeight: 700,
+              color: wasOnBench ? 'var(--ink-3)' : live.fpts > 0 ? 'var(--green)' : live.fpts < 0 ? 'var(--red)' : 'var(--ink-3)',
+              marginTop: 2,
+              textDecoration: wasOnBench ? 'line-through' : 'none',
+            }}>
+              {live.fpts > 0 ? '+' : ''}{live.fpts.toFixed(1)}
+            </div>
+          )}
+
+          {/* Live stat line: IP, K, H, BB, ER */}
+          {isLive && live && (
+            <div style={{ fontSize: 8, fontFamily: 'var(--mono)', color: 'var(--ink-3)', marginTop: 1, letterSpacing: '0.02em' }}>
+              {live.stats.ip.toFixed(1)}IP {live.stats.so}K {live.stats.h}H {live.stats.bb}BB {live.stats.er}ER
+            </div>
+          )}
+
+          {/* Actual FPTS (for completed games — same as before) */}
+          {!isLive && hasFpts && (
             <div style={{
               fontSize: 10, fontFamily: 'var(--mono)', fontWeight: 700,
               color: wasOnBench ? 'var(--ink-3)' : fpts > 0 ? 'var(--green)' : 'var(--red)',
@@ -170,11 +239,16 @@ function DayCell({ pitcher, date, schedule, today, actualFpts, benchDays, actual
               {fpts > 0 ? '+' : ''}{fpts.toFixed(1)}
             </div>
           )}
-          {perStart !== undefined && (hasFpts || isToday) && (
-            <div style={{ fontSize: 9, fontFamily: 'var(--mono)', color: 'var(--ink-3)', marginTop: 1 }}>
-              (proj: {perStart >= 0 ? '+' : ''}{perStart.toFixed(1)})
-            </div>
+
+          {/* Projection — now wrapped in tooltip (fixes hoverable today projection) */}
+          {displayProj !== undefined && (hasFpts || isToday) && (
+            <ProjectionTooltip breakdown={breakdown} startDate={date}>
+              <div style={{ fontSize: 9, fontFamily: 'var(--mono)', color: 'var(--ink-3)', marginTop: 1, cursor: 'help' }}>
+                (proj: {displayProj >= 0 ? '+' : ''}{displayProj.toFixed(1)})
+              </div>
+            </ProjectionTooltip>
           )}
+
           {actualSaves?.[pitcher.name]?.[date] && (
             <div style={{ fontSize: 10, marginTop: 1 }} title="Save recorded">🔒</div>
           )}
@@ -182,10 +256,47 @@ function DayCell({ pitcher, date, schedule, today, actualFpts, benchDays, actual
       )
     } else {
       // Team played but pitcher didn't start — still show FPTS if they appeared (e.g. relievers)
+      const isLive = isToday && gameInfo.status === 'in_progress'
       const fpts = actualFpts?.[pitcher.name]?.[date]
       const hasFpts = fpts !== undefined && fpts !== 0
       const wasOnBench = benchDays?.[pitcher.name]?.includes(date) ?? false
       const hasSave = !!actualSaves?.[pitcher.name]?.[date]
+      const live = liveStats?.[pitcher.name]
+
+      // Show live stats for relievers who have entered a live game
+      if (isLive && live) {
+        return (
+          <div style={{ textAlign: 'center' }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 3, marginBottom: 2 }}>
+              <span style={{
+                display: 'inline-block', width: 5, height: 5,
+                borderRadius: '50%', background: 'var(--red)',
+                animation: 'livePulse 1.4s ease-in-out infinite',
+              }} />
+              <span style={{ fontSize: 7, fontWeight: 700, fontFamily: 'var(--mono)', color: 'var(--red)', letterSpacing: '0.08em' }}>
+                LIVE
+              </span>
+            </div>
+            <span style={{ fontSize: 11, fontFamily: 'var(--mono)', color: 'var(--ink-3)' }}>
+              {oppLabel}
+            </span>
+            <div style={{
+              fontSize: 10, fontFamily: 'var(--mono)', fontWeight: 700,
+              color: wasOnBench ? 'var(--ink-3)' : live.fpts > 0 ? 'var(--green)' : live.fpts < 0 ? 'var(--red)' : 'var(--ink-3)',
+              marginTop: 1,
+              textDecoration: wasOnBench ? 'line-through' : 'none',
+            }}>
+              {live.fpts > 0 ? '+' : ''}{live.fpts.toFixed(1)}
+            </div>
+            <div style={{ fontSize: 8, fontFamily: 'var(--mono)', color: 'var(--ink-3)', marginTop: 1, letterSpacing: '0.02em' }}>
+              {live.stats.ip.toFixed(1)}IP {live.stats.so}K {live.stats.h}H {live.stats.bb}BB {live.stats.er}ER
+            </div>
+            {hasSave && (
+              <div style={{ fontSize: 10, marginTop: 1 }} title="Save recorded">🔒</div>
+            )}
+          </div>
+        )
+      }
 
       if (hasFpts) {
         return (
@@ -265,8 +376,23 @@ export default function ScheduleGrid({
   sortDir,
   onSortChange,
   projectionDetails,
+  liveStats,
 }: Props) {
   const today = todayISO()
+
+  // Inject keyframes for pulsing live indicator (once per page load)
+  useEffect(() => {
+    if (document.getElementById('skipper-live-pulse')) return
+    const style = document.createElement('style')
+    style.id = 'skipper-live-pulse'
+    style.textContent = `
+      @keyframes livePulse {
+        0%, 100% { opacity: 1; transform: scale(1); }
+        50% { opacity: 0.4; transform: scale(0.75); }
+      }
+    `
+    document.head.appendChild(style)
+  }, [])
 
   // Build the full date range for column headers
   const dates = useMemo(() => {
@@ -434,6 +560,7 @@ export default function ScheduleGrid({
                         fptsPerStart={fptsPerStart}
                         lockedProjections={lockedProjections}
                         projectionDetails={projectionDetails}
+                        liveStats={liveStats}
                       />
                     </td>
                   )
