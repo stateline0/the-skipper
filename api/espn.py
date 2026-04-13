@@ -19,7 +19,7 @@ from urllib.parse import urlparse, parse_qs
 from datetime import datetime, timedelta, timezone
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__)))
-from mlb import get_starts_for_players, get_team_woba, MATCHUP_PERIODS
+from mlb import get_starts_for_players, get_team_woba, get_team_win_data, MATCHUP_PERIODS
 from kv import get_all_locked_projections
 from fetcher import (
     get_headers_and_cookies, get_pro_team_map, today_has_started,
@@ -73,6 +73,9 @@ def get_league_data(team_id: int, week: int) -> dict:
 
     # ── Team wOBA factors for opponent quality adjustment ─────────────
     team_woba_factors = get_team_woba(year_int)
+
+    # ── Team win data for Pythagorean win probability model ───────────
+    team_win_data = get_team_win_data(year_int)
 
     # ── Matchup period metadata ──────────────────────────────────────
     mp            = MATCHUP_PERIODS.get(week, {})
@@ -219,6 +222,8 @@ def get_league_data(team_id: int, week: int) -> dict:
         mlb_stats_current=mlb_stats_current,
         mlb_stats_previous=mlb_stats_previous,
         game_logs=game_logs_current,
+        team_win_data=team_win_data,
+        schedule=schedule,
     )
 
     # ── Parse roster ──────────────────────────────────────────────────
@@ -344,6 +349,8 @@ def get_league_data(team_id: int, week: int) -> dict:
             mlb_stats_current=mlb_stats_current,
             mlb_stats_previous=mlb_stats_previous,
             game_logs=game_logs_current,
+            team_win_data=team_win_data,
+            schedule=schedule,
         )
 
         inj_label_map = {

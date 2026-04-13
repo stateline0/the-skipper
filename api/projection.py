@@ -8,18 +8,19 @@ Hybrid model combining:
   - Recent form weighting: 60% season / 40% last-4-starts (Layer 2)
   - Opponent quality adjustment via team wOBA factors (Layer 1)
   - Park factor adjustment per start (Layer 3)
+  - Vegas/Pythagorean win probability for W/L per start (Layer 4)
 
 Extracted from espn.py during session 18 refactor.
+Vegas W/L and Pythagorean model added session 18.
 """
 
 import unicodedata
 
-from mlb import compute_recent_form_fpts, get_park_factor
+from mlb import compute_recent_form_fpts, get_park_factor, compute_matchup_win_prob
 from kv import get_locked_projection, set_locked_projection, set_locked_projection_v2
 
 
 # ── League scoring formula ────────────────────────────────────────────
-# Points per stat, matching ESPN league settings for "Good Season Imanagas"
 SCORING = {
     "ip":  3,
     "so":  1,
@@ -32,29 +33,23 @@ SCORING = {
     "sv":  5,
 }
 
-# Year-over-year blend thresholds: how many IP before we fully trust
-# this year's data over last year's.
-IP_THRESHOLD_SP = 50.0   # ~9 starts, ~6 weeks
-IP_THRESHOLD_RP = 20.0   # ~20 appearances, ~6 weeks
-
-# Minimum games before trusting per-game averages
+IP_THRESHOLD_SP = 50.0
+IP_THRESHOLD_RP = 20.0
 MIN_STARTS_SP = 3
 MIN_APPEARANCES_RP = 5
 
 # Starter win share: probability that the starting pitcher gets the W
-# given the team wins. Historically ~55-60% of team wins go to starters.
-# The rest go to relievers (starter leaves tied/trailing, bullpen takes over).
-# Using 0.57 as a league-wide average.
+# given the team wins. Historically ~55-60%, trending down as starters
+# pitch fewer innings. 0.57 is a league-wide average.
 STARTER_WIN_SHARE = 0.57
 
-# Default team win probability when Vegas odds are unavailable.
-# 0.5 = coin flip, same as the old flat discount behavior.
+# Default team win probability when neither Vegas odds nor Pythagorean
+# model data is available. 0.5 = coin flip.
 DEFAULT_WIN_PROB = 0.5
 
 
 def strip_accents(s: str) -> str:
-    """Normalize accented characters for name matching across data sources.
-    e.g. 'Edwin Díaz' -> 'edwin diaz' to match ESPN's 'Edwin Diaz'."""
+    """Normalize accented characters for name matching across data sources."""
     return ''.join(
         c for c in unicodedata.normalize('NFD', s)
         if unicodedata.category(c) != 'Mn'
@@ -62,8 +57,7 @@ def strip_accents(s: str) -> str:
 
 
 def parse_ip(ip_str) -> float:
-    """Parse MLB's innings pitched string format.
-    '6.2' means 6 innings + 2 outs = 6.667 actual innings."""
+    """Parse MLB's innings pitched string format."""
     try:
         parts = str(ip_str).split(".")
         full  = int(parts[0])
@@ -74,8 +68,7 @@ def parse_ip(ip_str) -> float:
 
 
 def per_game_avgs(stat: dict, games: int, is_rp: bool = False) -> dict:
-    """Compute per-game averages from MLB Stats API season totals.
-    Returns None if below minimum sample threshold."""
+    """Compute per-game averages from MLB Stats API season totals."""
     min_games = MIN_APPEARANCES_RP if is_rp else MIN_STARTS_SP
     if games < min_games:
         return None
@@ -93,7 +86,6 @@ def per_game_avgs(stat: dict, games: int, is_rp: bool = False) -> dict:
         "w":  int(stat.get("wins",       0)) / games,
         "l":  int(stat.get("losses",     0)) / games,
         "sv": int(stat.get("saves",      0)) / games,
-        # Extra field needed for Savant hybrid: approximate TBF per game
         "batters_faced": ip * 3 + h + bb + hb,
     }
 
@@ -104,10 +96,9 @@ def apply_savant_adjustments(avgs: dict, savant_data: dict) -> dict:
     - H per start → xBA × batters_faced (removes BABIP luck)
     - ER per start → xERA × (IP / 9) (removes sequencing luck)
     W/L are NOT adjusted here — they are scaled per-start using Vegas
-    implied win probabilities in the matchup adjustment loop.
-    Returns a new dict with adjusted values.
+    or Pythagorean win probabilities in the matchup adjustment loop.
     """
-    adjusted = dict(avgs)  # copy
+    adjusted = dict(avgs)
     xba  = savant_data.get("xba", 0)
     xera = savant_data.get("xera", 0)
 
@@ -132,33 +123,26 @@ def get_projected_fpts(player_starts: list, team_woba_factors: dict = None,
                       savant_previous: dict = None,
                       mlb_stats_current: dict = None,
                       mlb_stats_previous: dict = None,
-                      game_logs: dict = None) -> tuple:
+                      game_logs: dict = None,
+                      team_win_data: dict = None,
+                      schedule: dict = None) -> tuple:
     """
     Project fantasy points per pitcher using the hybrid model.
 
-    player_starts: [{"name": "...", "starts": 2, "is_rp": False,
-                     "startDates": [{"date": "...", "opponent": "COL", "is_home": True}]}, ...]
-    team_woba_factors: { "LAD": 1.08, "CWS": 0.91, ... }
-    savant_current:  { "sandy alcantara": {"xwoba": .186, "xera": 1.36, ...} }
-    savant_previous: { "sandy alcantara": {"xwoba": .300, "xera": 3.80, ...} }
-    game_logs:       { "sandy alcantara": [{"date": "...", "ip": 6.0, ...}, ...] }
-
     Returns tuple:
-      proj_fpts:      { "Garrett Crochet": 34.2, ... }
-      proj_blend:     { "Garrett Crochet": 0.3, ... }  ← this-year weight
-      fpts_per_start: { "Garrett Crochet": 17.1, ... }  ← baseline, pre-matchup
-      proj_details:   { "Garrett Crochet": { breakdown for tooltip } }
+      proj_fpts, proj_blend, fpts_per_start, proj_details
     """
     team_woba_factors = team_woba_factors or {}
     savant_current    = savant_current or {}
     savant_previous   = savant_previous or {}
     game_logs         = game_logs or {}
+    team_win_data     = team_win_data or {}
+    schedule          = schedule or {}
     if not player_starts:
         return {}, {}, {}, {}
 
     starts_by_name = {strip_accents(p["name"]): p for p in player_starts}
 
-    # Use pre-fetched (and potentially cached) MLB stats
     stats_2026 = mlb_stats_current or {}
     stats_2025 = mlb_stats_previous or {}
 
@@ -184,7 +168,6 @@ def get_projected_fpts(player_starts: list, team_woba_factors: dict = None,
 
         ip_26 = parse_ip(stat_26.get("inningsPitched", "0.0"))
 
-        # Blend weight: ramp from 0% to 100% this year as IP crosses threshold
         ip_threshold     = IP_THRESHOLD_RP if is_rp else IP_THRESHOLD_SP
         this_year_weight = min(1.0, ip_26 / ip_threshold)
         last_year_weight = 1.0 - this_year_weight
@@ -203,7 +186,7 @@ def get_projected_fpts(player_starts: list, team_woba_factors: dict = None,
             this_year_weight = 1.0
             last_year_weight = 0.0
 
-        # ── Apply Savant adjustments to each year's averages ──────────
+        # ── Apply Savant adjustments ──────────────────────────────────
         savant_26 = savant_current.get(name_lower, {})
         savant_25 = savant_previous.get(name_lower, {})
         used_savant = False
@@ -247,26 +230,24 @@ def get_projected_fpts(player_starts: list, team_woba_factors: dict = None,
 
         adjusted_base = round(fpts_per_game, 1)
 
-        # ── Opponent quality + Park factor + Vegas W/L (Layers 1, 3, 4) ──
-        # Each start gets three adjustments:
-        #   1. wOBA factor — how good is the opposing lineup?
-        #   2. Park factor — is this a hitter or pitcher park?
-        #   3. Vegas W/L — replace flat W/L with game-specific win probability
+        # ── Layers 1, 3, 4: wOBA + Park + Vegas/Pythagorean W/L ──────
+        # Each start gets:
+        #   1. wOBA factor (opponent lineup quality)
+        #   2. Park factor (hitter/pitcher park)
+        #   3. Win probability for W/L scaling:
+        #      - Vegas moneyline (if available, ~1-2 days out)
+        #      - Pythagorean + Log5 + pitcher adjustment (fallback)
+        #      - 0.5 default (if neither available)
         #
-        # W/L handling: instead of a flat 50% discount on season W/L rates,
-        # we use Vegas moneyline odds to get game-specific team win probability,
-        # then multiply by STARTER_WIN_SHARE (0.57) to estimate the pitcher's
-        # chance of getting the W or L in that specific start.
-        #
-        # Formula per start:
-        #   base_no_wl = IP×3 + K×1 + H×(-1) + BB×(-1) + ER×(-2) + HBP×(-1) + SV×5
+        # W/L per start:
+        #   base_no_wl = all stats except W/L
         #   w_contrib  = raw_w_rate × win_prob × STARTER_WIN_SHARE × 5
         #   l_contrib  = raw_l_rate × (1 - win_prob) × STARTER_WIN_SHARE × (-5)
         #   start_proj = (base_no_wl + w_contrib + l_contrib) × woba × park
         start_dates = player_info.get("startDates", [])
         per_start_details = []
         if not is_rp and start_dates:
-            # Compute base FPTS excluding W/L (those are applied per-start)
+            # Base FPTS excluding W/L (those are applied per-start)
             base_no_wl = (
                 blended["ip"] *  3 +
                 blended["so"] *  1 +
@@ -276,20 +257,39 @@ def get_projected_fpts(player_starts: list, team_woba_factors: dict = None,
                 blended["hb"] * -1 +
                 blended["sv"] *  5
             )
-            raw_w = blended["w"]  # raw per-game win rate (not discounted)
-            raw_l = blended["l"]  # raw per-game loss rate
+            raw_w = blended["w"]
+            raw_l = blended["l"]
+
+            # Our pitcher's xERA for Pythagorean adjustment
+            our_xera = (savant_current.get(name_lower, {}).get("xera")
+                        or savant_previous.get(name_lower, {}).get("xera"))
 
             adjusted_total = 0.0
             for sd in start_dates:
                 opp       = sd.get("opponent", "")
                 is_home   = sd.get("is_home", True)
-                win_prob  = sd.get("win_prob") or DEFAULT_WIN_PROB
+                vegas_wp  = sd.get("win_prob")  # from ESPN scoreboard moneyline
                 woba_factor = team_woba_factors.get(opp, 1.0) if team_woba_factors else 1.0
                 park_team   = opp if not is_home else player_info.get("team", "")
-                if not park_team:
-                    park_factor = 1.0
+                park_factor = get_park_factor(park_team) if park_team else 1.0
+
+                # Win probability: Vegas → Pythagorean → default
+                if vegas_wp:
+                    win_prob = vegas_wp
+                    wp_source = "vegas"
+                elif team_win_data and player_info.get("team") and opp:
+                    win_prob = compute_matchup_win_prob(
+                        team_abbrev=player_info.get("team", ""),
+                        opp_abbrev=opp,
+                        team_win_data=team_win_data,
+                        pitcher_xera=our_xera,
+                        opp_pitcher_xera=None,  # TODO: thread opponent starter xERA
+                    ) or DEFAULT_WIN_PROB
+                    wp_source = "pyth"
                 else:
-                    park_factor = get_park_factor(park_team)
+                    win_prob = DEFAULT_WIN_PROB
+                    wp_source = "default"
+
                 # W/L contribution for this specific start
                 w_contrib = raw_w * win_prob * STARTER_WIN_SHARE * 5
                 l_contrib = raw_l * (1 - win_prob) * STARTER_WIN_SHARE * (-5)
@@ -304,6 +304,7 @@ def get_projected_fpts(player_starts: list, team_woba_factors: dict = None,
                     "park":     round(park_factor, 3),
                     "parkTeam": park_team,
                     "winProb":  round(win_prob, 3),
+                    "wpSource": wp_source,
                     "proj":     round(start_proj, 1),
                 })
             projected = round(adjusted_total, 1)
@@ -339,26 +340,33 @@ def get_projected_fpts(player_starts: list, team_woba_factors: dict = None,
                 if date and date <= today_str:
                     existing = get_locked_projection(season, period, full_name, date)
                     if existing is None:
-                        # V1: float for frontend compatibility
                         set_locked_projection(season, period, full_name, date,
                                               round(fpts_per_game, 1))
-                        # V2: full breakdown for accuracy tracking
                         opp       = sd.get("opponent", "")
                         is_home   = sd.get("is_home", True)
-                        win_prob  = sd.get("win_prob") or DEFAULT_WIN_PROB
+                        vegas_wp  = sd.get("win_prob")
                         woba_f    = team_woba_factors.get(opp, 1.0) if team_woba_factors else 1.0
                         park_tm   = opp if not is_home else player_info.get("team", "")
                         park_f    = get_park_factor(park_tm) if park_tm else 1.0
-                        # Compute per-start W/L using Vegas odds
-                        w_adj = blended["w"] * win_prob * STARTER_WIN_SHARE
-                        l_adj = blended["l"] * (1 - win_prob) * STARTER_WIN_SHARE
-                        base_no_wl_lock = (
-                            blended["ip"] *  3 + blended["so"] *  1 +
-                            blended["h"]  * -1 + blended["bb"] * -1 +
+                        # Use same win_prob logic as projection
+                        if vegas_wp:
+                            lock_wp = vegas_wp
+                        elif team_win_data and player_info.get("team") and opp:
+                            lock_wp = compute_matchup_win_prob(
+                                player_info.get("team", ""), opp,
+                                team_win_data, pitcher_xera=our_xera if 'our_xera' in dir() else None,
+                            ) or DEFAULT_WIN_PROB
+                        else:
+                            lock_wp = DEFAULT_WIN_PROB
+                        w_adj = blended["w"] * lock_wp * STARTER_WIN_SHARE
+                        l_adj = blended["l"] * (1 - lock_wp) * STARTER_WIN_SHARE
+                        lock_base = (
+                            blended["ip"] * 3 + blended["so"] * 1 +
+                            blended["h"] * -1 + blended["bb"] * -1 +
                             blended["er"] * -2 + blended["hb"] * -1 +
-                            blended["sv"] *  5
+                            blended["sv"] * 5
                         )
-                        start_proj = (base_no_wl_lock + w_adj * 5 + l_adj * (-5)) * woba_f * park_f
+                        start_proj = (lock_base + w_adj * 5 + l_adj * (-5)) * woba_f * park_f
                         breakdown = {
                             "fpts": round(start_proj, 1),
                             "stats": {
@@ -378,7 +386,7 @@ def get_projected_fpts(player_starts: list, team_woba_factors: dict = None,
                                 "park":     round(park_f, 3),
                                 "parkTeam": park_tm,
                                 "isHome":   is_home,
-                                "winProb":  round(win_prob, 3),
+                                "winProb":  round(lock_wp, 3),
                             },
                             "model": {
                                 "type":         model_label,

@@ -16,6 +16,8 @@ export interface StartDetail {
   woba: number       // 0.91
   park: number       // 1.075
   parkTeam: string   // "BOS"
+  winProb?: number   // 0.636 — team win probability
+  wpSource?: string  // "vegas" | "pyth" | "default"
   proj: number       // 16.2
 }
 
@@ -64,6 +66,38 @@ function FactorLabel({ value, inverse }: { value: number; inverse?: boolean }) {
   return (
     <span style={{ color, fontFamily: 'var(--mono)', fontSize: 10 }}>
       ×{value.toFixed(3)}
+    </span>
+  )
+}
+
+function WinProbLabel({ prob, source, compact }: { prob: number; source?: string; compact?: boolean }) {
+  // Color: green if favored (>0.5), red if underdog (<0.5), neutral at 0.5
+  const color = prob > 0.52 ? '#6ee7a0' : prob < 0.48 ? '#fca5a5' : 'rgba(255,255,255,0.5)'
+  const sourceLabel = source === 'vegas' ? 'V' : source === 'pyth' ? 'P' : '—'
+  const sourceTip = source === 'vegas' ? 'Vegas' : source === 'pyth' ? 'Pythagorean' : 'Default'
+  const pct = `${Math.round(prob * 100)}%`
+
+  if (compact) {
+    return (
+      <span style={{ color, fontFamily: 'var(--mono)', fontSize: 9 }} title={`Win: ${pct} (${sourceTip})`}>
+        W{pct}
+      </span>
+    )
+  }
+
+  return (
+    <span style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+      <span style={{ color, fontFamily: 'var(--mono)', fontSize: 10, fontWeight: 600 }}>
+        {pct}
+      </span>
+      <span style={{
+        fontSize: 8, padding: '0 3px', borderRadius: 3,
+        background: source === 'vegas' ? 'rgba(110,231,160,0.2)' : source === 'pyth' ? 'rgba(96,165,250,0.2)' : 'rgba(255,255,255,0.1)',
+        color: source === 'vegas' ? '#6ee7a0' : source === 'pyth' ? '#60a5fa' : 'rgba(255,255,255,0.4)',
+        letterSpacing: '0.05em',
+      }}>
+        {sourceTip}
+      </span>
     </span>
   )
 }
@@ -131,6 +165,12 @@ export default function ProjectionTooltip({ children, breakdown, startDate }: Pr
             <Row label={`Park (${startDetail.parkTeam})`}>
               <FactorLabel value={startDetail.park} />
             </Row>
+
+            {startDetail.winProb != null && (
+              <Row label={`Win prob`}>
+                <WinProbLabel prob={startDetail.winProb} source={startDetail.wpSource} />
+              </Row>
+            )}
 
             <Divider />
 
@@ -204,6 +244,9 @@ export default function ProjectionTooltip({ children, breakdown, startDate }: Pr
                   <span style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
                     <FactorLabel value={s.woba} inverse />
                     <FactorLabel value={s.park} />
+                    {s.winProb != null && (
+                      <WinProbLabel prob={s.winProb} source={s.wpSource} compact />
+                    )}
                     <span style={{ fontWeight: 700, color: '#fff', minWidth: 32, textAlign: 'right' }}>
                       {s.proj.toFixed(1)}
                     </span>
