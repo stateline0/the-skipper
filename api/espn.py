@@ -275,7 +275,17 @@ def get_league_data(team_id: int, week: int) -> dict:
         })
 
     slot_order = {"SP": 0, "RP": 1, "IL": 2, "Bench": 3, "P": 1}
-    roster_sps.sort(key=lambda x: (slot_order.get(x["slot"], 1), -x["starts"], -x["projFpts"]))
+    # Sort by slot group, then by average FPTS per start (best pitchers first).
+    # Pitchers with 0 starts go to the bottom within their slot group.
+    def sort_key(x):
+        slot = slot_order.get(x["slot"], 1)
+        starts = x["starts"]
+        if starts > 0:
+            per_start = x["projFpts"] / starts
+        else:
+            per_start = 0.0
+        return (slot, -per_start)
+    roster_sps.sort(key=sort_key)
 
     # ── Fetch free agents ─────────────────────────────────────────────
     xff_fa = json.dumps({
