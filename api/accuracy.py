@@ -6,6 +6,7 @@ from daily caches (cache:daily:* keys) to produce accuracy tracking data.
 Returns:
   - starts: list of {player, date, projected, actual, errors} for each matched start
   - summary: overall MAE, per-stat MAE, directional accuracy
+  - factorAnalysis: MAE with vs without each adjustment factor (wOBA, park, recent form)
 """
 import json
 import os
@@ -83,8 +84,6 @@ def get_accuracy_data(season: int, period: int) -> dict:
     print(f"[accuracy.py] Found actual stats for {len(actuals_by_date)} dates")
 
     # ── Match projections to actuals ─────────────────────────────────────
-    # The challenge: proj2 keys use slugs, actual_stats uses full names.
-    # Build a reverse mapping: slug → full name by slugifying all actual names.
     def make_slug(name: str) -> str:
         return re.sub(r"[^a-z0-9]+", "-", name.lower().strip()).strip("-")
 
@@ -122,18 +121,46 @@ def get_accuracy_data(season: int, period: int) -> dict:
             a = actual_stats.get(stat_key, 0)
             stat_errors[stat_key] = round(p - a, 2)
 
+        # ── Counterfactual projections (what if we removed each factor?) ──
+        # These let us measure whether each adjustment layer is helping.
+        matchup = proj_data.get("matchup", {})
+        model   = proj_data.get("model", {})
+        woba_factor    = matchup.get("woba", 1.0)
+        park_factor    = matchup.get("park", 1.0)
+        adjusted_base  = model.get("adjustedBase", 0)
+        season_base    = model.get("seasonBase", 0)
+        recent_form    = model.get("recentForm")
+
+        # What the projection would have been without each factor:
+        # Full model:       adjustedBase × woba × park  (= proj_fpts)
+        # Without wOBA:     adjustedBase × 1.0  × park
+        # Without park:     adjustedBase × woba × 1.0
+        # Without either:   adjustedBase × 1.0  × 1.0
+        # Without recent form: seasonBase × woba × park
+        without_woba = round(adjusted_base * 1.0 * park_factor, 1) if adjusted_base else proj_fpts
+        without_park = round(adjusted_base * woba_factor * 1.0, 1) if adjusted_base else proj_fpts
+        without_both = round(adjusted_base * 1.0 * 1.0, 1) if adjusted_base else proj_fpts
+        without_recent_form = round(season_base * woba_factor * park_factor, 1) if (season_base and recent_form is not None) else proj_fpts
+
         starts.append({
-            "player":    matched_name,
-            "slug":      slug,
-            "date":      date,
-            "projFpts":  proj_fpts,
-            "actualFpts": actual_fpts,
-            "fptsError": round(proj_fpts - actual_fpts, 1),
+            "player":      matched_name,
+            "slug":        slug,
+            "date":        date,
+            "projFpts":    proj_fpts,
+            "actualFpts":  actual_fpts,
+            "fptsError":   round(proj_fpts - actual_fpts, 1),
             "projStats":   proj_stats,
             "actualStats": actual_stats,
             "statErrors":  stat_errors,
-            "matchup":     proj_data.get("matchup", {}),
-            "model":       proj_data.get("model", {}),
+            "matchup":     matchup,
+            "model":       model,
+            # Counterfactual projections for factor analysis
+            "counterfactuals": {
+                "withoutWoba":       without_woba,
+                "withoutPark":       without_park,
+                "withoutBoth":       without_both,
+                "withoutRecentForm": without_recent_form,
+            },
         })
 
     print(f"[accuracy.py] Matched {matched} starts, {unmatched} unmatched (no actual stats)")
@@ -170,13 +197,83 @@ def get_accuracy_data(season: int, period: int) -> dict:
             stat_biases[stat_key] = round(sum(errors) / len(errors), 2)
         summary["statBias"] = stat_biases
 
+    # ── Factor contribution analysis ─────────────────────────────────────
+    # Compare MAE of the full model vs MAE when each factor is removed.
+    # If removing a factor INCREASES MAE, the factor is helping.
+    # If removing a factor DECREASES MAE, the factor is hurting.
+    factor_analysis = {}
+    if starts:
+        full_mae = summary["mae"]
+
+        # MAE without wOBA adjustment
+        woba_errors = [abs(s["counterfactuals"]["withoutWoba"] - s["actualFpts"]) for s in starts]
+        mae_without_woba = round(sum(woba_errors) / len(woba_errors), 2)
+
+        # MAE without park factor
+        park_errors = [abs(s["counterfactuals"]["withoutPark"] - s["actualFpts"]) for s in starts]
+        mae_without_park = round(sum(park_errors) / len(park_errors), 2)
+
+        # MAE without either matchup adjustment
+        both_errors = [abs(s["counterfactuals"]["withoutBoth"] - s["actualFpts"]) for s in starts]
+        mae_without_both = round(sum(both_errors) / len(both_errors), 2)
+
+        # MAE without recent form (only meaningful for starts where recent form was applied)
+        starts_with_form = [s for s in starts if s["model"].get("recentForm") is not None]
+        mae_without_recent_form = None
+        if starts_with_form:
+            form_errors = [abs(s["counterfactuals"]["withoutRecentForm"] - s["actualFpts"]) for s in starts_with_form]
+            mae_without_recent_form = round(sum(form_errors) / len(form_errors), 2)
+            # Also compute full-model MAE for just these starts (apples-to-apples)
+            form_full_errors = [abs(s["fptsError"]) for s in starts_with_form]
+            form_full_mae = round(sum(form_full_errors) / len(form_full_errors), 2)
+        else:
+            form_full_mae = None
+
+        factor_analysis = {
+            "fullModelMAE":   full_mae,
+            "woba": {
+                "maeWithout":  mae_without_woba,
+                "maeWith":     full_mae,
+                "impact":      round(mae_without_woba - full_mae, 2),
+                "helping":     mae_without_woba > full_mae,
+                "description": "Opponent lineup quality adjustment (team wOBA)",
+            },
+            "park": {
+                "maeWithout":  mae_without_park,
+                "maeWith":     full_mae,
+                "impact":      round(mae_without_park - full_mae, 2),
+                "helping":     mae_without_park > full_mae,
+                "description": "Park factor adjustment (dampened 50%)",
+            },
+            "matchupCombined": {
+                "maeWithout":  mae_without_both,
+                "maeWith":     full_mae,
+                "impact":      round(mae_without_both - full_mae, 2),
+                "helping":     mae_without_both > full_mae,
+                "description": "Both wOBA + park adjustments combined",
+            },
+            "recentForm": {
+                "maeWithout":    mae_without_recent_form,
+                "maeWith":       form_full_mae,
+                "impact":        round(mae_without_recent_form - form_full_mae, 2) if (mae_without_recent_form is not None and form_full_mae is not None) else None,
+                "helping":       (mae_without_recent_form > form_full_mae) if (mae_without_recent_form is not None and form_full_mae is not None) else None,
+                "startsAnalyzed": len(starts_with_form),
+                "description":   "Recent form weighting (60% season / 40% last 4 starts)",
+            },
+        }
+
+        print(f"[accuracy.py] Factor analysis: wOBA impact={factor_analysis['woba']['impact']:+.2f}, "
+              f"park impact={factor_analysis['park']['impact']:+.2f}, "
+              f"combined impact={factor_analysis['matchupCombined']['impact']:+.2f}")
+
     # Sort starts by date descending
     starts.sort(key=lambda s: s["date"], reverse=True)
 
     return {
-        "starts": starts,
-        "summary": summary,
-        "unmatchedCount": unmatched,
+        "starts":          starts,
+        "summary":         summary,
+        "factorAnalysis":  factor_analysis,
+        "unmatchedCount":  unmatched,
     }
 
 
