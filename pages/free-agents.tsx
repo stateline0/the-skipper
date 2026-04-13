@@ -152,6 +152,9 @@ function handleSort(col: string) {
       } else if (sortCol === 'projFpts') {
         aVal = a.projFpts ?? 0
         bVal = b.projFpts ?? 0
+      } else if (sortCol === 'actFpts') {
+        aVal = Object.values(actualFpts[a.name] || {}).reduce((sum: number, v: number) => sum + v, 0)
+        bVal = Object.values(actualFpts[b.name] || {}).reduce((sum: number, v: number) => sum + v, 0)
       } else if (sortCol === 'starts') {
         aVal = a.starts ?? 0
         bVal = b.starts ?? 0
@@ -166,7 +169,7 @@ function handleSort(col: string) {
       return sortDir === 'desc' ? bVal - aVal : aVal - bVal
     })
     return sorted
-  }, [freeSPs, sortCol, sortDir, fptsPerStart])
+  }, [freeSPs, sortCol, sortDir, fptsPerStart, actualFpts])
 
   function toggleCheck(index: number) {
     // index refers to sortedFreeSPs position — look up by name to find position in freeSPs
