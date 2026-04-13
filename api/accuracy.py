@@ -29,16 +29,23 @@ except Exception:
     KV_AVAILABLE = False
 
 
-def get_accuracy_data(season: int, period: int) -> dict:
+def get_accuracy_data(season: int, period: int, scope: str = "roster") -> dict:
     """
     Match v2 locked projections against actual stats for a given period.
+    
+    scope="roster" — original behavior, uses proj2: keys and cache:daily: actuals
+    scope="all" — all-MLB starters, uses proj2all: keys and actual-all: actuals
+    
     Returns comparison data for every start where both projected and actual exist.
     """
     if not KV_AVAILABLE or _redis is None:
         return {"starts": [], "summary": {}, "error": "KV not available"}
 
+    # ── Determine key prefixes based on scope ────────────────────────────
+    proj_prefix = "proj2all" if scope == "all" else "proj2"
+    
     # ── Fetch all v2 locked projections for this period ───────────────────
-    proj_keys = _redis.keys(f"proj2:{season}:{period}:*")
+    proj_keys = _redis.keys(f"{proj_prefix}:{season}:{period}:*")
     if not proj_keys:
         return {"starts": [], "summary": {}, "message": "No v2 projections found for this period"}
 
@@ -66,18 +73,29 @@ def get_accuracy_data(season: int, period: int) -> dict:
     for dates in slug_to_dates.values():
         all_dates.update(dates)
 
-    # ── Fetch actual stats from daily caches for those dates ──────────────
-    actuals_by_date = {}  # { "2026-04-10": { "Player Name": { actual breakdown } } }
+    # ── Fetch actual stats for those dates ──────────────────────────────
+    actuals_by_date = {}  # { "2026-04-10": { "Player Name/key": { actual breakdown } } }
     for date in sorted(all_dates):
-        cache_key = f"cache:daily:{date}"
+        if scope == "all":
+            # All-MLB actuals stored by cron.py under actual-all: keys
+            # Keyed by lowercase pitcher name (same as proj2all slug source)
+            cache_key = f"actual-all:{date}"
+        else:
+            # Roster actuals from ESPN mRoster daily cache
+            cache_key = f"cache:daily:{date}"
         val = _redis.get(cache_key)
         if val is None:
             continue
         try:
             daily_data = json.loads(val)
-            actual_stats = daily_data.get("actual_stats", {})
-            if actual_stats:
-                actuals_by_date[date] = actual_stats
+            if scope == "all":
+                # actual-all: stores pitchers directly (no nested actual_stats key)
+                if daily_data:
+                    actuals_by_date[date] = daily_data
+            else:
+                actual_stats = daily_data.get("actual_stats", {})
+                if actual_stats:
+                    actuals_by_date[date] = actual_stats
         except (json.JSONDecodeError, TypeError):
             continue
 
@@ -282,9 +300,11 @@ class handler(BaseHTTPRequestHandler):
         qs = parse_qs(urlparse(self.path).query)
         season = int(qs.get("season", ["2026"])[0])
         period = int(qs.get("period", ["1"])[0])
+        scope  = qs.get("scope", ["roster"])[0]  # "roster" or "all"
 
         try:
-            payload = get_accuracy_data(season, period)
+            payload = get_accuracy_data(season, period, scope=scope)
+            payload["scope"] = scope
         except Exception as e:
             payload = {"starts": [], "summary": {}, "error": str(e)}
 
