@@ -146,10 +146,10 @@ function DayCell({ pitcher, date, schedule, today, actualFpts, benchDays, actual
   // Past or live game
   if (isPast || isToday) {
     if (isStarting) {
-      // They started — show opp + indicator + actual FPTS if available
+      // They started — show opp + indicator inline, then actual FPTS below
       const indicator = startInfo.confirmed
-          ? <span style={{ fontSize: 11, color: 'var(--green)' }}>✓</span>
-          : <span style={{ fontSize: 10, fontWeight: 700, fontFamily: 'var(--mono)', color: 'var(--blue)', background: 'var(--blue-light)', borderRadius: 99, padding: '1px 5px' }}>P</span>
+          ? <span style={{ fontSize: 10, color: 'var(--green)' }}>✓</span>
+          : <span style={{ fontSize: 9, fontWeight: 700, fontFamily: 'var(--mono)', color: 'var(--blue)', background: 'var(--blue-light)', borderRadius: 99, padding: '0px 4px' }}>P</span>
       const color = startInfo.confirmed ? 'var(--green)' : 'var(--ink-3)'
       const fpts = actualFpts?.[pitcher.name]?.[date]
       const hasFpts = fpts !== undefined && fpts !== 0
@@ -157,10 +157,9 @@ function DayCell({ pitcher, date, schedule, today, actualFpts, benchDays, actual
       const perStart = lockedProjections?.[pitcher.name]?.[date] ?? fptsPerStart?.[pitcher.name]
       return (
         <div style={{ textAlign: 'center' }}>
-          <div style={{ fontSize: 11, fontFamily: 'var(--mono)', fontWeight: 700, color }}>
-            {oppLabel}
+          <div style={{ fontSize: 11, fontFamily: 'var(--mono)', fontWeight: 700, color, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 3 }}>
+            {oppLabel} {indicator}
           </div>
-          <div style={{ marginTop: 1 }}>{indicator}</div>
           {hasFpts && (
             <div style={{
               fontSize: 10, fontFamily: 'var(--mono)', fontWeight: 700,
@@ -220,16 +219,16 @@ function DayCell({ pitcher, date, schedule, today, actualFpts, benchDays, actual
   // Future game
   if (isStarting) {
     const indicator = startInfo.confirmed
-        ? <span style={{ fontSize: 11 }}>✅</span>
-        : <span style={{ fontSize: 10, fontWeight: 700, fontFamily: 'var(--mono)', color: 'var(--blue)', background: 'var(--blue-light)', borderRadius: 99, padding: '1px 5px' }}>P</span>
-    const perStart = fptsPerStart?.[pitcher.name]
+        ? <span style={{ fontSize: 10 }}>✅</span>
+        : <span style={{ fontSize: 9, fontWeight: 700, fontFamily: 'var(--mono)', color: 'var(--blue)', background: 'var(--blue-light)', borderRadius: 99, padding: '0px 4px' }}>P</span>
     const breakdown = projectionDetails?.[pitcher.name]
+    const startDetail = breakdown?.starts?.find(s => s.date === date)
+    const perStart = startDetail?.proj ?? fptsPerStart?.[pitcher.name]
     return (
       <div style={{ textAlign: 'center' }}>
-        <div style={{ fontSize: 11, fontFamily: 'var(--mono)', fontWeight: 700, color: 'var(--ink)' }}>
-          {oppLabel}
+        <div style={{ fontSize: 11, fontFamily: 'var(--mono)', fontWeight: 700, color: 'var(--ink)', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 3 }}>
+          {oppLabel} {indicator}
         </div>
-        <div style={{ fontSize: 11, marginTop: 1 }}>{indicator}</div>
         {perStart !== undefined && (
           <ProjectionTooltip breakdown={breakdown} startDate={date}>
             <div style={{ fontSize: 9, fontFamily: 'var(--mono)', color: 'var(--ink-3)', marginTop: 1 }}>
@@ -367,7 +366,12 @@ export default function ScheduleGrid({
               {savesData ? 'Saves' : 'Starts'}{sortIndicator('starts')}
             </th>
             {actualFpts && (
-              <th style={{ ...headerStyle, minWidth: 72 }}>Act FPTS</th>
+              <th
+                style={{ ...sortableHeader('actFpts'), minWidth: 72 }}
+                onClick={() => onSortChange?.('actFpts')}
+              >
+                Act FPTS{sortIndicator('actFpts')}
+              </th>
             )}
             <th
               style={{ ...sortableHeader('projFpts'), minWidth: 72 }}

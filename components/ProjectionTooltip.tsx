@@ -18,6 +18,7 @@ export interface StartDetail {
   parkTeam: string   // "BOS"
   winProb?: number   // 0.636 — team win probability
   wpSource?: string  // "vegas" | "pyth" | "default"
+  wlContrib?: number // +1.2 — net FPTS from W/L adjustment
   proj: number       // 16.2
 }
 
@@ -169,6 +170,17 @@ export default function ProjectionTooltip({ children, breakdown, startDate }: Pr
             {startDetail.winProb != null && (
               <Row label={`Win prob`}>
                 <WinProbLabel prob={startDetail.winProb} source={startDetail.wpSource} />
+              </Row>
+            )}
+
+            {startDetail.wlContrib != null && (
+              <Row label="W/L impact">
+                <span style={{
+                  fontFamily: 'var(--mono)', fontSize: 10, fontWeight: 600,
+                  color: startDetail.wlContrib >= 0 ? '#6ee7a0' : '#fca5a5',
+                }}>
+                  {startDetail.wlContrib >= 0 ? '+' : ''}{startDetail.wlContrib.toFixed(1)} pts
+                </span>
               </Row>
             )}
 

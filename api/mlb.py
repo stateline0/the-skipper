@@ -198,7 +198,11 @@ def fetch_espn_probables(period_start, period_end):
                     }
 
                 # ── Probable pitchers (same logic as before) ──────────────
+                # Also track which pitcher is starting for each team so we can
+                # look up the opponent starter's xERA for win probability adjustment.
+                game_starters = {}  # "home"/"away" -> full_name_lower
                 for comp in competitors:
+                    side = comp.get("homeAway", "")
                     for probable in comp.get("probables", []):
                         if probable.get("name") != "probableStartingPitcher":
                             continue
@@ -209,6 +213,23 @@ def fetch_espn_probables(period_start, period_end):
                             pitchers.setdefault(key, [])
                             if iso_date not in pitchers[key]:
                                 pitchers[key].append(iso_date)
+                            if side:
+                                game_starters[side] = key
+
+                # Add opponent starter to schedule entries
+                if home_abbrev and away_abbrev:
+                    home_entry = schedule[iso_date].get(home_abbrev, {})
+                    away_entry = schedule[iso_date].get(away_abbrev, {})
+                    # Home team's opponent starter is the away pitcher
+                    if "away" in game_starters:
+                        home_entry["opp_starter"] = game_starters["away"]
+                    # Away team's opponent starter is the home pitcher
+                    if "home" in game_starters:
+                        away_entry["opp_starter"] = game_starters["home"]
+                    if home_entry:
+                        schedule[iso_date][home_abbrev] = home_entry
+                    if away_entry:
+                        schedule[iso_date][away_abbrev] = away_entry
 
         except Exception as e:
             print(f"[mlb.py] ESPN scoreboard fetch failed for {date_str}: {e}")
@@ -360,6 +381,7 @@ def get_starts_for_players(player_names, matchup_period, team_map=None):
                     sd["opponent"] = game.get("opponent", "")
                     sd["is_home"]  = game.get("is_home", True)
                     sd["win_prob"] = game.get("win_prob")  # Vegas implied win probability
+                    sd["opp_starter"] = game.get("opp_starter")  # opponent pitcher name (lowercase)
             result[full_name] = entry
         else:
             result[full_name] = {"starts": 0, "startDates": []}
