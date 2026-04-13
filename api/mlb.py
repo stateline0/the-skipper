@@ -147,17 +147,54 @@ def fetch_espn_probables(period_start, period_end):
                 home_abbrev = ABBREV_MAP.get(home_abbrev, home_abbrev)
                 away_abbrev = ABBREV_MAP.get(away_abbrev, away_abbrev)
 
+                # ── Extract moneyline odds for win probability ─────────────
+                # ESPN scoreboard includes DraftKings odds inline — zero extra API calls.
+                # American odds → implied probability (normalized to remove vig):
+                #   Negative (favorite): prob = |odds| / (|odds| + 100)
+                #   Positive (underdog): prob = 100 / (odds + 100)
+                home_win_prob = None
+                away_win_prob = None
+                odds_list = competition.get("odds", [])
+                if odds_list:
+                    odds_data = odds_list[0]  # DraftKings (primary provider)
+                    ml = odds_data.get("moneyline", {})
+                    home_ml_str = ml.get("home", {}).get("close", {}).get("odds", "")
+                    away_ml_str = ml.get("away", {}).get("close", {}).get("odds", "")
+                    try:
+                        if home_ml_str:
+                            home_ml = int(home_ml_str)
+                            if home_ml < 0:
+                                home_win_prob = abs(home_ml) / (abs(home_ml) + 100)
+                            else:
+                                home_win_prob = 100 / (home_ml + 100)
+                        if away_ml_str:
+                            away_ml = int(away_ml_str)
+                            if away_ml < 0:
+                                away_win_prob = abs(away_ml) / (abs(away_ml) + 100)
+                            else:
+                                away_win_prob = 100 / (away_ml + 100)
+                        # Normalize so probabilities sum to 1.0 (remove vig/juice)
+                        if home_win_prob and away_win_prob:
+                            total = home_win_prob + away_win_prob
+                            home_win_prob = round(home_win_prob / total, 3)
+                            away_win_prob = round(away_win_prob / total, 3)
+                    except (ValueError, ZeroDivisionError):
+                        home_win_prob = None
+                        away_win_prob = None
+
                 # ── Record game in schedule dict ──────────────────────────
                 if home_abbrev and away_abbrev:
                     schedule[iso_date][home_abbrev] = {
                         "opponent": away_abbrev,
                         "is_home":  True,
                         "status":   game_status,
+                        "win_prob": home_win_prob,
                     }
                     schedule[iso_date][away_abbrev] = {
                         "opponent": home_abbrev,
                         "is_home":  False,
                         "status":   game_status,
+                        "win_prob": away_win_prob,
                     }
 
                 # ── Probable pitchers (same logic as before) ──────────────
@@ -322,6 +359,7 @@ def get_starts_for_players(player_names, matchup_period, team_map=None):
                     game = day.get(team_abbrev, {})
                     sd["opponent"] = game.get("opponent", "")
                     sd["is_home"]  = game.get("is_home", True)
+                    sd["win_prob"] = game.get("win_prob")  # Vegas implied win probability
             result[full_name] = entry
         else:
             result[full_name] = {"starts": 0, "startDates": []}
@@ -439,6 +477,157 @@ def get_team_woba(season: int = 2026) -> dict:
     except Exception as e:
         print(f"[mlb.py] get_team_woba failed: {e}")
         return {}
+
+
+# ---------------------------------------------------------------------------
+# Team Win Probability Model — Pythagorean expectation + pitcher adjustment
+#
+# Pythagorean formula: W% = RS^1.83 / (RS^1.83 + RA^1.83)
+# Log5 for head-to-head: P(A) = (pA × (1-pB)) / (pA × (1-pB) + pB × (1-pA))
+# Pitcher adjustment: scale by pitcher xERA relative to team ERA
+# ---------------------------------------------------------------------------
+
+def get_team_win_data(season: int = 2026) -> dict:
+    """
+    Fetch team run data and compute Pythagorean expected win%.
+    Also returns team ERA for pitcher-quality adjustments.
+
+    Returns {
+        "LAD": {"pyth_wpct": 0.620, "era": 3.25, "games": 15},
+        "CWS": {"pyth_wpct": 0.380, "era": 5.10, "games": 15},
+        ...
+    }
+    """
+    from concurrent.futures import ThreadPoolExecutor
+    try:
+        def fetch_hitting():
+            return requests.get(
+                "https://statsapi.mlb.com/api/v1/teams/stats",
+                params={"stats": "season", "group": "hitting", "gameType": "R",
+                        "season": str(season), "sportId": 1},
+                headers={"User-Agent": "Mozilla/5.0"}, timeout=10,
+            )
+
+        def fetch_pitching():
+            return requests.get(
+                "https://statsapi.mlb.com/api/v1/teams/stats",
+                params={"stats": "season", "group": "pitching", "gameType": "R",
+                        "season": str(season), "sportId": 1},
+                headers={"User-Agent": "Mozilla/5.0"}, timeout=10,
+            )
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            f_hit = executor.submit(fetch_hitting)
+            f_pit = executor.submit(fetch_pitching)
+            hit_r = f_hit.result()
+            pit_r = f_pit.result()
+
+        if hit_r.status_code != 200 or pit_r.status_code != 200:
+            print(f"[mlb.py] Team win data API error: hit={hit_r.status_code}, pit={pit_r.status_code}")
+            return {}
+
+        # Parse hitting (runs scored)
+        hit_splits = hit_r.json().get("stats", [{}])[0].get("splits", [])
+        team_rs = {}
+        for split in hit_splits:
+            team_id = split.get("team", {}).get("id")
+            abbrev = MLB_TEAM_ID_TO_ABBREV.get(team_id)
+            if not abbrev:
+                continue
+            s = split.get("stat", {})
+            gp = s.get("gamesPlayed", 0)
+            runs = s.get("runs", 0)
+            if gp > 0:
+                team_rs[abbrev] = {"runs": runs, "games": gp}
+
+        # Parse pitching (runs allowed + ERA)
+        pit_splits = pit_r.json().get("stats", [{}])[0].get("splits", [])
+        team_ra = {}
+        for split in pit_splits:
+            team_id = split.get("team", {}).get("id")
+            abbrev = MLB_TEAM_ID_TO_ABBREV.get(team_id)
+            if not abbrev:
+                continue
+            s = split.get("stat", {})
+            runs = s.get("runs", 0)
+            era_str = s.get("era", "4.50")
+            try:
+                era = float(era_str)
+            except (ValueError, TypeError):
+                era = 4.50
+            team_ra[abbrev] = {"runs": runs, "era": era}
+
+        # Compute Pythagorean expected W%
+        result = {}
+        exp = 1.83
+        for abbrev in team_rs:
+            if abbrev not in team_ra:
+                continue
+            games = team_rs[abbrev]["games"]
+            if games < 5:
+                continue
+            rs = team_rs[abbrev]["runs"]
+            ra = team_ra[abbrev]["runs"]
+            if ra == 0:
+                pyth = 0.99
+            else:
+                rs_exp = rs ** exp
+                ra_exp = ra ** exp
+                pyth = rs_exp / (rs_exp + ra_exp)
+
+            result[abbrev] = {
+                "pyth_wpct": round(pyth, 3),
+                "era":       team_ra[abbrev]["era"],
+                "games":     games,
+            }
+
+        print(f"[mlb.py] Pythagorean W%: {len(result)} teams")
+        for abbrev, d in sorted(result.items(), key=lambda x: -x[1]["pyth_wpct"])[:5]:
+            print(f"[mlb.py]   {abbrev}: pyth={d['pyth_wpct']:.3f}, ERA={d['era']:.2f}")
+
+        return result
+
+    except Exception as e:
+        print(f"[mlb.py] get_team_win_data failed: {e}")
+        return {}
+
+
+def compute_matchup_win_prob(team_abbrev, opp_abbrev, team_win_data,
+                             pitcher_xera=None, opp_pitcher_xera=None):
+    """
+    Compute win probability using Pythagorean + Log5 + pitcher adjustments.
+
+    Returns float between 0 and 1, or None if insufficient data.
+    """
+    team_data = team_win_data.get(team_abbrev)
+    opp_data  = team_win_data.get(opp_abbrev)
+    if not team_data or not opp_data:
+        return None
+
+    # Step 1: Log5 from Pythagorean W%
+    pA = team_data["pyth_wpct"]
+    pB = opp_data["pyth_wpct"]
+    denom = pA * (1 - pB) + pB * (1 - pA)
+    base_prob = (pA * (1 - pB)) / denom if denom else 0.5
+
+    # Step 2: Adjust for our pitcher quality (xERA vs team ERA)
+    pitcher_adj = 1.0
+    if pitcher_xera and pitcher_xera > 0 and team_data["era"] > 0:
+        raw = team_data["era"] / pitcher_xera
+        pitcher_adj = max(0.7, min(1.4, raw))  # cap to prevent extremes
+
+    # Step 3: Adjust for opponent pitcher quality (inverted — higher xERA = better for us)
+    opp_pitcher_adj = 1.0
+    if opp_pitcher_xera and opp_pitcher_xera > 0 and opp_data["era"] > 0:
+        raw = opp_pitcher_xera / opp_data["era"]
+        opp_pitcher_adj = max(0.7, min(1.4, raw))
+
+    # Apply in odds space to keep probability bounded 0-1
+    if base_prob <= 0 or base_prob >= 1:
+        return round(base_prob, 3)
+    base_odds = base_prob / (1 - base_prob)
+    adj_odds = base_odds * pitcher_adj * opp_pitcher_adj
+    return round(adj_odds / (1 + adj_odds), 3)
 
 
 # ---------------------------------------------------------------------------
