@@ -256,7 +256,7 @@ function handleSort(col: string) {
             <button onClick={fetchFreeAgents} style={{
               fontFamily: 'var(--sans)', fontSize: 13, fontWeight: 600,
               padding: '9px 18px', borderRadius: 'var(--radius)',
-              cursor: 'pointer', border: 'none', background: 'var(--ink)', color: 'var(--white)',
+              cursor: 'pointer', border: 'none', background: '#E2E4E8', color: '#0F1114',
             }}>Load free agents →</button>
           </div>
         ) : (
@@ -323,7 +323,7 @@ function handleSort(col: string) {
                 fontFamily: 'var(--sans)', fontSize: 13, fontWeight: 600,
                 padding: '9px 18px', borderRadius: 'var(--radius)',
                 cursor: 'pointer', border: 'none',
-                background: 'var(--green)', color: 'var(--white)',
+                background: 'var(--green)', color: '#0F1114',
               }}>Generate recommendations →</button>
             </div>
           </>

@@ -234,7 +234,7 @@ export default function Recommendations() {
                 fontFamily: 'var(--sans)', fontSize: 13, fontWeight: 600,
                 padding: '9px 18px', borderRadius: 'var(--radius)',
                 cursor: loading ? 'not-allowed' : 'pointer',
-                border: 'none', background: 'var(--green)', color: 'var(--white)',
+                border: 'none', background: 'var(--green)', color: '#0F1114',
                 opacity: loading ? 0.7 : 1, transition: 'all 0.15s',
               }}
             >
@@ -270,7 +270,7 @@ export default function Recommendations() {
                 fontFamily: 'var(--sans)', fontSize: 13, fontWeight: 600,
                 padding: '9px 18px', borderRadius: 'var(--radius)',
                 cursor: 'pointer', border: 'none',
-                background: 'var(--ink)', color: 'var(--white)',
+                background: '#E2E4E8', color: '#0F1114',
               }}
             >
               Start from Dashboard →

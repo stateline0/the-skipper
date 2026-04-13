@@ -94,8 +94,9 @@ export default function Dashboard() {
           </div>
 
           <div style={{
-            background: '#fffbeb', border: '1px solid #f0d080',
+            background: 'var(--paper-2)', border: '1px solid var(--border-strong)',
             borderRadius: 'var(--radius)', padding: '14px 16px', marginBottom: 20, fontSize: 13,
+            color: 'var(--ink-2)',
           }}>
             <strong>How to get your ESPN cookies (one-time setup):</strong><br />
             1. Log into <strong>fantasy.espn.com</strong> in Chrome<br />
@@ -114,7 +115,7 @@ export default function Dashboard() {
                 padding: '9px 18px', borderRadius: 'var(--radius)',
                 cursor: loading ? 'not-allowed' : 'pointer',
                 border: 'none',
-                background: 'var(--green)', color: 'var(--white)',
+                background: 'var(--green)', color: '#0F1114',
                 opacity: loading ? 0.7 : 1,
                 transition: 'all 0.15s',
               }}

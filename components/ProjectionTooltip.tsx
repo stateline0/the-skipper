@@ -41,15 +41,16 @@ interface Props {
 const tooltipBase: React.CSSProperties = {
   position: 'fixed',
   zIndex: 9999,
-  background: 'var(--ink)',
-  color: 'var(--white)',
+  background: '#1a1d24',
+  color: '#e2e4e8',
   borderRadius: 8,
   fontSize: 10,
   fontFamily: 'var(--mono)',
   whiteSpace: 'nowrap',
-  boxShadow: '0 4px 20px rgba(0,0,0,0.3)',
+  boxShadow: '0 4px 20px rgba(0,0,0,0.5)',
   pointerEvents: 'none',
   lineHeight: 1.6,
+  border: '1px solid rgba(255,255,255,0.1)',
 }
 
 // ─── Factor label helper ──────────────────────────────────────────────────────
