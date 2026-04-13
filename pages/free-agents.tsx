@@ -159,17 +159,19 @@ function handleSort(col: string) {
         aVal = a.starts ?? 0
         bVal = b.starts ?? 0
       } else {
-        // Date column — sort by fptsPerStart if pitcher starts that day, else 0
-        const aStarts = a.startDates?.some(s => s.date === sortCol) ?? false
-        const bStarts = b.startDates?.some(s => s.date === sortCol) ?? false
-        aVal = aStarts ? (fptsPerStart[a.name] ?? 0) : 0
-        bVal = bStarts ? (fptsPerStart[b.name] ?? 0) : 0
+        // Date column — sort by adjusted per-start projection if pitcher starts that day
+        const aStart = a.startDates?.find(s => s.date === sortCol)
+        const bStart = b.startDates?.find(s => s.date === sortCol)
+        const aDetail = projectionDetails[a.name]?.starts?.find((s: any) => s.date === sortCol)
+        const bDetail = projectionDetails[b.name]?.starts?.find((s: any) => s.date === sortCol)
+        aVal = aStart ? (aDetail?.proj ?? fptsPerStart[a.name] ?? 0) : 0
+        bVal = bStart ? (bDetail?.proj ?? fptsPerStart[b.name] ?? 0) : 0
       }
 
       return sortDir === 'desc' ? bVal - aVal : aVal - bVal
     })
     return sorted
-  }, [freeSPs, sortCol, sortDir, fptsPerStart, actualFpts])
+  }, [freeSPs, sortCol, sortDir, fptsPerStart, actualFpts, projectionDetails])
 
   function toggleCheck(index: number) {
     // index refers to sortedFreeSPs position — look up by name to find position in freeSPs
