@@ -337,7 +337,7 @@ export default function MyTeam() {
             <button onClick={() => router.push('/dashboard')} style={{
               fontFamily: 'var(--sans)', fontSize: 13, fontWeight: 600,
               padding: '9px 18px', borderRadius: 'var(--radius)',
-              cursor: 'pointer', border: 'none', background: 'var(--ink)', color: 'var(--white)',
+              cursor: 'pointer', border: 'none', background: '#E2E4E8', color: '#0F1114',
             }}>Go to Dashboard →</button>
           </div>
         ) : (
@@ -445,7 +445,7 @@ export default function MyTeam() {
                 fontFamily: 'var(--sans)', fontSize: 13, fontWeight: 600,
                 padding: '9px 18px', borderRadius: 'var(--radius)',
                 cursor: 'pointer', border: 'none',
-                background: 'var(--ink)', color: 'var(--white)',
+                background: '#E2E4E8', color: '#0F1114',
               }}>View free agents →</button>
             </div>
           </>

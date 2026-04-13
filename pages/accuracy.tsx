@@ -96,8 +96,9 @@ export default function AccuracyPage() {
               onChange={e => setPeriod(Number(e.target.value))}
               style={{
                 padding: '6px 12px', fontSize: 13, borderRadius: 6,
-                border: '1px solid var(--paper-3)', background: 'var(--paper)',
+                border: '1px solid var(--border-strong)', background: 'var(--paper-2)',
                 fontFamily: 'var(--mono)', cursor: 'pointer',
+                color: 'var(--ink)',
               }}
             >
               {Array.from({ length: 22 }, (_, i) => (

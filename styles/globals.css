@@ -1,29 +1,30 @@
-@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Syne:wght@400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
 
 :root {
-  --green: #1a7a4a;
-  --green-light: #e8f5ee;
-  --green-mid: #2ea865;
-  --amber: #b85c00;
-  --amber-light: #fff3e0;
-  --red: #c0392b;
-  --red-light: #fdecea;
-  --blue: #1a5fa8;
-  --blue-light: #e8f0fb;
-  --ink: #0f1a12;
-  --ink-2: #3a4a3e;
-  --ink-3: #6b7a6f;
-  --paper: #f7f9f5;
-  --paper-2: #eef2eb;
-  --paper-3: #e4eae0;
-  --white: #ffffff;
-  --border: rgba(15,26,18,0.10);
-  --border-strong: rgba(15,26,18,0.20);
-  --radius: 10px;
-  --radius-lg: 16px;
-  --mono: 'IBM Plex Mono', monospace;
-  --sans: 'Syne', sans-serif;
-  --shadow: 0 1px 3px rgba(15,26,18,0.08), 0 4px 16px rgba(15,26,18,0.06);
+  /* ── Midnight palette ── */
+  --green: #2EC4A0;
+  --green-light: rgba(46,196,160,0.12);
+  --green-mid: #2EC4A0;
+  --amber: #F0A030;
+  --amber-light: rgba(240,160,48,0.12);
+  --red: #E8534A;
+  --red-light: rgba(232,83,74,0.12);
+  --blue: #5BA8E8;
+  --blue-light: rgba(91,168,232,0.12);
+  --ink: #E2E4E8;
+  --ink-2: #B0B3BA;
+  --ink-3: #8B8F96;
+  --paper: #0F1114;
+  --paper-2: #1E2128;
+  --paper-3: #2A2D35;
+  --white: #161920;
+  --border: rgba(255,255,255,0.08);
+  --border-strong: rgba(255,255,255,0.15);
+  --radius: 8px;
+  --radius-lg: 12px;
+  --mono: 'JetBrains Mono', monospace;
+  --sans: 'Inter', sans-serif;
+  --shadow: 0 1px 3px rgba(0,0,0,0.24), 0 4px 16px rgba(0,0,0,0.2);
 }
 
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
