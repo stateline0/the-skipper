@@ -434,9 +434,32 @@ Model architecture roadmap
 Layer 1 ✅ COMPLETE — Savant xERA/xBA hybrid base rate
 Layer 2 ✅ COMPLETE — Recent form weighting (rolling last 4 starts)
 Layer 3 ✅ COMPLETE — Park factors (dampened 50%)
-Layer 4 PENDING — Platoon splits
-Layer 5 PENDING — Rest & workload
-Accuracy tracking PENDING — Compare locked projections vs actual FPTS
+Layer 4 ✅ COMPLETE — Vegas/Pythagorean win probability for W/L
+Layer 5 PENDING — Platoon splits
+Layer 6 PENDING — Rest & workload
+Layer 7 PENDING — Opponent starter quality adjustment
+Layer 8 PENDING — Weather impact
+Accuracy tracking ✅ COMPLETE — Factor contribution analysis (PR #74)
+
+Win probability model (Layer 4)
+`Confidence: 8/10 · Last assessed: April 12, 2026`
+
+Three-tier fallback chain for per-start W/L scaling:
+1. **Vegas moneyline** — DraftKings odds from ESPN scoreboard API (already called for probables). American odds → implied probability, normalized to remove vig. Available ~12-24hrs before game.
+2. **Pythagorean model** — `get_team_win_data()` fetches team RS/RA and ERA via MLB Stats API (2 parallel calls: hitting + pitching). Pythagorean exponent 1.83. Log5 for head-to-head. Pitcher xERA adjustment capped 0.7–1.4.
+3. **Default 0.5** — coin flip, same as old flat discount.
+
+Formula per start:
+- `base_no_wl` = IP×3 + K×1 + H×(-1) + BB×(-1) + ER×(-2) + HBP×(-1) + SV×5
+- `w_contrib` = raw_w_rate × win_prob × STARTER_WIN_SHARE(0.57) × 5
+- `l_contrib` = raw_l_rate × (1 - win_prob) × STARTER_WIN_SHARE(0.57) × (-5)
+- `start_proj` = (base_no_wl + w_contrib + l_contrib) × woba_factor × park_factor
+
+`winProb` and `wpSource` stored in v2 locked projections for accuracy tracking.
+Opponent starter xERA parameter exists but is not yet populated (TODO).
+
+Factor contribution analysis
+`Confidence: 9/10 · Last assessed: April 12, 2026`
 
 ---
 
