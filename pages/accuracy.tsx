@@ -80,17 +80,18 @@ export default function AccuracyPage() {
   const [data, setData] = useState<AccuracyData | null>(null)
   const [loading, setLoading] = useState(true)
   const [period, setPeriod] = useState(2)
+  const [scope, setScope] = useState<'roster' | 'all'>('roster')
   const [expandedRow, setExpandedRow] = useState<string | null>(null)
 
   const fetchData = () => {
     setLoading(true)
-    fetch(`/api/accuracy?season=2026&period=${period}`)
+    fetch(`/api/accuracy?season=2026&period=${period}&scope=${scope}`)
       .then(r => r.json())
       .then(d => { setData(d); setLoading(false) })
       .catch(() => setLoading(false))
   }
 
-  useEffect(() => { fetchData() }, [period])
+  useEffect(() => { fetchData() }, [period, scope])
 
   const summary = data?.summary || {}
   const starts = data?.starts || []
@@ -112,6 +113,33 @@ export default function AccuracyPage() {
             </p>
           </div>
           <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+            <div style={{
+              display: 'flex', borderRadius: 6, overflow: 'hidden',
+              border: '1px solid var(--border-strong)',
+            }}>
+              <button
+                onClick={() => setScope('roster')}
+                style={{
+                  padding: '6px 12px', fontSize: 12, border: 'none', cursor: 'pointer',
+                  fontFamily: 'var(--mono)',
+                  background: scope === 'roster' ? 'var(--ink)' : 'transparent',
+                  color: scope === 'roster' ? 'var(--paper)' : 'var(--ink-3)',
+                }}
+              >
+                My Roster
+              </button>
+              <button
+                onClick={() => setScope('all')}
+                style={{
+                  padding: '6px 12px', fontSize: 12, border: 'none', cursor: 'pointer',
+                  fontFamily: 'var(--mono)', borderLeft: '1px solid var(--border-strong)',
+                  background: scope === 'all' ? 'var(--ink)' : 'transparent',
+                  color: scope === 'all' ? 'var(--paper)' : 'var(--ink-3)',
+                }}
+              >
+                All MLB
+              </button>
+            </div>
             <button
               onClick={fetchData}
               disabled={loading}
