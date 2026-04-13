@@ -148,16 +148,52 @@ def fetch_espn_probables(period_start, period_end):
                 away_abbrev = ABBREV_MAP.get(away_abbrev, away_abbrev)
 
                 # ── Record game in schedule dict ──────────────────────────
+                # Extract moneyline odds for win probability calculation.
+                # American odds → implied probability:
+                #   Negative (favorite): prob = |odds| / (|odds| + 100)
+                #   Positive (underdog): prob = 100 / (odds + 100)
+                home_win_prob = None
+                away_win_prob = None
+                odds_list = competition.get("odds", [])
+                if odds_list:
+                    odds_data = odds_list[0]  # DraftKings (primary provider)
+                    ml = odds_data.get("moneyline", {})
+                    home_ml_str = ml.get("home", {}).get("close", {}).get("odds", "")
+                    away_ml_str = ml.get("away", {}).get("close", {}).get("odds", "")
+                    try:
+                        if home_ml_str:
+                            home_ml = int(home_ml_str)
+                            if home_ml < 0:
+                                home_win_prob = abs(home_ml) / (abs(home_ml) + 100)
+                            else:
+                                home_win_prob = 100 / (home_ml + 100)
+                        if away_ml_str:
+                            away_ml = int(away_ml_str)
+                            if away_ml < 0:
+                                away_win_prob = abs(away_ml) / (abs(away_ml) + 100)
+                            else:
+                                away_win_prob = 100 / (away_ml + 100)
+                        # Normalize so probabilities sum to 1.0 (remove vig/juice)
+                        if home_win_prob and away_win_prob:
+                            total = home_win_prob + away_win_prob
+                            home_win_prob = round(home_win_prob / total, 3)
+                            away_win_prob = round(away_win_prob / total, 3)
+                    except (ValueError, ZeroDivisionError):
+                        home_win_prob = None
+                        away_win_prob = None
+
                 if home_abbrev and away_abbrev:
                     schedule[iso_date][home_abbrev] = {
                         "opponent": away_abbrev,
                         "is_home":  True,
                         "status":   game_status,
+                        "win_prob": home_win_prob,
                     }
                     schedule[iso_date][away_abbrev] = {
                         "opponent": home_abbrev,
                         "is_home":  False,
                         "status":   game_status,
+                        "win_prob": away_win_prob,
                     }
 
                 # ── Probable pitchers (same logic as before) ──────────────
@@ -322,6 +358,7 @@ def get_starts_for_players(player_names, matchup_period, team_map=None):
                     game = day.get(team_abbrev, {})
                     sd["opponent"] = game.get("opponent", "")
                     sd["is_home"]  = game.get("is_home", True)
+                    sd["win_prob"] = game.get("win_prob")  # Vegas implied team win probability
             result[full_name] = entry
         else:
             result[full_name] = {"starts": 0, "startDates": []}
