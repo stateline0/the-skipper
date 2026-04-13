@@ -6,6 +6,12 @@ Last updated: April 12, 2026
 
 ## 🔜 Next session priorities
 
+### Accuracy page redesign
+- [ ] Remove matchup period dropdown — show all-time data across all periods
+- [ ] Fix "My Roster" scope leaking FA projections (filter proj2: keys to actual roster players)
+- [ ] MAE timeline chart with model milestone markers (e.g., "Added park factors", "Vegas W/L")
+- [ ] Rolling MAE over time to visualize model improvement
+
 ### Weekly planner / decision automation MVP
 - [ ] AI-powered weekly optimization: recommend add/drop sequence and start/sit decisions
 - [ ] Teach Anthropic API about ESPN transaction rules (daily locks, waiver priority)
@@ -13,28 +19,19 @@ Last updated: April 12, 2026
 - [ ] Uses projection model data as input
 
 ### Model Improvements
-- [ ] Track lineup and park factor adjustment accuracy separately to determine if multipliers need recalibration
-- [ ] Project and track ALL MLB starts (not just rostered/FA pitchers) for larger model evaluation sample size
-- [ ] Thread opponent probable pitcher xERA through schedule data for pitcher-adjusted win probability
 - [ ] Recent form for opposing lineup (blend season wOBA with last 7-14 day team hitting)
 - [ ] Weather impact layer (temperature + wind direction via Open-Meteo API, map parks to lat/lng)
-
-### espn.py further cleanup
-- [ ] `espn.py` still 496 lines — could extract roster parsing and free agent sections into separate functions
-- [ ] Consider caching team_win_data (Pythagorean) with 24hr TTL
-
-### Color Scheme Refresh
-- [x] Color scheme refresh — midnight dark theme with Inter + JetBrains Mono (PR #71)
+- [ ] Cache team wOBA factors with 24hr TTL (same pattern as team_win_data)
 
 ---
 
 ## 📋 Backlog (lower priority)
 
-### Projection model — Layer 4: Platoon splits
+### Projection model — Layer 5: Platoon splits
 - [ ] Pitcher performance vs left-heavy vs right-heavy lineups
 - [ ] Team handedness composition from MLB Stats API
 
-### Projection model — Layer 5: Rest & workload
+### Projection model — Layer 6: Rest & workload
 - [ ] Days since last start (4 vs 5+ day rest performance)
 - [ ] Season pitch count trajectory (fatigue effects)
 - [ ] Most meaningful mid-to-late season
@@ -64,6 +61,8 @@ Last updated: April 12, 2026
 
 ## 🐛 Known bugs
 
+- [ ] Suspended players (SSPD) not appearing in roster — Reynaldo Lopez added but missing from mRoster response. Likely ESPN uses different eligibleSlots or lineupSlotId for suspended players.
+- [ ] "My Roster" accuracy scope shows non-roster pitchers — FA projections leak into proj2: keys
 - [ ] Free agent actual FPTS only available for players who were rostered at time of start — ESPN API limitation (affects accuracy dashboard too)
 - [ ] `vercel dev` does not serve Python API routes locally (Vercel CLI v50+ known issue)
 - [ ] Dropped players show projFpts 0.0 — could pull locked projections from KV
@@ -71,13 +70,25 @@ Last updated: April 12, 2026
 ---
 
 ## ✅ Completed (session 18 — April 12, 2026)
-- [x] espn.py refactor: split 1220-line monolith into projection.py (346), fetcher.py (435), espn.py (489) (PR #73)
-- [x] Factor contribution analysis on accuracy dashboard — shows whether wOBA, park, recent form adjustments help or hurt (PR #74)
+- [x] espn.py refactor: split 1220-line monolith into projection.py, fetcher.py, espn.py (PR #73)
+- [x] Factor contribution analysis on accuracy dashboard (PR #74)
 - [x] Refresh button on accuracy page (PR #74)
-- [x] Vegas moneyline win probability from ESPN scoreboard — zero extra API calls (PR #75)
-- [x] Pythagorean win expectation model (Log5 + pitcher xERA adjustment) as fallback (PR #75)
-- [x] Per-start W/L scaling: team_win_prob × 0.57 starter share replaces flat 50% discount (PR #75)
-- [x] Win probability shown in projection tooltip with source badge (Vegas/Pythagorean) (PR #75)
+- [x] Vegas moneyline win probability from ESPN scoreboard (PR #75)
+- [x] Pythagorean win expectation model with Log5 + pitcher xERA adjustment (PR #75)
+- [x] Per-start W/L scaling: team_win_prob × 0.57 starter share (PR #75)
+- [x] Win probability shown in tooltip with Vegas/Pythagorean source badge (PR #75)
+- [x] Daily cron job for all-MLB projection locking at noon CT (PR #76)
+- [x] All-MLB actuals from game logs stored under actual-all: keys (PR #76)
+- [x] Accuracy page: My Roster / All MLB scope toggle (PR #76)
+- [x] CRON_SECRET env var for cron endpoint security (PR #76)
+- [x] Cache team_win_data with 24hr TTL (PR #77)
+- [x] Opponent starter xERA threaded through schedule → projection model (PR #77)
+- [x] Schedule grid shows adjusted per-start projection instead of base rate (PR #77)
+- [x] W/L impact shown in projection tooltip (PR #77)
+- [x] Free Agents: sortable Act FPTS column (PR #77)
+- [x] Free Agents: date column sort uses adjusted projection (PR #77)
+- [x] Compact grid cells: indicator inline with opponent label (PR #77)
+- [x] My Team: roster sorted by per-start quality (projFpts/starts) (PR #77)
 
 ## ✅ Completed (session 17 — April 12, 2026)
 - [x] Color scheme refresh — midnight dark theme with Inter + JetBrains Mono (PR #71)
