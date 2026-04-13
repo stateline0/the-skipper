@@ -27,6 +27,7 @@ export default function FreeAgents() {
   const [actualFpts, setActualFpts]     = useState<Record<string, Record<string, number>>>({})
   const [fptsPerStart, setFptsPerStart] = useState<Record<string, number>>({})
   const [projectionDetails, setProjectionDetails] = useState<Record<string, any>>({})
+  const [liveStats, setLiveStats]       = useState<Record<string, any>>({})
   const [sortCol, setSortCol]           = useState<string>('percentOwned')
   const [sortDir, setSortDir]           = useState<'asc' | 'desc'>('desc')
 
@@ -52,6 +53,7 @@ export default function FreeAgents() {
       setActualFpts(data.actualFpts || {})
       setFptsPerStart(data.fptsPerStart || {})
       setProjectionDetails(data.projectionDetails || {})
+      setLiveStats(data.liveStats || {})
     }
   }, [])
 
@@ -106,6 +108,7 @@ export default function FreeAgents() {
         actualFpts: data.faActualFpts || {},
         fptsPerStart: data.faFptsPerStart || {},
         projectionDetails: data.faProjectionDetails || {},
+        liveStats: data.liveStats || {},
       }
       sessionStorage.setItem('skipper_free_agents', JSON.stringify(toCache))
       setFreeSPs(fas)
@@ -114,6 +117,7 @@ export default function FreeAgents() {
       setActualFpts(data.faActualFpts || {})
       setFptsPerStart(data.faFptsPerStart || {})
       setProjectionDetails(data.faProjectionDetails || {})
+      setLiveStats(data.liveStats || {})
     } catch (e: any) {
       setError(e.message || 'Failed to load free agents')
     } finally {
@@ -286,6 +290,7 @@ function handleSort(col: string) {
                 actualFpts={actualFpts}
                 fptsPerStart={fptsPerStart}
                 projectionDetails={projectionDetails}
+                liveStats={liveStats}
                 sortCol={sortCol}
                 sortDir={sortDir}
                 onSortChange={handleSort}

@@ -1,4 +1,4 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Manrope:wght@400;500;600;700&display=swap');
 
 :root {
   /* ── Midnight palette ── */
@@ -22,7 +22,7 @@
   --border-strong: rgba(255,255,255,0.15);
   --radius: 8px;
   --radius-lg: 12px;
-  --mono: 'JetBrains Mono', monospace;
+  --mono: 'Manrope', sans-serif;
   --sans: 'Inter', sans-serif;
   --shadow: 0 1px 3px rgba(0,0,0,0.24), 0 4px 16px rgba(0,0,0,0.2);
 }

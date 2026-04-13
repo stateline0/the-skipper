@@ -164,6 +164,7 @@ def get_actual_fpts(past_dates: list, player_names: set, headers: dict,
     saves_result = {name: {} for name in player_names}
     bench_result = {name: [] for name in player_names}
     my_team_pitchers_by_day = {}
+    live_stats_result = {}  # pitcher_name -> {fpts, stats: {ip, so, h, bb, er, ...}}
 
     # ── Check cache for each past day ─────────────────────────────────────
     today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
@@ -301,6 +302,12 @@ def get_actual_fpts(past_dates: list, player_names: set, headers: dict,
                 if day_my_team:
                     my_team_pitchers_by_day[date_str] = day_my_team
 
+                # Capture today's live stat breakdowns (not cached — changes every refresh)
+                if date_str >= today_str and day_actual_stats:
+                    for name in player_names:
+                        if name in day_actual_stats:
+                            live_stats_result[name] = day_actual_stats[name]
+
                 # Cache this day if it's fully completed (not today)
                 if date_str < today_str:
                     try:
@@ -314,7 +321,7 @@ def get_actual_fpts(past_dates: list, player_names: set, headers: dict,
                     except Exception:
                         pass
 
-    return fpts_result, saves_result, bench_result, my_team_pitchers_by_day
+    return fpts_result, saves_result, bench_result, my_team_pitchers_by_day, live_stats_result
 
 
 def load_cached_data(year_int: int) -> dict:

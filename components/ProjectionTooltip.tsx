@@ -6,9 +6,17 @@
 //
 // Uses position:fixed so the tooltip escapes overflow:auto table containers.
 
-import { useState, useRef } from 'react'
+import { useState, useRef, useEffect } from 'react'
+import { createPortal } from 'react-dom'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
+
+// Safe portal target — avoids SSR issues (document doesn't exist on server)
+function usePortalTarget() {
+  const [target, setTarget] = useState<HTMLElement | null>(null)
+  useEffect(() => { setTarget(document.body) }, [])
+  return target
+}
 
 export interface StartDetail {
   label: string      // "vs COL" or "@ SF"
@@ -109,6 +117,7 @@ export default function ProjectionTooltip({ children, breakdown, startDate }: Pr
   const [show, setShow] = useState(false)
   const [coords, setCoords] = useState({ top: 0, left: 0, above: true })
   const containerRef = useRef<HTMLDivElement>(null)
+  const portalTarget = usePortalTarget()
 
   if (!breakdown) {
     return <>{children}</>
@@ -143,7 +152,7 @@ export default function ProjectionTooltip({ children, breakdown, startDate }: Pr
         style={{ display: 'inline-block', cursor: 'help' }}
       >
         {children}
-        {show && (
+        {show && portalTarget && createPortal(
           <div style={{
             ...tooltipBase,
             top: coords.above ? undefined : coords.top,
@@ -188,7 +197,7 @@ export default function ProjectionTooltip({ children, breakdown, startDate }: Pr
 
             <Row label="Projected" value={`${startDetail.proj.toFixed(1)}`} bold />
           </div>
-        )}
+        , portalTarget)}
       </div>
     )
   }
@@ -202,7 +211,7 @@ export default function ProjectionTooltip({ children, breakdown, startDate }: Pr
       style={{ display: 'inline-block', cursor: 'help' }}
     >
       {children}
-      {show && (
+      {show && portalTarget && createPortal(
         <div style={{
           ...tooltipBase,
           top: coords.above ? undefined : coords.top,
@@ -271,7 +280,7 @@ export default function ProjectionTooltip({ children, breakdown, startDate }: Pr
           <Divider />
           <Row label="Total" value={`${breakdown.total.toFixed(1)}`} bold />
         </div>
-      )}
+      , portalTarget)}
     </div>
   )
 }
