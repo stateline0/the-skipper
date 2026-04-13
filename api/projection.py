@@ -278,12 +278,20 @@ def get_projected_fpts(player_starts: list, team_woba_factors: dict = None,
                     win_prob = vegas_wp
                     wp_source = "vegas"
                 elif team_win_data and player_info.get("team") and opp:
+                    # Look up opponent starter's xERA from Savant data
+                    opp_starter_name = sd.get("opp_starter")  # lowercase name from schedule
+                    opp_pitcher_xera = None
+                    if opp_starter_name:
+                        opp_pitcher_xera = (
+                            savant_current.get(opp_starter_name, {}).get("xera")
+                            or savant_previous.get(opp_starter_name, {}).get("xera")
+                        )
                     win_prob = compute_matchup_win_prob(
                         team_abbrev=player_info.get("team", ""),
                         opp_abbrev=opp,
                         team_win_data=team_win_data,
                         pitcher_xera=our_xera,
-                        opp_pitcher_xera=None,  # TODO: thread opponent starter xERA
+                        opp_pitcher_xera=opp_pitcher_xera,
                     ) or DEFAULT_WIN_PROB
                     wp_source = "pyth"
                 else:
@@ -305,6 +313,7 @@ def get_projected_fpts(player_starts: list, team_woba_factors: dict = None,
                     "parkTeam": park_team,
                     "winProb":  round(win_prob, 3),
                     "wpSource": wp_source,
+                    "wlContrib": round(w_contrib + l_contrib, 1),
                     "proj":     round(start_proj, 1),
                 })
             projected = round(adjusted_total, 1)

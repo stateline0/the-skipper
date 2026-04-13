@@ -328,7 +328,7 @@ def load_cached_data(year_int: int) -> dict:
       game_logs_current
     """
     from savant import fetch_expected_stats
-    from mlb import fetch_game_logs
+    from mlb import fetch_game_logs, get_team_win_data
 
     # ── Savant expected stats ─────────────────────────────────────────
     savant_previous = {}
@@ -426,10 +426,32 @@ def load_cached_data(year_int: int) -> dict:
 
     print(f"[fetcher.py] Game logs: {len(game_logs_current)} pitchers with game-level data")
 
+    # ── Team win data for Pythagorean win probability (24hr TTL) ───────
+    team_win_data = {}
+    try:
+        team_win_data = cache_get(f"cache:team-win-data:{year_int}") or {}
+    except Exception:
+        pass
+
+    if not team_win_data:
+        try:
+            team_win_data = get_team_win_data(year_int) or {}
+            if team_win_data:
+                try:
+                    cache_set(f"cache:team-win-data:{year_int}", team_win_data,
+                              ttl_seconds=86400)
+                except Exception:
+                    pass
+        except Exception as e:
+            print(f"[fetcher.py] Team win data fetch failed: {e}")
+
+    print(f"[fetcher.py] Team win data: {len(team_win_data)} teams")
+
     return {
         "savant_current":     savant_current,
         "savant_previous":    savant_previous,
         "mlb_stats_current":  mlb_stats_current,
         "mlb_stats_previous": mlb_stats_previous,
         "game_logs_current":  game_logs_current,
+        "team_win_data":      team_win_data,
     }
