@@ -277,7 +277,7 @@ cache:mlb-stats:{year}   → JSON dict of season pitching stats by pitcher name
 cache:game-logs:{year}   → JSON dict of per-game pitching stats by pitcher name
 cache:daily:{date}       → JSON dict {fpts, saves, bench, my_team} for all league pitchers
 Cache TTL strategy
-Key patternTTLRationalecache:savant:2025PermanentLast year's data is finalcache:savant:202624 hoursUpdates daily during seasoncache:mlb-stats:2025PermanentLast year's data is finalcache:mlb-stats:202624 hoursUpdates daily during seasoncache:game-logs:202624 hoursNew games happen dailycache:daily:2026-04-06PermanentCompleted day's stats never changecache:daily:{today}Never cachedGames may be in progressproj:*PermanentWrite-once, never overwritten (NX flag)
+Key patternTTLRationalecache:savant:2025PermanentLast year's data is finalcache:savant:202624 hoursUpdates daily during seasoncache:mlb-stats:2025PermanentLast year's data is finalcache:mlb-stats:202624 hoursUpdates daily during seasoncache:game-logs:202624 hoursNew games happen dailycache:team-win-data:202624 hoursPythagorean model data updates dailycache:daily:2026-04-06PermanentCompleted day's stats never changecache:daily:{today}Never cachedGames may be in progressproj:*PermanentWrite-once, never overwritten (NX flag)proj2:*PermanentV2 rich projection locks (roster pitchers)proj2all:*PermanentV2 projection locks (all MLB starters, from cron)actual-all:*PermanentAll-MLB actuals from game logs (from cron)
 Performance impact
 
 Uncached request: ~4.5s (fetches Savant, MLB Stats, and daily FPTS from external APIs)
@@ -437,7 +437,7 @@ Layer 3 ✅ COMPLETE — Park factors (dampened 50%)
 Layer 4 ✅ COMPLETE — Vegas/Pythagorean win probability for W/L
 Layer 5 PENDING — Platoon splits
 Layer 6 PENDING — Rest & workload
-Layer 7 PENDING — Opponent starter quality adjustment
+Layer 7 ✅ COMPLETE — Opponent starter quality adjustment (xERA via scoreboard probables)
 Layer 8 PENDING — Weather impact
 Accuracy tracking ✅ COMPLETE — Factor contribution analysis (PR #74)
 
@@ -456,7 +456,7 @@ Formula per start:
 - `start_proj` = (base_no_wl + w_contrib + l_contrib) × woba_factor × park_factor
 
 `winProb` and `wpSource` stored in v2 locked projections for accuracy tracking.
-Opponent starter xERA parameter exists but is not yet populated (TODO).
+Opponent starter xERA threaded from ESPN scoreboard probables → schedule → projection model (PR #77).
 
 Factor contribution analysis
 `Confidence: 9/10 · Last assessed: April 12, 2026`
@@ -489,6 +489,45 @@ ESPN's API does not return `matchupPeriodDates` for this league via any availabl
 ### Session storage for cross-page state
 
 `sessionStorage` is used to persist data across page navigation (My Team → Free Agents → back). A `CACHE_VERSION` constant ensures stale cache shapes are detected and auto-refreshed when the API response format changes.
+
+### File architecture (refactored session 18)
+`Confidence: 10/10 · Last assessed: April 12, 2026`
+
+| File | Lines | Responsibility |
+|---|---|---|
+| `api/espn.py` | ~504 | Orchestrator: `get_league_data()` + HTTP handler |
+| `api/projection.py` | ~415 | Projection model: Savant hybrid, year blend, recent form, matchup adjustments, W/L scaling, locking |
+| `api/fetcher.py` | ~457 | ESPN data fetching, auth, pro team map, actual FPTS, cached data loading |
+| `api/mlb.py` | ~939 | MLB probables, schedule, wOBA, park factors, Pythagorean model, game logs |
+| `api/savant.py` | ~255 | Baseball Savant CSV data fetching |
+| `api/kv.py` | ~255 | Upstash Redis helpers for projection locking and caching |
+| `api/accuracy.py` | ~322 | Accuracy tracking endpoint (roster + all-MLB scopes) |
+| `api/cron.py` | ~414 | Daily cron: lock all-MLB projections + store actuals |
+| `api/config.py` | ~73 | Matchup period table + current period lookup |
+| `api/analyze.py` | ~100 | Claude AI analysis endpoint |
+
+### Daily cron job
+`Confidence: 8/10 · Last assessed: April 12, 2026`
+
+`/api/cron` runs daily at noon CT (17:00 UTC) via Vercel Cron (`vercel.json` → `crons` config).
+Secured with `CRON_SECRET` env var — Vercel sends it automatically as `Authorization: Bearer {secret}`.
+
+What it does:
+1. Fetches all probable starters for today from ESPN scoreboard + MLB Stats API
+2. Loads cached model data (Savant, MLB Stats, game logs)
+3. Runs projection model for every probable starter (~60 per day)
+4. Locks projections to `proj2all:{season}:{period}:{slug}:{date}` KV keys (NX flag)
+5. Computes actual FPTS from game logs for completed past dates
+6. Stores actuals under `actual-all:{date}` KV keys
+
+Hobby plan limit: 2 cron jobs, each triggered once per day.
+
+### Known ESPN API gaps
+`Confidence: 7/10 · Last assessed: April 12, 2026`
+
+- Suspended (SSPD) players may not appear in `mRoster` response — Reynaldo Lopez picked up but missing from roster data. Needs investigation of what `eligibleSlots`/`lineupSlotId` ESPN assigns to suspended players.
+- `injuryStatus` returns empty string for all rostered players (use `player.injured` boolean instead)
+- Free agent actual FPTS only available if player was rostered at time of start
 
 ---
 
@@ -537,3 +576,4 @@ All set in both `.env.local` (local) and Vercel dashboard (production):
 | `ESPN_STARTS_LIMIT` | Default weekly starts limit |
 | `ANTHROPIC_API_KEY` | Claude API key |
 | `KV_REST_API_URL` / `KV_REST_API_TOKEN` | Upstash Redis credentials |
+| `CRON_SECRET` | Secures `/api/cron` endpoint (Vercel sends as Authorization header) |
