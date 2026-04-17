@@ -421,6 +421,9 @@ def get_league_data(team_id: int, week: int) -> dict:
         all_past_names.update(day_players.keys())
     dropped_names = all_past_names - current_roster_names
 
+    # Build team_map and pre-filter to SP-eligible dropped names so we
+    # don't waste a starts/projection call on relievers we'd skip anyway.
+    dropped_sp_info = {}  # name -> {team_abbrev, days_on_team, player_info, player_fpts}
     for name in sorted(dropped_names):
         days_on_team = sorted([d for d, players in my_team_pitchers_by_day.items() if name in players])
         if not days_on_team:
@@ -428,31 +431,84 @@ def get_league_data(team_id: int, week: int) -> dict:
         first_day = days_on_team[0]
         player_info = my_team_pitchers_by_day[first_day][name]
         eligible = set(player_info.get("eligible", []))
-        if 14 in eligible:
-            position = "SP"
-        elif 13 in eligible:
-            position = "RP"
-        else:
-            position = "P"
-        if position != "SP":
-            continue
+        if 14 not in eligible:
+            continue  # not SP-eligible
         team_abbrev = PRO_TEAM_MAP.get(player_info.get("team", 0), "")
-        player_fpts = actual_fpts.get(name, fa_actual_fpts.get(name, {}))
+        dropped_sp_info[name] = {
+            "team_abbrev": team_abbrev,
+            "days_on_team": days_on_team,
+            "player_info": player_info,
+            "player_fpts": actual_fpts.get(name, fa_actual_fpts.get(name, {})),
+        }
+
+    # Fetch starts and projections for dropped SPs (same pattern as roster + FAs).
+    if dropped_sp_info:
+        dropped_team_map = {n: info["team_abbrev"] for n, info in dropped_sp_info.items()}
+        dropped_starts_map, _ = get_starts_for_players(
+            list(dropped_sp_info.keys()), week, team_map=dropped_team_map
+        )
+
+        # Intersect startDates with days_on_team — only count starts that
+        # happened while the player was actually on our roster.
+        dropped_projection_inputs = []
+        dropped_intersected = {}  # name -> {starts, startDates} (rostered-window only)
+        for name, info in dropped_sp_info.items():
+            raw_pitcher_data = dropped_starts_map.get(name, {"starts": 0, "startDates": []})
+            days_on_team_set = set(info["days_on_team"])
+            filtered_dates = [
+                sd for sd in raw_pitcher_data.get("startDates", [])
+                if sd.get("date") in days_on_team_set
+            ]
+            dropped_intersected[name] = {
+                "starts": len(filtered_dates),
+                "startDates": filtered_dates,
+            }
+            dropped_projection_inputs.append({
+                "name":           name,
+                "starts":         len(filtered_dates),
+                "startDates":     filtered_dates,
+                "is_rp":          False,
+                "days_in_period": days_in_period,
+                "team":           info["team_abbrev"],
+            })
+
+        dropped_proj_fpts, dropped_proj_blend, _, dropped_proj_details = get_projected_fpts(
+            dropped_projection_inputs, team_woba_factors,
+            season=year_int, period=week,
+            today_str=datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+            savant_current=savant_current,
+            savant_previous=savant_previous,
+            mlb_stats_current=mlb_stats_current,
+            mlb_stats_previous=mlb_stats_previous,
+            game_logs=game_logs_current,
+            team_win_data=team_win_data,
+            schedule=schedule,
+        )
+    else:
+        dropped_intersected = {}
+        dropped_proj_fpts = {}
+        dropped_proj_blend = {}
+        dropped_proj_details = {}
+
+    # Build the dropped player dicts using the real starts + projection data.
+    for name, info in dropped_sp_info.items():
+        intersected = dropped_intersected.get(name, {"starts": 0, "startDates": []})
         dropped_players.append({
-            "name":       name,
-            "team":       team_abbrev,
-            "slot":       "EX",
-            "position":   "SP",
+            "name":         name,
+            "team":         info["team_abbrev"],
+            "slot":         "EX",
+            "position":     "SP",
             "injuryStatus": "Dropped",
-            "starts":     0,
-            "startDates": [],
-            "projFpts":   0.0,
-            "projBlend":  0.0,
+            "starts":       intersected["starts"],
+            "startDates":   intersected["startDates"],
+            "projFpts":     dropped_proj_fpts.get(name, 0.0),
+            "projBlend":    dropped_proj_blend.get(name, 0.0),
+            "projDetails":  dropped_proj_details.get(name),
             "percentOwned": 0.0,
-            "daysOnTeam": days_on_team,
+            "daysOnTeam":   info["days_on_team"],
         })
-        if name not in roster_actual_fpts and player_fpts:
-            roster_actual_fpts[name] = player_fpts
+        if name not in roster_actual_fpts and info["player_fpts"]:
+            roster_actual_fpts[name] = info["player_fpts"]
 
     return {
         "ok":                True,
