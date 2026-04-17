@@ -2,6 +2,53 @@
 
 ---
 
+## Session 19 — April 16, 2026
+
+Single bug fix that surfaced two related display issues in adjacent code surface. One PR shipped (#81).
+
+### Key learnings this session
+- ESPN field naming for IL status is inconsistent across player categories: roster players get `slot === 'IL'` (set explicitly in `get_slot_label()` from the `player.injured` boolean), while free agents get `injuryStatus === 'IL15' | 'IL60'` (mapped via `inj_label_map` from ESPN's `FIFTEEN_DAY_DL` / `SIXTY_DAY_DL` strings). Filters that need to detect IL across both categories must check both fields.
+- KNOWLEDGE.md is only useful if you actually consult it before writing code that touches fields it warns about. The `injuryStatus` field on roster players returning empty string is documented at 10/10 confidence — and was still missed when first writing the IL filter. Cost a deploy round-trip to catch.
+- The `confirmed` boolean on a start is forward-looking only: it answers "did MLB Stats API list this as a confirmed probable for an upcoming game" not "is this start locked in." Once a game is in the past, the field stops being meaningful and any UI keying off it for past dates is buggy by construction. Display logic should derive `isLockedIn = confirmed || isPast || isToday` rather than mutate `confirmed` server-side.
+- Tile aggregations and per-row data are two separate code paths in `pages/my-team.tsx`. Fixing the per-row data (backend) does not automatically fix the tiles (frontend) — they sum from different arrays. When fixing a "missing data" bug, always grep for parallel aggregations.
+- A function that operates on a `player_names` parameter but does whole-MLB fetches internally has a subtle performance trap: calling it twice doubles the API load even though only the filtering changes. Caching the heavy fetches by `matchup_period` would make repeat calls free — backlogged for a future session.
+- When applying multiple related fixes mid-session, prefer `git commit --amend` over a chain of fix-up commits while the branch is unpushed. Squash-merge collapses them anyway, but a clean single commit is easier to read in `git log` and easier to revert if needed.
+
+### Dropped streamer start counting (PR #81)
+
+**Backend (`api/espn.py`):**
+- Pre-filter dropped names to SP-eligible only before doing any work
+- Build `dropped_team_map` from `my_team_pitchers_by_day` (mirrors `roster_team_map`)
+- Call `get_starts_for_players` for dropped names — same pattern as roster + FAs
+- **Intersect each player's `startDates` with their `days_on_team`** — only counts starts that happened while the player was on roster
+- Feed intersected start data into `get_projected_fpts` so projection details render in schedule grid tooltip
+- Guarded with `if dropped_sp_info:` — zero added latency when no dropped streamers
+
+**Frontend (`pages/my-team.tsx`):**
+- Tile aggregation now iterates `[...spRoster, ...dropped]` instead of `spRoster` alone
+- Tile filters changed from `s.confirmed` to `s.date <= today || s.confirmed` — past-dated starts always count regardless of original probables source
+- Rostered SPs tile excludes `slot === 'IL'` players
+
+**Frontend (`components/ScheduleGrid.tsx`):**
+- Past/today indicator now derives `isLockedIn = startInfo.confirmed || isPast || isToday`
+- Both the indicator symbol and color key off `isLockedIn` instead of `confirmed`
+- Future-game branch unchanged — `confirmed` still correctly distinguishes upcoming MLB-confirmed probables from ESPN scoreboard projections
+
+### Verification
+
+Reynaldo Lopez test case — was on roster April 14 (started vs MIA, +7.0 FPTS), then dropped. After fix:
+- Lopez row: Starts 0 → 1, Act FPTS 0.0 → +7.0, Apr 14 indicator blue P → green ✓
+- Actual Starts tile: 7 → 8
+- Projected Starts tile: 11 → 12 (correctly hits 12/12 weekly limit)
+- Rostered SPs tile: 10 → 9 (Pepiot on IL no longer counted)
+- Active roster pitchers unchanged
+
+### KNOWLEDGE.md updates needed
+- Add note under ESPN Fantasy API → Injury detection: roster players get `slot === 'IL'`, free agents get `injuryStatus === 'IL15' | 'IL60'`. Two different field conventions for the same underlying state.
+- Clarify that the `confirmed` boolean on a start is forward-looking — only meaningful for upcoming games. UI logic for past/today dates should not key off it.
+
+---
+
 ## Session 18 — April 12, 2026
 
 Major architecture refactor, accuracy dashboard enhancements, Vegas/Pythagorean win probability model, daily cron job, and multiple UI improvements. Five PRs shipped (#73–#77).
