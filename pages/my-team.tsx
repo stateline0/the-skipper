@@ -192,15 +192,21 @@ export default function MyTeam() {
         ...p, starts: p.starts ?? 0, projFpts: p.projFpts ?? 0,
       }))
 
-      // Compute actual and projected starts from SP-position players
+      // Compute actual and projected starts from SP-position players AND dropped streamers.
+      // A start counts toward our weekly total if it happened or is locked in to happen
+      // — this matches how ESPN counts starts against our matchup limit.
       const today = todayLocal()
       const spRoster = roster.filter((p: any) => (p.position || p.slot) === 'SP')
-      const actual = spRoster.reduce((a: number, p: any) => {
-        const pastStarts = (p.startDates || []).filter((s: any) => s.date <= today && s.confirmed)
+      const allStartingSPs = [...spRoster, ...dropped]  // dropped players are pre-filtered to SP server-side
+      const actual = allStartingSPs.reduce((a: number, p: any) => {
+        // Past starts: any date that's already happened (regardless of confirmed status —
+        // a game that already played is by definition no longer "projected").
+        const pastStarts = (p.startDates || []).filter((s: any) => s.date <= today)
         return a + pastStarts.length
       }, 0)
-      const projected = spRoster.reduce((a: number, p: any) => {
-        const allStarts = (p.startDates || []).filter((s: any) => s.confirmed || s.date > today)
+      const projected = allStartingSPs.reduce((a: number, p: any) => {
+        // All starts: past starts (counted as actual above) + future confirmed/projected starts.
+        const allStarts = (p.startDates || []).filter((s: any) => s.confirmed || s.date <= today)
         return a + allStarts.length
       }, 0)
 
@@ -351,7 +357,7 @@ export default function MyTeam() {
               <MetricCard label="ACTUAL STARTS" value={actualStarts} />
               <MetricCard label="PROJECTED STARTS" value={projectedStarts}
                 accent={projectedStarts >= limit ? 'ok' : projectedStarts >= limit * 0.7 ? 'warn' : 'bad'} />
-              <MetricCard label="ROSTERED SPs" value={rosterSPs.filter(p => (p.position || p.slot) === 'SP').length} />
+              <MetricCard label="ROSTERED SPs" value={rosterSPs.filter(p => (p.position || p.slot) === 'SP' && p.slot !== 'IL').length} />
             </div>
 
             {/* Progress bar */}
