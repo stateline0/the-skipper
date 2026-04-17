@@ -161,10 +161,16 @@ function DayCell({ pitcher, date, schedule, today, actualFpts, benchDays, actual
     if (isStarting) {
       const isLive = isToday && gameInfo.status === 'in_progress'
       const isFinal = gameInfo.status === 'final'
-      const indicator = startInfo.confirmed
+      // A start that's already in the past or is happening today is locked in —
+      // show the green confirmed indicator regardless of the original probables source.
+      // (`startInfo.confirmed` reflects whether MLB Stats API listed this as a confirmed
+      // probable, which is a forward-looking signal — once the game is happening or has
+      // happened, that distinction stops being meaningful to the user.)
+      const isLockedIn = startInfo.confirmed || isPast || isToday
+      const indicator = isLockedIn
           ? <span style={{ fontSize: 10, color: 'var(--green)' }}>✓</span>
           : <span style={{ fontSize: 9, fontWeight: 700, fontFamily: 'var(--mono)', color: 'var(--blue)', background: 'var(--blue-light)', borderRadius: 99, padding: '0px 4px' }}>P</span>
-      const color = startInfo.confirmed ? 'var(--green)' : 'var(--ink-3)'
+      const color = isLockedIn ? 'var(--green)' : 'var(--ink-3)'
       const fpts = actualFpts?.[pitcher.name]?.[date]
       const hasFpts = fpts !== undefined && fpts !== 0
       const wasOnBench = benchDays?.[pitcher.name]?.includes(date) ?? false
