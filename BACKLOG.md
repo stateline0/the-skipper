@@ -1,6 +1,6 @@
 # The Skipper — Backlog
 
-Last updated: April 12, 2026
+Last updated: April 16, 2026
 
 ---
 
@@ -47,8 +47,9 @@ Last updated: April 12, 2026
 - [ ] Not a full streamer optimizer, more of a watchlist with performance alerts
 
 ### Dropped streamers refinement
-- [ ] Pull locked projections from KV for dropped players' past starts
-- [ ] Show proj FPTS for the starts they made while rostered
+- [x] ~~Pull locked projections from KV for dropped players' past starts~~
+- [x] ~~Show proj FPTS for the starts they made while rostered~~
+- (Both resolved in session 19 PR #81 — dropped players now route through `get_projected_fpts`)
 
 ### Additional caching opportunities
 - [ ] Team wOBA factors (24hr TTL — single API call, low priority)
@@ -65,9 +66,17 @@ Last updated: April 12, 2026
 - [ ] "My Roster" accuracy scope shows non-roster pitchers — FA projections leak into proj2: keys
 - [ ] Free agent actual FPTS only available for players who were rostered at time of start — ESPN API limitation (affects accuracy dashboard too)
 - [ ] `vercel dev` does not serve Python API routes locally (Vercel CLI v50+ known issue)
-- [ ] Dropped players show projFpts 0.0 — could pull locked projections from KV
 
 ---
+
+## ✅ Completed (session 19 — April 16, 2026)
+- [x] Dropped streamers: count starts that happened while rostered (PR #81)
+- [x] Dropped streamers: route through projection pipeline so per-start projections render in schedule grid (PR #81)
+- [x] Backend intersects `startDates` with `days_on_team` — only counts rostered-window starts (PR #81)
+- [x] Actual Starts and Projected Starts tiles now include dropped streamers in aggregation (PR #81)
+- [x] Tile filters changed from `s.confirmed` to `s.date <= today || s.confirmed` — past starts always count (PR #81)
+- [x] Rostered SPs tile excludes IL-slot players (PR #81)
+- [x] ScheduleGrid past/today indicator shows green ✓ for any start that has happened or is happening (PR #81)
 
 ## ✅ Completed (session 18 — April 12, 2026)
 - [x] espn.py refactor: split 1220-line monolith into projection.py, fetcher.py, espn.py (PR #73)
