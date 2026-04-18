@@ -205,9 +205,12 @@ export default function MyTeam() {
         return a + pastStarts.length
       }, 0)
       const projected = allStartingSPs.reduce((a: number, p: any) => {
-        // All starts: past starts (counted as actual above) + future confirmed/projected starts.
-        const allStarts = (p.startDates || []).filter((s: any) => s.confirmed || s.date <= today)
-        return a + allStarts.length
+        // All scheduled starts in the matchup window — past (already happened), future
+        // MLB-confirmed probables, AND future ESPN-scoreboard projections (blue P). The
+        // backend already scopes startDates to the current matchup period and (for dropped
+        // players) to the rostered window, so every entry here counts. Matches the per-row
+        // `Starts` column which renders p.starts directly.
+        return a + (p.starts || 0)
       }, 0)
 
       // Cache everything
