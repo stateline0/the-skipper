@@ -88,6 +88,9 @@ PLACEHOLDER_FPTS_VALUE = 1.0
 # ESPN uses a few non-standard slugs we have to override.
 LOGO_TO_TEAM_OVERRIDES = {
     "ath": "OAK",   # Athletics — logo file uses "ath"
+    "was": "WSH",   # Nationals — logo file is "was.png" but everywhere else in
+                    # ESPN (opp column, scoreboard) uses "WSH". Normalize here
+                    # so team/opp join keys stay consistent downstream.
     "wsh": "WSH",
     "sf":  "SF",
     "sd":  "SD",
