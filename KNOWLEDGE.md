@@ -128,7 +128,6 @@ Once any MLB game starts for the day, ESPN locks the current scoring period's ro
 - `matchupPeriodDates` not returned for this league via any available view → all 22 period dates hardcoded in `api/config.py`
 - Free agent actual FPTS only available if player was rostered at time of start — ESPN API limitation, no workaround
 - ESPN caches roster data server-side — cache-busting params (`_` timestamp) have no effect on staleness
-- ESPN Forecaster projections page: server-side fetch returns stale cached HTML — have user paste raw text directly
 
 ### PRO_TEAM_MAP (2026 verified)
 `Confidence: 10/10 · Last assessed: March 28, 2026`
@@ -214,6 +213,87 @@ https://site.api.espn.com/apis/site/v2/sports/baseball/mlb/scoreboard?dates=YYYY
 
 - Uses `CHW` for White Sox — our app uses `CWS`
 - Normalization map in `api/mlb.py` bridges mismatches
+
+---
+
+## ESPN Forecaster (HTML scraping)
+`Confidence: 9/10 · Last assessed: April 18, 2026`
+
+### Source URL
+
+```
+https://www.espn.com/fantasy/baseball/story/_/id/31165100/fantasy-baseball-forecaster-probable-starting-pitcher-projections-matchups-daily-weekly-leagues
+```
+
+- Public article, no auth required
+- Requires a browser-like `User-Agent` header (`Mozilla/5.0 … Chrome/…`) — ESPN returns HTML-but-stale content to generic User-Agents
+- This is the **only** URL that works for server-side fetches — the Fantasy app page (`fantasy.espn.com/baseball/forecaster`) returns a JS-rendered shell that never resolves server-side
+- Scraper lives in `api/forecaster.py`; diagnostic endpoint at `GET /api/forecaster`
+
+### Render model
+
+One HTML `<table class="inline-table">` with:
+- One `<tr>` per MLB team (30 teams, interleaved with empty spacer `<tr>`s)
+- Six `<td>` columns: team logo, date, opp, pitcher, throws-hand, FPTS
+- Each non-logo cell holds **10 `<br>`-separated values**, one per date in a rolling 10-day window starting "today" (ESPN time, US Pacific)
+
+Alignment is by index within the `<br>`-split lists — `date_tokens[i]`, `opp_tokens[i]`, `pitcher_tokens[i]`, `throws_tokens[i]`, `fpts_tokens[i]` all refer to the same game.
+
+### Cell parsing gotchas
+
+- Some cells wrap their `<br>`-separated content in a single child `<div>` (e.g. `<td><div>val<br>val<br>…</div></td>`). `_split_br()` detects this and dives into the wrapper before splitting.
+- Pitcher cells contain `<a>` tags per start; OFF days have no `<a>` in that slot. `_split_pitcher_cell()` returns `(name, player_id)` tuples so OFF days come out as `("", None)`.
+- Date tokens look like `"Sat, 4/18"` — parsed with regex `(\d+)/(\d+)` and combined with current UTC year to produce ISO dates.
+
+### Placeholder value detection
+
+ESPN uses **exactly `1.0`** as a placeholder for far-future starts they haven't firmed up yet (typically dates ~7+ days out). Flag these with `is_placeholder=True` so downstream can exclude them from accuracy comparisons.
+
+**MUST be an exact-equality check (`fpts == 1.0`), NOT a threshold (`fpts <= 1.0`).** Coors Field pitchers legitimately project negative in rough matchups (e.g. `-3.2` FPTS). A threshold check would wrongly flag those as placeholders.
+
+### Team abbreviation quirks (logo filenames only)
+
+ESPN logo files use slugs that don't always match our canonical abbreviations. `LOGO_TO_TEAM_OVERRIDES` in `api/forecaster.py` normalizes:
+
+| Logo filename | Canonical abbrev | Note |
+|---|---|---|
+| `ath.png` | `OAK` | Athletics |
+| `was.png` | `WSH` | **Nationals — same team, different slug than ESPN's opp column and scoreboard which both use `WSH`. Caught post-ship in PR #94 when the Forecaster scraper was returning `WAS` entries that didn't join against scheduled opponents.** |
+| `chw.png` | `CWS` | White Sox |
+| `az.png` | `ARI` | Diamondbacks |
+
+The opp column uses the normal abbreviations directly (no mapping needed) — the mismatch is purely on the logo-filename side.
+
+### Home/away detection
+
+Opp column prefixes away games with `@` (e.g. `@TOR` means the team is playing at Toronto). Scraper strips the `@` and sets `opp_is_home = not opp_tok.startswith("@")`.
+
+### Player ID extraction
+
+Pitcher `<a>` href format: `/mlb/player/_/id/{player_id}/{slug}` (e.g. `/mlb/player/_/id/39910/zac-gallen`). Regex `/player/_/id/(\d+)/` extracts the numeric ID. Same ID space as ESPN Fantasy API — safe to join on.
+
+### Output entry shape
+
+```python
+{
+  "date":           "2026-04-18",
+  "team":           "ARI",
+  "opp":            "TOR",
+  "opp_is_home":    True,
+  "player_id":      39910,
+  "pitcher":        "Zac Gallen",
+  "throws":         "R",
+  "fpts":           8.4,
+  "is_placeholder": False
+}
+```
+
+### Failure modes
+
+- Table not found → returns `{"entries": [], "date_range": None}` (no crash)
+- HTTP non-200 → returns `{"error": "HTTP {code}"}`
+- Network/exception → returns `{"error": "fetch failed: {type}: {msg}"}`
+- Per-row parse failures (bad date token, non-numeric FPTS) skip silently — one bad row doesn't kill the whole scrape
 
 ---
 
@@ -574,6 +654,38 @@ ESPN's API does not return `matchupPeriodDates` for this league via any availabl
 ### Session storage for cross-page state
 
 `sessionStorage` is used to persist data across page navigation (My Team → Free Agents → back). A `CACHE_VERSION` constant ensures stale cache shapes are detected and auto-refreshed when the API response format changes.
+
+### Public API routes (NextAuth middleware exemption)
+`Confidence: 10/10 · Last assessed: April 18, 2026`
+
+Every non-static route in the app is protected by NextAuth's `withAuth` middleware (`middleware.ts`) by default — unauthenticated requests get a 307 redirect to `/login?callbackUrl=…`. A small allow-list of API routes is exempted via the matcher's negative-lookahead pattern so they can be hit without a user session.
+
+**Exempted prefixes (as of April 18, 2026):**
+
+| Prefix | Why it's public |
+|---|---|
+| `_next/static`, `_next/image`, `favicon.ico` | Next.js static assets; no sensitive data |
+| `api/auth` | NextAuth's own handler — must be reachable to perform login itself |
+| `api/cron` | Vercel Cron triggers; no session available, auth'd via `CRON_SECRET` header check inside the handler |
+| `api/forecaster` | Public ESPN Forecaster scraper; no user-specific or sensitive data, safe to serve anonymously |
+| `api/forecaster_probe` | Diagnostic/debug variant of the above |
+| `api/espn_proj` | Read-only ESPN projections diagnostic endpoint |
+
+**Matcher pattern (`middleware.ts`):**
+
+```ts
+matcher: [
+  '/((?!_next/static|_next/image|favicon.ico|api/auth|api/cron|api/forecaster|api/forecaster_probe|api/espn_proj).*)',
+]
+```
+
+Everything NOT in the negative-lookahead list is protected. To add a new public route, append its prefix to this list.
+
+**How to tell if a 307 redirect is NextAuth vs Vercel SSO:**
+- Redirect `Location` starts with `/login?callbackUrl=…` → it's our NextAuth middleware (fix in `middleware.ts`)
+- Redirect `Location` starts with `https://vercel.com/sso-api?…` → it's Vercel Deployment Protection (fix in Vercel dashboard → Deployment Protection, or use a custom domain which is exempt from Standard Protection)
+
+**Endpoints requiring auth-by-handler rather than middleware exemption:** routes that need a session BUT also need to skip the middleware's `/login` redirect (none today — all protected routes happily use the default middleware behavior).
 
 ### File architecture (refactored session 18)
 `Confidence: 10/10 · Last assessed: April 18, 2026`

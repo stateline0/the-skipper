@@ -1,10 +1,46 @@
 # The Skipper — Backlog
 
-Last updated: April 18, 2026
+Last updated: April 18, 2026 (session 21)
 
 ---
 
 ## 🔜 Next session priorities
+
+### PR B — Daily cron: lock ESPN Forecaster projections to KV
+Design decisions (locked in end of session 21):
+- **Reconciliation source: MLB Stats API** (`fetch_mlb_probables(today, today)` from `api/mlb.py`). MLB is the authoritative "who's actually starting today" feed; ESPN Forecaster is speculative up to 10 days out and sometimes wrong.
+- **KV key shape: `projection-espn:{year}:{period}:{slug}:{date}`** — matches the existing `proj2all:` / `proj2:` pattern so reads in PR C can share key-building helpers.
+- **Orphan handling: skip silently.** If ESPN projects pitcher X but MLB confirms pitcher Y for today's game, we just don't lock X. No orphan tracking key.
+- **Write semantics: SETNX** (write-once, never overwrite a locked value). 60-day TTL.
+- **Filter `is_placeholder: true` entries** — don't lock FPTS == 1.0 speculative values.
+- **Hook into existing cron:** extend `api/cron.py` with a new `lock_espn_projections()` function called from the same handler that runs `lock_all_mlb_projections()`. No new Vercel Cron schedule needed.
+
+Value shape:
+```json
+{
+  "fpts": 8.4,
+  "team": "ARI",
+  "opp": "TOR",
+  "opp_is_home": true,
+  "throws": "R",
+  "player_id": 39910,
+  "is_placeholder": false,
+  "locked_at": "2026-04-18T17:00:00Z"
+}
+```
+
+Algorithm:
+1. Fetch today's MLB confirmed probables → `{name_lower: [date]}` dict.
+2. Fetch today's ESPN Forecaster entries (filter to `date == today` and `is_placeholder == false`).
+3. For each ESPN entry, normalize pitcher name (`strip_accents` → lowercase) and check membership in MLB confirmed set.
+4. If confirmed → SETNX to `projection-espn:{year}:{period}:{slug}:{date}`. If skipped → increment counter in summary.
+5. Return summary (`locked_new`, `locked_skipped_existing`, `skipped_unconfirmed`, `skipped_placeholder`).
+
+### PR C — Accuracy dashboard: ESPN MAE column
+- Extend `api/accuracy.py` to read `projection-espn:*` keys alongside existing `proj2all:*` / `proj2:*` keys.
+- Compute ESPN's MAE on the same `actual-all:{date}` dataset Skipper uses.
+- Frontend: third MAE series on the accuracy page (Skipper / Skipper-recent / ESPN).
+- Only compute ESPN MAE on the intersection of dates where both projections exist — don't fabricate missing values.
 
 ### Accuracy page redesign
 - [ ] Remove matchup period dropdown — show all-time data across all periods
@@ -67,6 +103,17 @@ Last updated: April 18, 2026
 - [ ] `vercel dev` does not serve Python API routes locally (Vercel CLI v50+ known issue)
 
 ---
+
+## ✅ Completed (session 21 — April 18, 2026)
+- [x] Spike: confirmed ESPN Fantasy API `kona_player_info` returns only full-season projections, not per-day (PRs #88, #89, #90, #91) — `statSourceId: 1` entries all have `statSplitTypeId: 0` and `scoringPeriodId: 0`. No per-day projection data in the Fantasy API at any point in the season.
+- [x] Diagnostic endpoint probing ESPN Forecaster article (`/api/forecaster_probe`) — confirmed server-rendered HTML, one `<table>`, 60 `<tr>` rows, no JS hydration, all rostered pitchers present (PR #92)
+- [x] PR A — `api/forecaster.py` scraper module + `/api/forecaster` diagnostic endpoint: fetches the ESPN Forecaster article, parses the projection table into per-start entries, returns 260 entries across all 30 teams for the 10-day rolling window (PR #93)
+  - `_split_br()` / `_split_pitcher_cell()` helpers handle `<td><div>…<br>…</div></td>` wrapper variants
+  - `PLACEHOLDER_FPTS_VALUE = 1.0` flagged via **exact-equality** check (not threshold) — Coors pitchers legitimately project negative, a `<= 1.0` check would wrongly flag them
+  - `LOGO_TO_TEAM_OVERRIDES` maps non-standard ESPN slugs to canonical abbrevs
+  - `beautifulsoup4==4.12.3` added to `requirements.txt`
+- [x] Washington team abbreviation normalization — ESPN Forecaster logo filename is `was.png`, everywhere else uses `WSH`. Added `"was": "WSH"` to `LOGO_TO_TEAM_OVERRIDES` so team/opp join keys stay consistent downstream (PR #94)
+- [x] `middleware.ts` matcher extended to exempt `/api/auth/*`, `/api/cron/*`, `/api/forecaster`, `/api/forecaster_probe`, `/api/espn_proj` from NextAuth — unblocks Vercel Cron (no session) and plain-curl verification of public endpoints. Protected endpoints (`/api/projection`, `/api/accuracy`, user-specific routes) stay behind the auth gate. (PR #95)
 
 ## ✅ Completed (session 20 — April 18, 2026)
 - [x] Cache team wOBA factors with 24hr TTL under `cache:team-woba:{year}` (PR #83)

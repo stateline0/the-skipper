@@ -2,6 +2,73 @@
 
 ---
 
+## Session 21 — April 18, 2026
+
+Spike confirmed ESPN's Fantasy API does not publish per-day FPTS projections under any filter shape, so we pivoted to scraping the public Forecaster article. Shipped the scraper + diagnostic endpoint, a Washington-team-abbreviation normalization fix, and a middleware change that exempts public read-only / cron / auth API routes so Vercel Cron and plain-curl verification stop getting 307'd to `/login`. Four PRs shipped (#92–#95) plus four spike iterations (#88–#91) that closed out the Fantasy API investigation. PR B (daily cron locking ESPN projections to KV) and PR C (accuracy dashboard ESPN MAE column) are designed and queued for the next session.
+
+### Key learnings this session
+- ESPN's Fantasy API `kona_player_info` view only ever returns **full-season** projections under `statSourceId: 1` — `statSplitTypeId: 0` with `scoringPeriodId: 0`. No combination of `filterStatsForSourceIds`, `filterStatsForSplitTypeIds`, `filterStatsForTopScoringPeriodIds`, or `filterStatsForCurrentSeason` surfaces per-day projections. KNOWLEDGE.md's March 2026 warning that the API "returns empty/zero early in season" was actually understating it — the per-day data simply doesn't exist there. Four spike iterations to prove this definitively, which is the right bar before building on a shaky foundation.
+- The Forecaster article (id=31165100) is **server-rendered HTML**, not JS-hydrated — one `<table class="inline-table">`, 30 team rows interleaved with spacers, each `<td>` holding 10 `<br>`-delimited per-date values. Pitcher `<a>` hrefs carry the same numeric IDs as the Fantasy API (`/mlb/player/_/id/{id}/…`). Ship a probe endpoint first to confirm the render model before writing a scraper — 2 minutes of work that de-risks the whole approach.
+- `<br>`-delimiter splitting via `cell.get_text(separator="|")` is unreliable for ESPN markup because some cells wrap content in `<div>` or `<span>` — descendants vs direct children matters. The pattern that works: find the deepest single-element container holding the `<br>` tags, walk its *direct* children, and accumulate text into buckets that reset on each `<br>`. OFF days become empty strings by construction, which keeps the date-column index aligned.
+- Placeholder detection needs **exact equality** (`fpts == 1.0`), not a threshold (`fpts <= 1.0`). Coors Field pitchers legitimately project negative for bad matchups (observed: -3.2 FPTS), and a threshold check silently mislabels those as placeholders. Worth a one-line code comment so the next person doesn't "fix" it.
+- ESPN is internally inconsistent on team abbreviations: the Forecaster logo filename for Washington is `was.png`, but the opp column, scoreboard API, roster API, and everywhere else use `WSH`. Downstream joins (e.g. reconciliation against MLB Stats API confirmed probables keyed by abbrev) silently drop rows when the abbrev doesn't match. Catch and normalize at ingestion time, not at join time.
+- `vercel.app` domain namespace is global and first-come — `the-skipper.vercel.app` was squatted by another project (a wedding site, of all things). Project deployments land at a random-hash URL unless you attach a custom domain; the auto-assigned "Greek-letter" production URL (in our case `the-skipper-iota.vercel.app`) does count as a custom domain and bypasses Standard Protection for the Vercel SSO gate. `vercel ls` + `vercel project` are the canonical way to find the real production URL.
+- Vercel's "Standard Protection" vs "All Deployments" dropdown does NOT control what I assumed: "Standard Protection" on Hobby still gates all auto-generated preview URLs, but exempts domains you've attached via **Domains** settings. Attaching any `*.vercel.app` subdomain (free) or custom domain makes that URL publicly reachable while preview hashes stay gated. Preferable to disabling protection wholesale.
+- The 307 redirect we were chasing wasn't Vercel's SSO gate — it was **our own Next.js middleware** (`middleware.ts` using `next-auth/middleware`'s `withAuth`) with a matcher that covered literally every non-static route including `/api/*`. The SSO bypass worked fine; the app's own auth was the real gate. When debugging "I can't hit my API from curl," always check the app's own middleware before chasing the platform layer.
+- NextAuth matcher pattern: `'/((?!_next/static|_next/image|favicon.ico|api/auth|api/cron|api/forecaster|…).*)'` — a single negative-lookahead listing prefix exemptions. Easy to forget new public routes as the app grows, so the commit message spelled out what's exempt and why.
+- `zsh` history-expansion eats `!` in one-liners — `(?!...)` in a `node -e "…"` command breaks with `event not found`. Fix: heredoc into a temp file with single-quoted `'EOF'` so the shell passes characters through untouched, or `setopt no_banghist` for the session.
+
+### ESPN per-day projection spike closeout (PRs #88–#91)
+- **PR #88** (initial probe): roster + kona_player_info fetch with no filter. Confirmed `stats[]` arrays empty in response — couldn't tell if API was restricting or if data didn't exist.
+- **PR #89** (unconditional sample dump): removed the "skip if stats[] empty" guard so diagnostic output showed the response shape even when no projections were returned. Confirmed stats[] was empty in all responses.
+- **PR #90** (filter back-off): tried aggressive `filterStatsForSourceIds` + `filterStatsForSplitTypeIds` + `filterStatsForTopScoringPeriodIds` + `filterStatsForCurrentSeason` combination → HTTP 400. Backed off to minimal filter shape.
+- **PR #91** (final minimal + source IDs): minimal filter `{filterIds, filterStatsForSourceIds: [0, 1]}`, no `scoringPeriodId` restriction. Response now contained `statSourceId: 1` entries — but all with `statSplitTypeId: 0` and `scoringPeriodId: 0` (full-season projections). Definitively confirmed no per-day data exists in the Fantasy API.
+
+### Forecaster probe (PR #92)
+- `api/forecaster_probe.py` — stdlib-only diagnostic (regex + http.server), reports http_status, tag_counts, hydration_markers, pitcher_name_presence, and returns a 3KB sample of HTML starting at the first `<table>` tag
+- Output confirmed: 1 `<table>`, 60 `<tr>`, no `__NEXT_DATA__` / `__INITIAL_STATE__` / `__APOLLO_STATE__`, no `loading...` indicators, and all 5 sample rostered pitcher names present in the HTML → safe to parse with DOM scraping
+
+### Forecaster scraper module (PR #93)
+- `api/forecaster.py` (~290 lines) — `fetch_forecaster()` HTTP client + `parse_forecaster_html(html, year)` pure parser + `handler` diagnostic endpoint
+- `_split_br(cell)` walks the deepest single-child container with `<br>` tags, accumulates direct-child text into buckets, handles OFF days as empty strings to keep per-date indexing aligned
+- `_split_pitcher_cell(cell)` returns `(name, player_id)` tuples — pulls numeric IDs from `<a href="/mlb/player/_/id/{id}/…">`
+- `_team_from_logo(img_src)` parses `/mlb/500/ari.png` → `"ARI"` via regex + `LOGO_TO_TEAM_OVERRIDES` normalization
+- `PLACEHOLDER_FPTS_VALUE = 1.0` with inline comment explaining why exact equality (not threshold) is required — COL negative projections must not be flagged
+- Output entry shape: `{date, team, opp, opp_is_home, player_id, pitcher, throws, fpts, is_placeholder}`
+- Production verification: 260 entries across all 30 teams, 10-day rolling window, rostered pitchers captured correctly, Coors negative FPTS correctly **not** flagged as placeholders
+- `beautifulsoup4==4.12.3` added to `requirements.txt`
+
+### Washington team abbreviation fix (PR #94)
+- ESPN Forecaster uses logo filename `was.png` for Washington, but opp column, scoreboard API, and roster API all use `WSH`. Without normalization, Washington-originated rows would show `team: "WAS"` while other teams' rows show `opp: "WSH"` — PR B's reconciliation join against MLB-confirmed probables (keyed by abbreviation) would silently drop every Washington start.
+- Added `"was": "WSH"` to `LOGO_TO_TEAM_OVERRIDES` alongside the existing `"wsh": "WSH"` entry so both slug variants normalize to the same canonical abbreviation.
+- Verified in production: `"WSH"` present in both `team` and `opp` sets in `/api/forecaster` output, `"WAS"` absent.
+
+### Middleware exemption for public API routes (PR #95)
+- `middleware.ts` matcher previously protected every non-static route: `'/((?!_next/static|_next/image|favicon.ico).*)'`. This meant every anonymous `curl` to `/api/*` got redirected to `/login`, including routes that have no user-specific data and routes that Vercel Cron needs to reach (no session).
+- Extended the negative-lookahead to exempt five prefixes:
+  - `api/auth/*` — NextAuth's own handler (belt-and-suspenders; `withAuth` probably bypasses internally)
+  - `api/cron/*` — Vercel Cron targets; authorized via `CRON_SECRET` header check inside `api/cron.py`
+  - `api/forecaster` — public ESPN scrape, no PII
+  - `api/forecaster_probe` — diagnostic, no PII
+  - `api/espn_proj` — diagnostic, no PII
+- User-specific endpoints (`/api/projection`, `/api/accuracy`, `/api/espn` roster, `/api/analyze`, `/api/mlb`, `/api/weather`, `/api/savant`, `/api/config`) stay behind NextAuth unchanged — they're called from the UI which carries a session cookie.
+- Verified in production: `curl /api/forecaster` → JSON 200; `curl /api/projection` → 307 to `/login`. Exactly what we wanted.
+
+### Design decisions locked in for PR B (next session)
+- Reconciliation source: **MLB Stats API** probable-pitcher feed (`fetch_mlb_probables` already imported in `api/cron.py`). Authoritative "who's actually starting today" — ESPN Forecaster is speculative up to 10 days out.
+- KV key shape: **`projection-espn:{year}:{period}:{slug}:{date}`**, matching existing `proj2all:` / `proj2:` patterns so PR C can share key-building helpers.
+- Orphan handling: **skip silently.** When ESPN projects pitcher X but MLB confirms pitcher Y, we just don't lock X. Don't persist orphans to a parallel key — if we ever want ESPN miss-rate data we can re-fetch Forecaster history.
+- Write semantics: **SETNX** (write-once, never overwrite). 60-day TTL.
+- Filter: skip entries with `is_placeholder: true` (exact FPTS == 1.0).
+- Hook: extend `api/cron.py` with a new `lock_espn_projections()` function, called from the same handler that runs `lock_all_mlb_projections()`. No new cron schedule.
+
+### Vercel deployment detour worth capturing
+- The project's real production URL is `https://the-skipper-iota.vercel.app` — not the squatted `the-skipper.vercel.app`, and not the per-deploy random-hash URLs. The `-iota` Greek-letter suffix is Vercel's auto-assigned production domain and counts as a "custom domain" for Standard Protection exemption purposes.
+- Standard Protection on Hobby: exempts attached domains but gates preview hashes. We don't need to disable protection or open the OPTIONS allowlist — just always verify via the `iota` URL.
+- If a `curl -i` returns HTML with a `<title>` that isn't your app's title, you're hitting a squatted / wrong domain — check `vercel ls` for the real one before blaming Vercel auth.
+
+---
+
 ## Session 20 — April 18, 2026
 
 Projection model improvements: cached team wOBA factors, blended recent team form into opposing-lineup wOBA, and shipped a standalone weather data fetcher (Open-Meteo) with a 3-hour cache and diagnostic endpoint. Three PRs shipped (#83–#85).
