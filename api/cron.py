@@ -23,7 +23,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__)))
 
 from mlb import (
     fetch_espn_probables, fetch_mlb_probables, build_pitcher_starts,
-    MATCHUP_PERIODS, get_team_woba, get_team_win_data, get_park_factor,
+    MATCHUP_PERIODS, get_park_factor,
     compute_matchup_win_prob, compute_recent_form_fpts,
 )
 from fetcher import load_cached_data, strip_accents
@@ -109,9 +109,8 @@ def lock_all_mlb_projections() -> dict:
     mlb_stats_current  = cached["mlb_stats_current"]
     mlb_stats_previous = cached["mlb_stats_previous"]
     game_logs_current  = cached["game_logs_current"]
-
-    team_woba_factors = get_team_woba(year_int)
-    team_win_data = get_team_win_data(year_int)
+    team_win_data      = cached["team_win_data"]
+    team_woba_factors  = cached["team_woba_factors"]
 
     # ── Project each probable starter ────────────────────────────────────
     locked_count = 0

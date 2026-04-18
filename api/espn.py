@@ -19,7 +19,7 @@ from urllib.parse import urlparse, parse_qs
 from datetime import datetime, timedelta, timezone
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__)))
-from mlb import get_starts_for_players, get_team_woba, MATCHUP_PERIODS
+from mlb import get_starts_for_players, MATCHUP_PERIODS
 from kv import get_all_locked_projections
 from fetcher import (
     get_headers_and_cookies, get_pro_team_map, today_has_started,
@@ -71,9 +71,7 @@ def get_league_data(team_id: int, week: int) -> dict:
     mlb_stats_previous = cached["mlb_stats_previous"]
     game_logs_current  = cached["game_logs_current"]
     team_win_data      = cached["team_win_data"]
-
-    # ── Team wOBA factors for opponent quality adjustment ─────────────
-    team_woba_factors = get_team_woba(year_int)
+    team_woba_factors  = cached["team_woba_factors"]
 
     # ── Matchup period metadata ──────────────────────────────────────
     mp            = MATCHUP_PERIODS.get(week, {})

@@ -335,7 +335,7 @@ def load_cached_data(year_int: int) -> dict:
       game_logs_current
     """
     from savant import fetch_expected_stats
-    from mlb import fetch_game_logs, get_team_win_data
+    from mlb import fetch_game_logs, get_team_win_data, get_team_woba
 
     # ── Savant expected stats ─────────────────────────────────────────
     savant_previous = {}
@@ -454,6 +454,27 @@ def load_cached_data(year_int: int) -> dict:
 
     print(f"[fetcher.py] Team win data: {len(team_win_data)} teams")
 
+    # ── Team wOBA factors for opponent quality adjustment (24hr TTL) ───
+    team_woba_factors = {}
+    try:
+        team_woba_factors = cache_get(f"cache:team-woba:{year_int}") or {}
+    except Exception:
+        pass
+
+    if not team_woba_factors:
+        try:
+            team_woba_factors = get_team_woba(year_int) or {}
+            if team_woba_factors:
+                try:
+                    cache_set(f"cache:team-woba:{year_int}", team_woba_factors,
+                              ttl_seconds=86400)
+                except Exception:
+                    pass
+        except Exception as e:
+            print(f"[fetcher.py] Team wOBA fetch failed: {e}")
+
+    print(f"[fetcher.py] Team wOBA: {len(team_woba_factors)} teams")
+
     return {
         "savant_current":     savant_current,
         "savant_previous":    savant_previous,
@@ -461,4 +482,5 @@ def load_cached_data(year_int: int) -> dict:
         "mlb_stats_previous": mlb_stats_previous,
         "game_logs_current":  game_logs_current,
         "team_win_data":      team_win_data,
+        "team_woba_factors":  team_woba_factors,
     }
