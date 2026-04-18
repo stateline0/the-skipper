@@ -441,10 +441,71 @@ MLB_TEAM_ID_TO_ABBREV = {
     144: "ATL", 145: "CWS", 146: "MIA", 147: "NYY", 158: "MIL",
 }
 
+def _compute_team_woba_factors(splits: list, min_games: int = 10,
+                               label: str = "season") -> dict:
+    """
+    Pure helper: turn an MLB Stats API teams/stats splits list into
+    { abbrev: factor } relative to the league average wOBA within this sample.
+
+    Teams below `min_games` are excluded entirely — caller treats missing
+    teams as neutral via `.get(opp, 1.0)`.
+    """
+    raw_wobas = {}
+    for split in splits:
+        team_id = split.get("team", {}).get("id")
+        abbrev  = MLB_TEAM_ID_TO_ABBREV.get(team_id)
+        if not abbrev:
+            continue
+
+        s  = split.get("stat", {})
+        gp = s.get("gamesPlayed", 0)
+        if gp < min_games:
+            continue
+
+        pa = s.get("plateAppearances", 0)
+        if pa == 0:
+            continue
+
+        bb  = s.get("baseOnBalls", 0)
+        ibb = s.get("intentionalWalks", 0)
+        hbp = s.get("hitByPitch", 0)
+        h   = s.get("hits", 0)
+        d   = s.get("doubles", 0)
+        t   = s.get("triples", 0)
+        hr  = s.get("homeRuns", 0)
+
+        ubb = bb - ibb
+        single = h - d - t - hr
+
+        woba = (
+            0.69 * ubb +
+            0.72 * hbp +
+            0.89 * single +
+            1.27 * d +
+            1.62 * t +
+            2.10 * hr
+        ) / pa
+
+        raw_wobas[abbrev] = woba
+
+    if not raw_wobas:
+        return {}
+
+    lg_avg = sum(raw_wobas.values()) / len(raw_wobas)
+    print(f"[mlb.py] League avg wOBA ({label}): {lg_avg:.3f} "
+          f"across {len(raw_wobas)} teams")
+
+    factors = {}
+    for abbrev, woba in raw_wobas.items():
+        factors[abbrev] = round(woba / lg_avg, 4)
+    return factors
+
+
 def get_team_woba(season: int = 2026) -> dict:
     """
-    Returns { "LAD": 1.08, "CWS": 0.91, ... } — wOBA relative to league avg.
-    Falls back to empty dict on any error (caller treats missing teams as 1.0).
+    Season wOBA factors. Returns { "LAD": 1.08, "CWS": 0.91, ... }
+    relative to league average. Teams with < 10 games are excluded —
+    callers treat missing teams as neutral (1.0).
     """
     try:
         r = requests.get(
@@ -464,71 +525,103 @@ def get_team_woba(season: int = 2026) -> dict:
             return {}
 
         splits = r.json().get("stats", [{}])[0].get("splits", [])
-
-        # Compute raw wOBA per team
-        raw_wobas = {}
-        for split in splits:
-            team_id = split.get("team", {}).get("id")
-            abbrev  = MLB_TEAM_ID_TO_ABBREV.get(team_id)
-            if not abbrev:
-                continue
-
-            s  = split.get("stat", {})
-            gp = s.get("gamesPlayed", 0)
-            if gp < 10:
-                # Too early in season — not enough data to trust
-                raw_wobas[abbrev] = None
-                continue
-
-            pa  = s.get("plateAppearances", 0)
-            if pa == 0:
-                continue
-
-            bb  = s.get("baseOnBalls", 0)
-            ibb = s.get("intentionalWalks", 0)
-            hbp = s.get("hitByPitch", 0)
-            h   = s.get("hits", 0)
-            d   = s.get("doubles", 0)
-            t   = s.get("triples", 0)
-            hr  = s.get("homeRuns", 0)
-
-            ubb = bb - ibb
-            single = h - d - t - hr
-
-            woba = (
-                0.69 * ubb +
-                0.72 * hbp +
-                0.89 * single +
-                1.27 * d +
-                1.62 * t +
-                2.10 * hr
-            ) / pa
-
-            raw_wobas[abbrev] = woba
-
-        # Compute league average from teams with enough data
-        valid = [w for w in raw_wobas.values() if w is not None]
-        if not valid:
-            return {}
-
-        lg_avg = sum(valid) / len(valid)
-        print(f"[mlb.py] League avg wOBA: {lg_avg:.3f} across {len(valid)} teams")
-
-        # Return factors relative to league average
-        # Teams without enough data get 1.0 (league average)
-        factors = {}
-        for abbrev, woba in raw_wobas.items():
-            if woba is None:
-                factors[abbrev] = 1.0
-            else:
-                factors[abbrev] = round(woba / lg_avg, 4)
-                print(f"[mlb.py] {abbrev}: wOBA {woba:.3f} → factor {factors[abbrev]:.3f}")
-
-        return factors
+        return _compute_team_woba_factors(splits, min_games=10, label="season")
 
     except Exception as e:
         print(f"[mlb.py] get_team_woba failed: {e}")
         return {}
+
+
+def get_team_woba_recent(season: int = 2026, days: int = 14) -> dict:
+    """
+    Rolling-window wOBA factors over the last `days` days.
+    Uses MLB Stats API `byDateRange` statsType so a single call returns
+    aggregated hitting stats for all 30 teams across the window.
+
+    Teams with < 5 games in the window are excluded — callers treat them
+    as neutral (1.0). This prevents noisy factors when a team has been
+    rained out or on an off-week.
+    """
+    try:
+        today = datetime.utcnow().date()
+        start = today - timedelta(days=days)
+        r = requests.get(
+            "https://statsapi.mlb.com/api/v1/teams/stats",
+            params={
+                "stats":     "byDateRange",
+                "group":     "hitting",
+                "gameType":  "R",
+                "season":    str(season),
+                "sportId":   1,
+                "startDate": start.strftime("%Y-%m-%d"),
+                "endDate":   today.strftime("%Y-%m-%d"),
+            },
+            headers={"User-Agent": "Mozilla/5.0"},
+            timeout=10,
+        )
+        if r.status_code != 200:
+            print(f"[mlb.py] Team stats (recent) API returned {r.status_code}")
+            return {}
+
+        splits = r.json().get("stats", [{}])[0].get("splits", [])
+        return _compute_team_woba_factors(splits, min_games=5,
+                                         label=f"recent-{days}d")
+
+    except Exception as e:
+        print(f"[mlb.py] get_team_woba_recent failed: {e}")
+        return {}
+
+
+def get_team_woba_blended(season: int = 2026,
+                          recent_days: int = 14,
+                          recent_weight: float = 0.35) -> dict:
+    """
+    Blend season wOBA with recent-window wOBA.
+
+    Formula: factor = (1 - recent_weight) * season + recent_weight * recent
+
+    Fallback behavior:
+      - If season fetch fails → return {} (no matchup adjustment this request)
+      - If recent fetch fails → return pure season factors
+      - If a specific team is missing from recent (insufficient sample)
+        → that team uses pure season factor
+    """
+    from concurrent.futures import ThreadPoolExecutor
+
+    try:
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            f_season = executor.submit(get_team_woba, season)
+            f_recent = executor.submit(get_team_woba_recent, season, recent_days)
+            season_factors = f_season.result() or {}
+            recent_factors = f_recent.result() or {}
+    except Exception as e:
+        print(f"[mlb.py] Blended wOBA parallel fetch failed, "
+              f"falling back to sequential: {e}")
+        season_factors = get_team_woba(season) or {}
+        recent_factors = get_team_woba_recent(season, recent_days) or {}
+
+    if not season_factors:
+        print("[mlb.py] No season wOBA available — matchup adjustment disabled")
+        return {}
+
+    if not recent_factors:
+        print("[mlb.py] No recent wOBA data — using pure season factors")
+        return season_factors
+
+    season_weight = 1.0 - recent_weight
+    blended = {}
+    for abbrev, season_f in season_factors.items():
+        recent_f = recent_factors.get(abbrev)
+        if recent_f is None:
+            blended[abbrev] = season_f
+        else:
+            blended[abbrev] = round(
+                season_weight * season_f + recent_weight * recent_f, 4
+            )
+            print(f"[mlb.py] {abbrev}: season {season_f:.3f} + "
+                  f"recent {recent_f:.3f} → blended {blended[abbrev]:.3f}")
+
+    return blended
 
 
 # ---------------------------------------------------------------------------
