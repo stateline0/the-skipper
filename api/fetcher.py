@@ -335,7 +335,7 @@ def load_cached_data(year_int: int) -> dict:
       game_logs_current
     """
     from savant import fetch_expected_stats
-    from mlb import fetch_game_logs, get_team_win_data, get_team_woba
+    from mlb import fetch_game_logs, get_team_win_data, get_team_woba_blended
 
     # ── Savant expected stats ─────────────────────────────────────────
     savant_previous = {}
@@ -455,6 +455,8 @@ def load_cached_data(year_int: int) -> dict:
     print(f"[fetcher.py] Team win data: {len(team_win_data)} teams")
 
     # ── Team wOBA factors for opponent quality adjustment (24hr TTL) ───
+    # Blended: season wOBA + last 14-day rolling window. See
+    # get_team_woba_blended() in mlb.py for the blend formula.
     team_woba_factors = {}
     try:
         team_woba_factors = cache_get(f"cache:team-woba:{year_int}") or {}
@@ -463,7 +465,7 @@ def load_cached_data(year_int: int) -> dict:
 
     if not team_woba_factors:
         try:
-            team_woba_factors = get_team_woba(year_int) or {}
+            team_woba_factors = get_team_woba_blended(year_int) or {}
             if team_woba_factors:
                 try:
                     cache_set(f"cache:team-woba:{year_int}", team_woba_factors,
@@ -473,7 +475,7 @@ def load_cached_data(year_int: int) -> dict:
         except Exception as e:
             print(f"[fetcher.py] Team wOBA fetch failed: {e}")
 
-    print(f"[fetcher.py] Team wOBA: {len(team_woba_factors)} teams")
+    print(f"[fetcher.py] Team wOBA (blended): {len(team_woba_factors)} teams")
 
     return {
         "savant_current":     savant_current,
