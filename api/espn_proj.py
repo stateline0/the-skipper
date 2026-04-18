@@ -111,25 +111,17 @@ def fetch_roster_projections(scoring_period_id: int) -> dict:
 
         # Step 2 — pull kona_player_info for those IDs at target scoring period.
         #
-        # Filter keys:
-        #   filterIds              — restrict to our roster pitcher IDs
-        #   filterStatsForSourceIds — 0 = actuals, 1 = ESPN projections (include both)
-        #   filterStatsForSplitTypeIds — 0 = season totals, 1 = last-7, 5 = per-game
-        #   filterStatsForCurrentSeasonScoringPeriodId — which specific day we care about
-        #   filterStatsForTopScoringPeriodIds — also surface stats for the target day
-        year_int = int(year)
+        # Minimal filter — the first spike confirmed this shape returns HTTP 200.
+        # Aggressive filter additions (filterStatsForSourceIds / SplitTypeIds /
+        # TopScoringPeriodIds / CurrentSeason) produced HTTP 400, so we back off
+        # and parse player.stats[] directly. raw_stats_sample will dump whatever
+        # ESPN returns so we can see the real shape without asking ESPN to filter.
         xff = json.dumps({
             "players": {
                 "filterIds": {"value": player_ids},
-                "filterStatsForSourceIds": {"value": [0, 1]},
-                "filterStatsForSplitTypeIds": {"value": [0, 1, 5]},
                 "filterStatsForCurrentSeasonScoringPeriodId": {
                     "value": [scoring_period_id]
                 },
-                "filterStatsForTopScoringPeriodIds": {
-                    "value": [scoring_period_id]
-                },
-                "filterStatsForCurrentSeason": {"value": [year_int]},
             }
         })
         r2 = requests.get(
