@@ -166,6 +166,15 @@ https://statsapi.mlb.com
 - IP stored as string e.g. `"34.2"` meaning 34 innings + 2 outs = 34.667 actual innings
 - Player names may use accented characters (e.g., "Edwin Díaz") — normalize with `strip_accents()` before matching against ESPN names
 
+### Team stats — date-range splits
+`Confidence: 8/10 · Last assessed: April 18, 2026`
+
+- Endpoint: `/api/v1/teams/stats?stats=byDateRange&startDate=YYYY-MM-DD&endDate=YYYY-MM-DD&group=hitting&season=YYYY&sportId=1`
+- Same response shape as `stats=season` — `splits[].stat.{hits, doubles, triples, homeRuns, baseOnBalls, hitByPitch, atBats, sacFlies, plateAppearances, gamesPlayed}`
+- Used by Layer 7 recent form (last-14-day team wOBA) blended against season factors
+- Lower `min_games` threshold appropriate for short windows (3 vs 10 for full season)
+- `team.abbreviation` occasionally differs from our canonical abbrev (e.g. `AZ` → `ARI`) — same normalization map as probable pitchers applies
+
 ### Name matching
 `Confidence: 9/10 · Last assessed: April 10, 2026`
 
@@ -259,6 +268,70 @@ https://baseballsavant.mlb.com/leaderboard/pitch-arsenal-stats?type=pitcher&pitc
 
 ---
 
+## Open-Meteo (Weather)
+`Confidence: 8/10 · Last assessed: April 18, 2026`
+
+### Base URL & Auth
+
+```
+https://api.open-meteo.com/v1/forecast
+```
+
+- Free, no auth, no API key
+- Hourly forecast up to 16 days out
+- Historical endpoint also available but not used — projections only run forward
+- Requires a browser-like `User-Agent` header (`Mozilla/5.0`) to avoid occasional 403s
+
+### Request shape
+
+Query params used by `api/weather.py`:
+- `latitude`, `longitude` — home plate coordinates per park
+- `hourly=temperature_2m,wind_speed_10m,wind_direction_10m`
+- `temperature_unit=fahrenheit`
+- `wind_speed_unit=mph`
+- `timezone=auto` — returns hourly timestamps in the park's local time
+- `start_date`, `end_date` — single day (same value for both)
+
+### Response shape
+
+`hourly.time[]` is a list of ISO strings like `"2026-04-18T19:00"` — local to the park because `timezone=auto`. `temperature_2m[]`, `wind_speed_10m[]`, `wind_direction_10m[]` are parallel arrays by index.
+
+Game-hour selection: pick `T19:00` as the canonical MLB game slot, fall back to `T13:00` (day games), then the first available hour.
+
+### Park coordinates & dome parks
+
+30-team `PARK_COORDS` dict in `api/weather.py` maps team abbrev → `(lat, lng)` tuples. Accuracy within ±0.01° is fine — Open-Meteo resolution is ~1km.
+
+`DOME_PARKS = {TB, TOR, MIL, ARI, HOU, MIA, SEA, TEX}` — includes permanent dome (TB) plus retractables whose roof state isn't reliably knowable. Dome parks skip the API call entirely and always return `factor=1.0, source="dome"`.
+
+### Temperature → run environment factor
+
+Baseline 70°F = 1.0 neutral. Formula matches park-factor dampening pattern:
+
+```
+raw      = 1 + (temp_f - 70) / 1000      # ~1% per 10°F off baseline
+dampened = 1 + (raw - 1) * 0.5           # only H/ER are temp-sensitive
+clamped  = clip(dampened, 0.95, 1.05)    # ±5% cap
+```
+
+Examples: 40°F → 0.985, 70°F → 1.000, 95°F → 1.0125.
+
+Wind direction modeling is **phase 3 / not yet implemented** — requires `PARK_OUTFIELD_BEARING` per park to compute the out-to-outfield wind component. Phase 1 (this fetcher) returns wind speed and direction in the diagnostic payload but doesn't fold them into the factor.
+
+### Caching
+
+`cache:weather:{park_abbrev}:{date_str}` → full factor dict, 3hr TTL. Shorter than other caches because forecasts update throughout the day as game time approaches.
+
+### Failure mode
+
+`get_weather_factor()` **always returns a dict with `factor` set** — unknown park, Open-Meteo error, network failure, malformed response all fall through to `factor=1.0, source="default"`. The caller never needs to guard against weather breaking the projection pipeline.
+
+### Diagnostic endpoint
+
+`GET /api/weather?park=NYY&date=2026-04-18` returns the full factor dict including `temp_f`, `wind_mph`, `wind_dir_deg`, `source`. Intended for production verification before wiring weather into projections — not part of the production request path.
+
+---
+
 Upstash KV (Redis)
 Confidence: 9/10 · Last assessed: April 11, 2026
 Connection
@@ -272,12 +345,15 @@ Locked projections (write-once, permanent):
 proj:{season}:{period}:{player-slug}:{date} → float
 Example: proj:2026:3:garrett-crochet:2026-04-07 → 17.6
 Data caching (TTL-based):
-cache:savant:{year}      → JSON dict of expected stats by pitcher name
-cache:mlb-stats:{year}   → JSON dict of season pitching stats by pitcher name  
-cache:game-logs:{year}   → JSON dict of per-game pitching stats by pitcher name
-cache:daily:{date}       → JSON dict {fpts, saves, bench, my_team} for all league pitchers
+cache:savant:{year}             → JSON dict of expected stats by pitcher name
+cache:mlb-stats:{year}          → JSON dict of season pitching stats by pitcher name
+cache:game-logs:{year}          → JSON dict of per-game pitching stats by pitcher name
+cache:team-woba:{year}          → JSON dict of BLENDED team wOBA factors (65% season + 35% last-14-day)
+cache:team-win-data:{year}      → JSON dict of team RS/RA/ERA for Pythagorean model
+cache:weather:{park}:{date}     → JSON dict of weather factor + temp/wind (3hr TTL)
+cache:daily:{date}              → JSON dict {fpts, saves, bench, my_team} for all league pitchers
 Cache TTL strategy
-Key patternTTLRationalecache:savant:2025PermanentLast year's data is finalcache:savant:202624 hoursUpdates daily during seasoncache:mlb-stats:2025PermanentLast year's data is finalcache:mlb-stats:202624 hoursUpdates daily during seasoncache:game-logs:202624 hoursNew games happen dailycache:team-win-data:202624 hoursPythagorean model data updates dailycache:daily:2026-04-06PermanentCompleted day's stats never changecache:daily:{today}Never cachedGames may be in progressproj:*PermanentWrite-once, never overwritten (NX flag)proj2:*PermanentV2 rich projection locks (roster pitchers)proj2all:*PermanentV2 projection locks (all MLB starters, from cron)actual-all:*PermanentAll-MLB actuals from game logs (from cron)
+Key patternTTLRationalecache:savant:2025PermanentLast year's data is finalcache:savant:202624 hoursUpdates daily during seasoncache:mlb-stats:2025PermanentLast year's data is finalcache:mlb-stats:202624 hoursUpdates daily during seasoncache:game-logs:202624 hoursNew games happen dailycache:team-woba:202624 hoursStores blended season+recent factor; recent window shifts dailycache:team-win-data:202624 hoursPythagorean model data updates dailycache:weather:{park}:{date}3 hoursForecasts update throughout day as game time approachescache:daily:2026-04-06PermanentCompleted day's stats never changecache:daily:{today}Never cachedGames may be in progressproj:*PermanentWrite-once, never overwritten (NX flag)proj2:*PermanentV2 rich projection locks (roster pitchers)proj2all:*PermanentV2 projection locks (all MLB starters, from cron)actual-all:*PermanentAll-MLB actuals from game logs (from cron)
 Performance impact
 
 Uncached request: ~4.5s (fetches Savant, MLB Stats, and daily FPTS from external APIs)
@@ -363,11 +439,20 @@ RPs: 5 appearances minimum
 Below threshold: falls back to other year's data, or 0.0 if neither year qualifies
 
 Opponent quality adjustment
+`Confidence: 8/10 · Last assessed: April 18, 2026`
 
-Team wOBA factors from MLB Stats API, normalized to league average
-Applied per-start: each start's projection scaled by opponent's factor
-10-game minimum threshold before trusting team wOBA
-RPs excluded from matchup adjustment
+Team wOBA factors from MLB Stats API, normalized to league average, blended across season + recent form.
+
+- **Season component** — `get_team_woba(season)` → full-season splits via `stats=season`, 10-game minimum
+- **Recent component** — `get_team_woba_recent(season, days=14)` → last-14-day splits via `stats=byDateRange`, 3-game minimum (lower bar for short window)
+- **Blend** — `get_team_woba_blended(season, recent_days=14, recent_weight=0.35)`:
+  - 65% season + 35% last 14 days
+  - `ThreadPoolExecutor(max_workers=2)` fetches both in parallel, then blends per team
+  - Pure helper `_compute_team_woba_factors(splits, min_games, label)` computes raw factors from either split type
+- **Fallback chain** — missing recent factor for a team → use season-only for that team. Full recent-fetch failure → return season dict unchanged. Season failure → return `{}` and consumers fall through to neutral 1.0 via `.get(abbrev, 1.0)`.
+- **Cached** under `cache:team-woba:{year}` with 24hr TTL — the cache stores the blended dict, not the raw season dict.
+- Applied per-start: each start's projection scaled by opponent's blended factor.
+- RPs excluded from matchup adjustment.
 
 Recent form weighting (Layer 2)
 `Confidence: 8/10 · Last assessed: April 11, 2026`
@@ -432,13 +517,13 @@ Summary metrics computed:
 Model architecture roadmap
 
 Layer 1 ✅ COMPLETE — Savant xERA/xBA hybrid base rate
-Layer 2 ✅ COMPLETE — Recent form weighting (rolling last 4 starts)
+Layer 2 ✅ COMPLETE — Recent form weighting for pitcher (rolling last 4 starts)
 Layer 3 ✅ COMPLETE — Park factors (dampened 50%)
 Layer 4 ✅ COMPLETE — Vegas/Pythagorean win probability for W/L
 Layer 5 PENDING — Platoon splits
 Layer 6 PENDING — Rest & workload
-Layer 7 ✅ COMPLETE — Opponent starter quality adjustment (xERA via scoreboard probables)
-Layer 8 PENDING — Weather impact
+Layer 7 ✅ COMPLETE — Opponent lineup quality adjustment (season + last-14-day blend), opponent starter xERA
+Layer 8 🟡 IN PROGRESS — Weather impact (fetcher + diagnostic endpoint shipped PR #85; wiring into `get_projected_fpts()` and wind direction modeling deferred to phase 2/3)
 Accuracy tracking ✅ COMPLETE — Factor contribution analysis (PR #74)
 
 Win probability model (Layer 4)
@@ -491,15 +576,16 @@ ESPN's API does not return `matchupPeriodDates` for this league via any availabl
 `sessionStorage` is used to persist data across page navigation (My Team → Free Agents → back). A `CACHE_VERSION` constant ensures stale cache shapes are detected and auto-refreshed when the API response format changes.
 
 ### File architecture (refactored session 18)
-`Confidence: 10/10 · Last assessed: April 12, 2026`
+`Confidence: 10/10 · Last assessed: April 18, 2026`
 
 | File | Lines | Responsibility |
 |---|---|---|
 | `api/espn.py` | ~504 | Orchestrator: `get_league_data()` + HTTP handler |
 | `api/projection.py` | ~415 | Projection model: Savant hybrid, year blend, recent form, matchup adjustments, W/L scaling, locking |
 | `api/fetcher.py` | ~457 | ESPN data fetching, auth, pro team map, actual FPTS, cached data loading |
-| `api/mlb.py` | ~939 | MLB probables, schedule, wOBA, park factors, Pythagorean model, game logs |
+| `api/mlb.py` | ~939 | MLB probables, schedule, wOBA (season + recent + blended), park factors, Pythagorean model, game logs |
 | `api/savant.py` | ~255 | Baseball Savant CSV data fetching |
+| `api/weather.py` | ~315 | Open-Meteo client + park coords + temperature factor + diagnostic endpoint |
 | `api/kv.py` | ~255 | Upstash Redis helpers for projection locking and caching |
 | `api/accuracy.py` | ~322 | Accuracy tracking endpoint (roster + all-MLB scopes) |
 | `api/cron.py` | ~414 | Daily cron: lock all-MLB projections + store actuals |
