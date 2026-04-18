@@ -1,6 +1,6 @@
 # The Skipper — Backlog
 
-Last updated: April 16, 2026
+Last updated: April 18, 2026
 
 ---
 
@@ -19,9 +19,9 @@ Last updated: April 16, 2026
 - [ ] Uses projection model data as input
 
 ### Model Improvements
-- [ ] Recent form for opposing lineup (blend season wOBA with last 7-14 day team hitting)
-- [ ] Weather impact layer (temperature + wind direction via Open-Meteo API, map parks to lat/lng)
-- [ ] Cache team wOBA factors with 24hr TTL (same pattern as team_win_data)
+- [ ] Weather impact — Phase 2: wire `get_weather_factor()` into `get_projected_fpts()` as per-start multiplier; surface `weatherFactor` + `temp_f` in `ProjectionTooltip` and v2 locked projections
+- [ ] Weather impact — Phase 3: wind direction model (add `PARK_OUTFIELD_BEARING` per park, compute out-to-outfield wind component, combine with temp into single weather multiplier)
+- [ ] ProjectionTooltip: split opponent wOBA display into season + last-14-day components (currently shows only the blended factor; show `seasonFactor`, `recentFactor`, and `blendedFactor` with weights)
 
 ---
 
@@ -52,7 +52,6 @@ Last updated: April 16, 2026
 - (Both resolved in session 19 PR #81 — dropped players now route through `get_projected_fpts`)
 
 ### Additional caching opportunities
-- [ ] Team wOBA factors (24hr TTL — single API call, low priority)
 - [ ] Pro team map (permanent — barely changes)
 
 ### Dashboard at-a-glance component
@@ -68,6 +67,17 @@ Last updated: April 16, 2026
 - [ ] `vercel dev` does not serve Python API routes locally (Vercel CLI v50+ known issue)
 
 ---
+
+## ✅ Completed (session 20 — April 18, 2026)
+- [x] Cache team wOBA factors with 24hr TTL under `cache:team-woba:{year}` (PR #83)
+- [x] Refactored `get_team_woba` to use pure helper `_compute_team_woba_factors(splits, min_games, label)` (PR #84)
+- [x] Added `get_team_woba_recent(season, days=14)` using MLB Stats API `byDateRange` statsType (PR #84)
+- [x] Added `get_team_woba_blended(season, recent_days=14, recent_weight=0.35)` — parallel fetch via ThreadPoolExecutor, 65% season / 35% last-14-day (PR #84)
+- [x] Fetcher switched from `get_team_woba` to `get_team_woba_blended` — same cache key, blended value now cached (PR #84)
+- [x] New `api/weather.py` module — Open-Meteo client, 30-park `PARK_COORDS`, 8-park `DOME_PARKS`, temperature-only run environment factor (±5% cap, 50% dampened) (PR #85)
+- [x] `get_weather_factor(park, date)` — dome override → cache lookup → Open-Meteo fetch → compute → 3hr TTL under `cache:weather:{park}:{date}`, graceful fallback to 1.0 on any failure (PR #85)
+- [x] Diagnostic endpoint `/api/weather?park=X&date=Y` for production verification before wiring (PR #85)
+- [x] Added `__pycache__/` and `*.pyc` to `.gitignore`
 
 ## ✅ Completed (session 19 — April 16, 2026)
 - [x] Dropped streamers: count starts that happened while rostered (PR #81)

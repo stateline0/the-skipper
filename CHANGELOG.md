@@ -2,6 +2,71 @@
 
 ---
 
+## Session 20 — April 18, 2026
+
+Projection model improvements: cached team wOBA factors, blended recent team form into opposing-lineup wOBA, and shipped a standalone weather data fetcher (Open-Meteo) with a 3-hour cache and diagnostic endpoint. Three PRs shipped (#83–#85).
+
+### Key learnings this session
+- The MLB Stats API supports `stats=byDateRange&startDate=YYYY-MM-DD&endDate=YYYY-MM-DD` on the `teams/stats` endpoint — same response shape as `stats=season`, which made recent-form wOBA drop in cleanly with a shared helper. Single API call for all 30 teams, no per-team loops needed.
+- Extracting `_compute_team_woba_factors(splits, min_games, label)` as a pure helper let season / recent / blended paths share code. Parallel fetching via `ThreadPoolExecutor(max_workers=2)` keeps the blended call roughly as fast as a single call.
+- NextAuth middleware (`withAuth`) protects every non-static route — any anonymous `curl` against `/api/*` returns a 307 redirect to `/login`. Production endpoint testing has to happen in the browser after login, or via an authenticated fetch. Spent a round-trip forgetting this.
+- Open-Meteo is genuinely free and auth-free. Hourly forecasts 16 days out, with a `temperature_unit=fahrenheit` query param and `timezone=auto` to get local hours (picking `T19:00` as the canonical game slot). Graceful fallback to `T13:00` then to the first available hour handles edge cases.
+- For a new external dependency like weather data, shipping the fetcher + diagnostic endpoint independently from projection wiring is the safer pattern — you can verify the API works in production before touching a core path. A GET endpoint that returns the raw fetch result is 20 lines and saves one deploy round-trip of debugging later.
+- Retractable-roof stadiums are worth treating as domes rather than applying outside weather — the roof state isn't knowable in advance, so shipping a neutral 1.0 factor is strictly better than being sometimes-wrong. Eight parks flagged: TB, TOR, MIL, ARI, HOU, MIA, SEA, TEX.
+- The park-factor dampening pattern (50% toward neutral, ±5% cap) ported cleanly to temperature: `raw = 1 + (temp - 70) / 1000` → dampened 50% → clamped to ±5%. Matches the existing Layer 3 formula so the tooltip UX stays consistent when weather is wired in.
+- Sandbox git holds file locks that the user's terminal doesn't (`.git/index.lock`, `.git/objects/maintenance.lock`). Rule of thumb: any git command that writes (commit, push, merge) should run in Conner's local terminal, not the sandbox. Sandbox git is read-only in practice.
+
+### Cache team wOBA factors (PR #83)
+- Mirrored the PR #77 `team_win_data` caching pattern in `api/fetcher.py`
+- `cache:team-woba:{year}` with 24hr TTL — eliminates one MLB Stats API call per request
+- Removed now-redundant direct calls in `api/espn.py` and `api/cron.py` — both consumers read `cached["team_woba_factors"]`
+
+### Opposing lineup recent form (PR #84)
+- `api/mlb.py`: extracted `_compute_team_woba_factors(splits, min_games, label)` pure helper
+- `get_team_woba(season)` refactored to call the helper with `min_games=10, label="season"`
+- New `get_team_woba_recent(season, days=14)` — calls `stats=byDateRange` with computed start/end dates, `min_games=3` (lower bar for short window), `label="recent"`
+- New `get_team_woba_blended(season, recent_days=14, recent_weight=0.35)`:
+  - `ThreadPoolExecutor(max_workers=2)` fetches season + recent in parallel
+  - Weighted blend: `0.65 × season + 0.35 × recent` per team
+  - Falls back to season-only if recent fetch fails or a team has insufficient recent games
+  - Serial fallback path if the executor itself fails
+- `api/fetcher.py` switched import from `get_team_woba` to `get_team_woba_blended` — same cache key, blended value now cached
+- Consumers already use `.get(abbrev, 1.0)` — safe to return only qualifying teams
+
+### Weather data fetcher (PR #85)
+- New `api/weather.py` (315 lines) — Open-Meteo client + factor computation + diagnostic endpoint
+- `PARK_COORDS` — home plate lat/lng for all 30 MLB parks (±0.01° accuracy is fine; Open-Meteo resolution is ~1km)
+- `DOME_PARKS = {TB, TOR, MIL, ARI, HOU, MIA, SEA, TEX}` — conservative list including retractables (neutral factor beats sometimes-wrong)
+- `fetch_weather(lat, lng, date_str)` — hourly forecast via Open-Meteo, picks `T19:00` local, falls back to `T13:00` or first available hour
+- `compute_temp_factor(temp_f)`:
+  - Baseline: 70°F = 1.0
+  - Raw: `1 + (temp_f - 70) / 1000` (~1% per 10°F)
+  - Dampened 50% (only H/ER are temp-sensitive)
+  - Clamped to ±5%
+  - Examples: 40°F → 0.985, 70°F → 1.000, 95°F → 1.0125
+- `get_weather_factor(park, date)` orchestrator: dome check → cache lookup → fetch → compute → cache with 3hr TTL under `cache:weather:{park}:{date}`. Unknown parks / API failures return neutral 1.0 with `source: "default"`.
+- `BaseHTTPRequestHandler` diagnostic at `/api/weather?park=X&date=Y` — returns the full factor dict for inspection
+- Phase 2 (future PR): wire into `get_projected_fpts()` as per-start multiplier, expose in tooltip and v2 locked projections
+
+### Verification
+- `cache:team-woba:{year}` populated correctly in Upstash after first production request
+- `/api/weather?park=NYY&date=2026-04-18` → 58.2°F, factor 0.9941, source "forecast" ✅
+- `/api/weather?park=COL&date=2026-04-18` → 56.4°F, factor 0.9932, source "forecast" ✅
+- `/api/weather?park=TB&date=2026-04-18` → factor 1.0, source "dome" ✅
+- `/api/weather?park=XYZ&date=2026-04-18` → factor 1.0, source "default" ✅
+- Malformed date param (second URL accidentally pasted into date value) → factor 1.0, source "default" — confirmed graceful fallback path
+
+### KNOWLEDGE.md updates included in this PR
+- Added Open-Meteo section under external APIs
+- MLB Stats API section: added `byDateRange` statsType under team splits
+- Projection Model section: updated opponent quality adjustment with blended formula (65/35, 14-day window, fallback chain)
+- Upstash KV schema: added `cache:weather:{park}:{date}` (3hr TTL) and noted `cache:team-woba:{year}` now stores the blended factor
+
+### `.gitignore`
+- Added `__pycache__/` and `*.pyc` — Python bytecode cache was showing up in `git status` from sandbox Python imports during development. Not a functional issue, but keeps `git status` clean for the next session.
+
+---
+
 ## Session 19 — April 16, 2026
 
 Single bug fix that surfaced two related display issues in adjacent code surface. One PR shipped (#81).
