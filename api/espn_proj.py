@@ -110,12 +110,26 @@ def fetch_roster_projections(scoring_period_id: int) -> dict:
             return {"error": "No roster players found"}
 
         # Step 2 — pull kona_player_info for those IDs at target scoring period.
+        #
+        # Filter keys:
+        #   filterIds              — restrict to our roster pitcher IDs
+        #   filterStatsForSourceIds — 0 = actuals, 1 = ESPN projections (include both)
+        #   filterStatsForSplitTypeIds — 0 = season totals, 1 = last-7, 5 = per-game
+        #   filterStatsForCurrentSeasonScoringPeriodId — which specific day we care about
+        #   filterStatsForTopScoringPeriodIds — also surface stats for the target day
+        year_int = int(year)
         xff = json.dumps({
             "players": {
                 "filterIds": {"value": player_ids},
+                "filterStatsForSourceIds": {"value": [0, 1]},
+                "filterStatsForSplitTypeIds": {"value": [0, 1, 5]},
                 "filterStatsForCurrentSeasonScoringPeriodId": {
                     "value": [scoring_period_id]
                 },
+                "filterStatsForTopScoringPeriodIds": {
+                    "value": [scoring_period_id]
+                },
+                "filterStatsForCurrentSeason": {"value": [year_int]},
             }
         })
         r2 = requests.get(
@@ -132,36 +146,102 @@ def fetch_roster_projections(scoring_period_id: int) -> dict:
             return {"error": f"kona_player_info fetch returned HTTP {r2.status_code}"}
 
         results = []
+        raw_stats_sample = None  # dump first pitcher's full stats[] for inspection
+        raw_player_keys = None   # dump first pitcher's top-level response keys for inspection
         for p in r2.json().get("players", []):
             pid = p.get("id")
-            name = (
-                p.get("player", {}).get("fullName", "")
-                or id_to_name.get(pid, "")
-            )
+            player = p.get("player", {})
+            name = player.get("fullName", "") or id_to_name.get(pid, "")
             pool = p.get("playerPoolEntry", {})
-            applied = pool.get("appliedStatTotal")
+            pool_player = pool.get("player", {})
 
             # Only include pitchers — skip hitters on the roster.
-            # Use eligibleSlots check: 13 = P (active pitcher), 14 = SP, 15 = RP.
-            eligible = set(p.get("player", {}).get("eligibleSlots", []))
+            # Use eligibleSlots: 13 = P (active pitcher), 14 = SP, 15 = RP.
+            eligible = set(player.get("eligibleSlots", []) or pool_player.get("eligibleSlots", []))
             if not (13 in eligible or 14 in eligible or 15 in eligible):
                 continue
+
+            # Projections live in player.stats[] — each entry has:
+            #   statSourceId: 0 = actuals, 1 = ESPN projections
+            #   statSplitTypeId: 0 = season, 1 = last 7, 3 = projections cumulative, 5 = per-game
+            #   scoringPeriodId: specific day this entry is for
+            #   appliedTotal: FPTS under the league's scoring settings
+            #
+            # We want the entry with statSourceId=1 matching our target scoring period.
+            stats_arr = player.get("stats", []) or pool_player.get("stats", [])
+            projected_applied_total = None
+            projected_entries = []
+            for s in stats_arr:
+                entry_summary = {
+                    "statSourceId":     s.get("statSourceId"),
+                    "statSplitTypeId":  s.get("statSplitTypeId"),
+                    "scoringPeriodId":  s.get("scoringPeriodId"),
+                    "seasonId":         s.get("seasonId"),
+                    "appliedTotal":     s.get("appliedTotal"),
+                    "externalId":       s.get("externalId"),
+                }
+                # Gather all projection-sourced entries for this player
+                if s.get("statSourceId") == 1:
+                    projected_entries.append(entry_summary)
+                # Primary candidate: projection for exactly this scoring period
+                if (
+                    s.get("statSourceId") == 1
+                    and s.get("scoringPeriodId") == scoring_period_id
+                    and projected_applied_total is None
+                ):
+                    projected_applied_total = s.get("appliedTotal")
+
+            # Dump the first pitcher's full stats[] so we can see the exact shape
+            if raw_stats_sample is None and stats_arr:
+                raw_stats_sample = {
+                    "player": name,
+                    "player_id": pid,
+                    "stats_array_length": len(stats_arr),
+                    "all_stat_entries": [
+                        {
+                            "statSourceId":    s.get("statSourceId"),
+                            "statSplitTypeId": s.get("statSplitTypeId"),
+                            "scoringPeriodId": s.get("scoringPeriodId"),
+                            "seasonId":        s.get("seasonId"),
+                            "appliedTotal":    s.get("appliedTotal"),
+                            "externalId":      s.get("externalId"),
+                        }
+                        for s in stats_arr
+                    ],
+                }
+            # Also dump the first pitcher's top-level response keys so we can see
+            # what ESPN returns overall (sometimes stats live under different parent keys)
+            if raw_player_keys is None:
+                raw_player_keys = {
+                    "player": name,
+                    "top_level_keys":           sorted(list(p.keys())),
+                    "player_object_keys":       sorted(list(player.keys())),
+                    "playerPoolEntry_keys":     sorted(list(pool.keys())),
+                    "pool_player_keys":         sorted(list(pool_player.keys())),
+                    "player_stats_is_array":    isinstance(player.get("stats"), list),
+                    "pool_player_stats_is_arr": isinstance(pool_player.get("stats"), list),
+                }
 
             results.append({
                 "player_id": pid,
                 "name": name,
-                "applied_stat_total": applied,
+                "pool_applied_stat_total": pool.get("appliedStatTotal"),
+                "projected_applied_total": projected_applied_total,
+                "projection_entries_found": len(projected_entries),
+                "projection_entry_samples": projected_entries[:5],
             })
 
-        # Sort by applied_stat_total descending — highest projected first.
+        # Sort by projected applied total desc
         results.sort(
-            key=lambda x: (x["applied_stat_total"] or 0),
+            key=lambda x: (x["projected_applied_total"] or 0),
             reverse=True,
         )
         return {
             "players": results,
             "scoring_period_id": scoring_period_id,
             "roster_size": len(player_ids),
+            "raw_stats_sample": raw_stats_sample,
+            "raw_player_keys": raw_player_keys,
         }
 
     except Exception as e:
