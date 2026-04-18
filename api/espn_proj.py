@@ -109,19 +109,21 @@ def fetch_roster_projections(scoring_period_id: int) -> dict:
         if not player_ids:
             return {"error": "No roster players found"}
 
-        # Step 2 — pull kona_player_info for those IDs at target scoring period.
+        # Step 2 — pull kona_player_info for those IDs.
         #
-        # Minimal filter — the first spike confirmed this shape returns HTTP 200.
-        # Aggressive filter additions (filterStatsForSourceIds / SplitTypeIds /
-        # TopScoringPeriodIds / CurrentSeason) produced HTTP 400, so we back off
-        # and parse player.stats[] directly. raw_stats_sample will dump whatever
-        # ESPN returns so we can see the real shape without asking ESPN to filter.
+        # Previous spike (minimal filter) returned HTTP 200 but stats[] contained
+        # ONLY the statSourceId=0 (actuals) entry for the exact scoringPeriodId
+        # we asked for — no projection entries at all.
+        #
+        # Hypothesis for v4: ESPN's filter was actively restricting to the
+        # requested scoringPeriodId. Drop that restriction and explicitly ask
+        # for both actuals AND projection-sourced entries via
+        # filterStatsForSourceIds. If ESPN's API has per-day projections
+        # anywhere, this is the shape that should surface them.
         xff = json.dumps({
             "players": {
                 "filterIds": {"value": player_ids},
-                "filterStatsForCurrentSeasonScoringPeriodId": {
-                    "value": [scoring_period_id]
-                },
+                "filterStatsForSourceIds": {"value": [0, 1]},
             }
         })
         r2 = requests.get(
@@ -183,8 +185,11 @@ def fetch_roster_projections(scoring_period_id: int) -> dict:
                 ):
                     projected_applied_total = s.get("appliedTotal")
 
-            # Dump the first pitcher's full stats[] so we can see the exact shape
-            if raw_stats_sample is None and stats_arr:
+            # Dump the first pitcher's full stats[] unconditionally — even if
+            # the array is empty. Previous spike skipped empty arrays and we
+            # lost visibility into whether ESPN was returning *nothing* or just
+            # filtering aggressively.
+            if raw_stats_sample is None:
                 raw_stats_sample = {
                     "player": name,
                     "player_id": pid,
