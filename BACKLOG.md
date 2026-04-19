@@ -1,17 +1,10 @@
 # The Skipper — Backlog
 
-Last updated: April 18, 2026 (session 22)
+Last updated: April 18, 2026 (session 23)
 
 ---
 
 ## 🔜 Next session priorities
-
-### Accuracy dashboard — ESPN block empty-state polish
-Two small gaps surfaced after PR C (#99) shipped — the head-to-head block doesn't render in the cases where it has the most marginal value (when Skipper has no matched actuals but ESPN data exists):
-- [ ] `api/accuracy.py` — the early-return path `if not proj_keys: return {"starts": [], ...}` short-circuits before the ESPN logic runs. Move the ESPN key scan above the early return (or into its own function) so `espnSummary` is still populated when Skipper has no `proj2all:` keys for the period.
-- [ ] `pages/accuracy.tsx` — the `starts.length === 0` branch renders the "No accuracy data yet" empty state and never shows the ESPN block. Pass `espnSummary` into the empty-state branch and render `EspnHeadToHead` there when `scope === 'all'` and `espnSummary` is non-null. Bonus: show ESPN lock count in the empty-state subtext so users see data accumulating.
-
-Both are 15-minute fixes — good warm-up tasks for next session. No new tests or deploy risk, purely rendering wiring.
 
 ### Accuracy page redesign
 - [ ] Remove matchup period dropdown — show all-time data across all periods
@@ -26,7 +19,6 @@ Both are 15-minute fixes — good warm-up tasks for next session. No new tests o
 - [ ] Uses projection model data as input
 
 ### Model Improvements
-- [ ] Weather impact — Phase 2: wire `get_weather_factor()` into `get_projected_fpts()` as per-start multiplier; surface `weatherFactor` + `temp_f` in `ProjectionTooltip` and v2 locked projections
 - [ ] Weather impact — Phase 3: wind direction model (add `PARK_OUTFIELD_BEARING` per park, compute out-to-outfield wind component, combine with temp into single weather multiplier)
 - [ ] ProjectionTooltip: split opponent wOBA display into season + last-14-day components (currently shows only the blended factor; show `seasonFactor`, `recentFactor`, and `blendedFactor` with weights)
 
@@ -74,6 +66,11 @@ Both are 15-minute fixes — good warm-up tasks for next session. No new tests o
 - [ ] `vercel dev` does not serve Python API routes locally (Vercel CLI v50+ known issue)
 
 ---
+
+## ✅ Completed (session 23 — April 18, 2026)
+- [x] **PR #101 — ESPN empty-state polish on accuracy dashboard.** Two gaps from session 22's PR C closed: (1) `api/accuracy.py` early-return path now computes `espnSummary` when `scope === 'all'` even with no `proj2all:` keys — refactored ESPN lookup + summary math into two module-level helpers (`_fetch_espn_lookup`, `_compute_espn_summary`) shared between the early-return and normal paths. (2) `pages/accuracy.tsx` empty-state branch now wraps in a fragment and renders `EspnHeadToHead` above the empty card when `scope === 'all'` and `espnSummary` is non-null. Empty-state subtext surfaces ESPN lock count so users can see data accumulating before Skipper actuals exist.
+- [x] **PR #102 — Weather Phase 2: wire `get_weather_factor()` into projection pipeline.** Session 20's weather module is now a live per-start multiplier alongside wOBA and park factors. Backend (`api/projection.py`): import added, live loop applies `weather_factor` to `start_proj`, `per_start_details` carries `weather`/`tempF`/`weatherSource`, lock path mirrors the same calc so locked FPTS equals live FPTS, and v2 locked breakdowns gain a new `"weather": { factor, tempF, source }` block for accuracy analysis. Frontend (`components/ProjectionTooltip.tsx`): `StartDetail` interface extended, single-start mode renders `Weather (72°F) ×1.012` row when `weatherSource === 'forecast'`, total mode adds a compact weather `FactorLabel` per start. Dome parks and default-fallback states hide the weather UI to avoid noise. All failure paths in `get_weather_factor` return factor=1.0, so Open-Meteo outages cannot break projections; 3hr Redis cache prevents API spam; ±5% cap enforced on the multiplier.
+- [x] Direct folder access established via `request_cowork_directory` — Claude can now read/edit files in `~/Developer/the-skipper` without copy/paste. Git commit/push/deploy still run locally (sandbox can't write `.git/` reliably). Two PRs shipped in one session under the new workflow.
 
 ## ✅ Completed (session 22 — April 18, 2026)
 - [x] **PR B — Daily cron locks ESPN Forecaster projections to KV** (PR #97). `lock_espn_projections()` added to `api/cron.py`: fetches today's MLB-confirmed probables, builds an accent-stripped name lookup, pulls the ESPN Forecaster for today only, reconciles each entry against the MLB set, and SETNX-writes confirmed matches to `projection-espn:{year}:{period}:{slug}:{date}` with a 60-day TTL. Skips placeholder entries (FPTS == 1.0) and orphans (ESPN pitcher not in MLB's confirmed set). First production run locked 29 new keys with 1 skipped_unconfirmed; idempotency verified on second run (locked_new: 0, locked_skipped_existing: 29). Cron handler now calls MLB and ESPN locking independently and returns a merged `{ok, mlb, espn}` summary so one failure doesn't hide the other's counters.
