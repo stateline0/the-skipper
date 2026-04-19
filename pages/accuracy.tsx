@@ -59,6 +59,7 @@ interface AccuracyData {
   factorAnalysis?: FactorAnalysis
   espnSummary?: EspnSummary | null
   unmatchedCount?: number
+  filteredNonRoster?: number
   error?: string
   message?: string
 }
@@ -89,19 +90,19 @@ export default function AccuracyPage() {
   const router = useRouter()
   const [data, setData] = useState<AccuracyData | null>(null)
   const [loading, setLoading] = useState(true)
-  const [period, setPeriod] = useState(2)
   const [scope, setScope] = useState<'roster' | 'all'>('roster')
   const [expandedRow, setExpandedRow] = useState<string | null>(null)
 
   const fetchData = () => {
     setLoading(true)
-    fetch(`/api/accuracy?season=2026&period=${period}&scope=${scope}`)
+    // No period param → backend aggregates across all 22 periods (all-time view).
+    fetch(`/api/accuracy?season=2026&scope=${scope}`)
       .then(r => r.json())
       .then(d => { setData(d); setLoading(false) })
       .catch(() => setLoading(false))
   }
 
-  useEffect(() => { fetchData() }, [period, scope])
+  useEffect(() => { fetchData() }, [scope])
 
   const summary = data?.summary || {}
   const starts = data?.starts || []
@@ -120,7 +121,7 @@ export default function AccuracyPage() {
               Model Accuracy
             </h1>
             <p style={{ fontSize: 13, color: 'var(--ink-3)', margin: 0 }}>
-              Projected vs actual per-stat breakdown for each start
+              All-time projected vs actual per-stat breakdown — every locked start, every period
             </p>
           </div>
           <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
@@ -164,20 +165,6 @@ export default function AccuracyPage() {
             >
               {loading ? 'Refreshing...' : '↻ Refresh'}
             </button>
-            <select
-              value={period}
-              onChange={e => setPeriod(Number(e.target.value))}
-              style={{
-                padding: '6px 12px', fontSize: 13, borderRadius: 6,
-                border: '1px solid var(--border-strong)', background: 'var(--paper-2)',
-                fontFamily: 'var(--mono)', cursor: 'pointer',
-                color: 'var(--ink)',
-              }}
-            >
-              {Array.from({ length: 22 }, (_, i) => (
-                <option key={i + 1} value={i + 1}>Period {i + 1}</option>
-              ))}
-            </select>
             <button
               onClick={() => router.push('/my-team')}
               style={{
@@ -199,7 +186,7 @@ export default function AccuracyPage() {
           <>
             {/* ESPN head-to-head renders above the empty state when scope=all,
                 so ESPN-locked projections surface even before Skipper has any
-                matched actuals for the period. */}
+                matched actuals yet. */}
             {scope === 'all' && espnSummary && (
               <EspnHeadToHead espnSummary={espnSummary} />
             )}
@@ -212,8 +199,8 @@ export default function AccuracyPage() {
                 No accuracy data yet
               </div>
               <div style={{ fontSize: 13, maxWidth: 400, margin: '0 auto' }}>
-                Accuracy tracking started in session 14. Data will accumulate as more starts are locked
-                and completed. Check back after more games are played.
+                Accuracy tracking started in session 14. Data accumulates as locked projections are
+                matched against completed-game actuals across all 22 matchup periods.
               </div>
               {data?.unmatchedCount ? (
                 <div style={{ fontSize: 12, marginTop: 12, fontFamily: 'var(--mono)' }}>
@@ -222,7 +209,7 @@ export default function AccuracyPage() {
               ) : null}
               {scope === 'all' && espnSummary && espnSummary.espnKeysFound > 0 ? (
                 <div style={{ fontSize: 12, marginTop: 8, fontFamily: 'var(--mono)' }}>
-                  {espnSummary.espnKeysFound} ESPN projection{espnSummary.espnKeysFound === 1 ? '' : 's'} locked for this period
+                  {espnSummary.espnKeysFound} ESPN projection{espnSummary.espnKeysFound === 1 ? '' : 's'} locked across all periods
                 </div>
               ) : null}
             </div>
@@ -406,13 +393,23 @@ export default function AccuracyPage() {
               </table>
             </div>
 
-            {data?.unmatchedCount ? (
+            {(data?.unmatchedCount || data?.filteredNonRoster) ? (
               <div style={{
                 fontSize: 12, color: 'var(--ink-3)', marginTop: 16, textAlign: 'center',
                 fontFamily: 'var(--mono)',
               }}>
-                {data.unmatchedCount} projected start{data.unmatchedCount > 1 ? 's' : ''} without
-                matching actual stats (free agents or games not yet completed)
+                {data?.unmatchedCount ? (
+                  <div>
+                    {data.unmatchedCount} projected start{data.unmatchedCount > 1 ? 's' : ''} without
+                    matching actual stats (games not yet completed)
+                  </div>
+                ) : null}
+                {scope === 'roster' && data?.filteredNonRoster ? (
+                  <div style={{ marginTop: 4 }}>
+                    {data.filteredNonRoster} projected start{data.filteredNonRoster > 1 ? 's' : ''} excluded
+                    (pitcher not on your roster that day)
+                  </div>
+                ) : null}
               </div>
             ) : null}
           </>
@@ -479,7 +476,7 @@ function EspnHeadToHead({ espnSummary }: { espnSummary: EspnSummary }) {
           populates once games complete and the next cron stores actual stats.
           {espnSummary.espnKeysFound > 0
             ? ` (${espnSummary.espnKeysFound} ESPN projection${espnSummary.espnKeysFound === 1 ? '' : 's'} locked, awaiting matched actuals.)`
-            : ' (No ESPN projections locked yet for this period.)'}
+            : ' (No ESPN projections locked yet.)'}
         </div>
       )}
     </div>
