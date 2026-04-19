@@ -18,6 +18,7 @@ import unicodedata
 
 from mlb import compute_recent_form_fpts, get_park_factor, compute_matchup_win_prob
 from kv import get_locked_projection, set_locked_projection, set_locked_projection_v2
+from weather import get_weather_factor
 
 
 # ── League scoring formula ────────────────────────────────────────────
@@ -273,6 +274,19 @@ def get_projected_fpts(player_starts: list, team_woba_factors: dict = None,
                 park_team   = opp if not is_home else player_info.get("team", "")
                 park_factor = get_park_factor(park_team) if park_team else 1.0
 
+                # ── Layer 3.5: Weather factor ────────────────────────────
+                # Temperature → run environment multiplier (dampened 50%,
+                # capped ±5%). Dome parks always return 1.0. Network
+                # failures fall back to 1.0 so the caller never breaks.
+                start_date_str = sd.get("date", "")
+                if park_team and start_date_str:
+                    weather_data = get_weather_factor(park_team, start_date_str)
+                else:
+                    weather_data = {"factor": 1.0, "temp_f": None, "source": "default"}
+                weather_factor = weather_data.get("factor", 1.0)
+                temp_f         = weather_data.get("temp_f")
+                weather_source = weather_data.get("source", "default")
+
                 # Win probability: Vegas → Pythagorean → default
                 if vegas_wp:
                     win_prob = vegas_wp
@@ -302,15 +316,18 @@ def get_projected_fpts(player_starts: list, team_woba_factors: dict = None,
                 w_contrib = raw_w * win_prob * STARTER_WIN_SHARE * 5
                 l_contrib = raw_l * (1 - win_prob) * STARTER_WIN_SHARE * (-5)
                 start_base = base_no_wl + w_contrib + l_contrib
-                start_proj = start_base * woba_factor * park_factor
+                start_proj = start_base * woba_factor * park_factor * weather_factor
                 adjusted_total += start_proj
                 location = "vs" if is_home else "@"
                 per_start_details.append({
                     "label":    f"{location} {opp}",
-                    "date":     sd.get("date", ""),
+                    "date":     start_date_str,
                     "woba":     round(woba_factor, 3),
                     "park":     round(park_factor, 3),
                     "parkTeam": park_team,
+                    "weather":       round(weather_factor, 3),
+                    "tempF":         temp_f,
+                    "weatherSource": weather_source,
                     "winProb":  round(win_prob, 3),
                     "wpSource": wp_source,
                     "wlContrib": round(w_contrib + l_contrib, 1),
@@ -357,6 +374,14 @@ def get_projected_fpts(player_starts: list, team_woba_factors: dict = None,
                         woba_f    = team_woba_factors.get(opp, 1.0) if team_woba_factors else 1.0
                         park_tm   = opp if not is_home else player_info.get("team", "")
                         park_f    = get_park_factor(park_tm) if park_tm else 1.0
+                        # Weather factor — same rules as live projection above
+                        if park_tm and date:
+                            lock_weather = get_weather_factor(park_tm, date)
+                        else:
+                            lock_weather = {"factor": 1.0, "temp_f": None, "source": "default"}
+                        weather_f      = lock_weather.get("factor", 1.0)
+                        lock_temp_f    = lock_weather.get("temp_f")
+                        lock_wx_source = lock_weather.get("source", "default")
                         # Use same win_prob logic as projection
                         if vegas_wp:
                             lock_wp = vegas_wp
@@ -375,7 +400,7 @@ def get_projected_fpts(player_starts: list, team_woba_factors: dict = None,
                             blended["er"] * -2 + blended["hb"] * -1 +
                             blended["sv"] * 5
                         )
-                        start_proj = (lock_base + w_adj * 5 + l_adj * (-5)) * woba_f * park_f
+                        start_proj = (lock_base + w_adj * 5 + l_adj * (-5)) * woba_f * park_f * weather_f
                         breakdown = {
                             "fpts": round(start_proj, 1),
                             "stats": {
@@ -396,6 +421,11 @@ def get_projected_fpts(player_starts: list, team_woba_factors: dict = None,
                                 "parkTeam": park_tm,
                                 "isHome":   is_home,
                                 "winProb":  round(lock_wp, 3),
+                            },
+                            "weather": {
+                                "factor": round(weather_f, 3),
+                                "tempF":  lock_temp_f,
+                                "source": lock_wx_source,
                             },
                             "model": {
                                 "type":         model_label,

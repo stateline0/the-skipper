@@ -24,6 +24,9 @@ export interface StartDetail {
   woba: number       // 0.91
   park: number       // 1.075
   parkTeam: string   // "BOS"
+  weather?: number        // 1.012 — temperature run-environment factor
+  tempF?: number | null   // 72.5 — forecast temperature, null for dome/default
+  weatherSource?: string  // "forecast" | "dome" | "default"
   winProb?: number   // 0.636 — team win probability
   wpSource?: string  // "vegas" | "pyth" | "default"
   wlContrib?: number // +1.2 — net FPTS from W/L adjustment
@@ -176,6 +179,12 @@ export default function ProjectionTooltip({ children, breakdown, startDate }: Pr
               <FactorLabel value={startDetail.park} />
             </Row>
 
+            {startDetail.weather != null && startDetail.weatherSource === 'forecast' && (
+              <Row label={`Weather${startDetail.tempF != null ? ` (${Math.round(startDetail.tempF)}°F)` : ''}`}>
+                <FactorLabel value={startDetail.weather} />
+              </Row>
+            )}
+
             {startDetail.winProb != null && (
               <Row label={`Win prob`}>
                 <WinProbLabel prob={startDetail.winProb} source={startDetail.wpSource} />
@@ -265,6 +274,9 @@ export default function ProjectionTooltip({ children, breakdown, startDate }: Pr
                   <span style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
                     <FactorLabel value={s.woba} inverse />
                     <FactorLabel value={s.park} />
+                    {s.weather != null && s.weatherSource === 'forecast' && (
+                      <FactorLabel value={s.weather} />
+                    )}
                     {s.winProb != null && (
                       <WinProbLabel prob={s.winProb} source={s.wpSource} compact />
                     )}
