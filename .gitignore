@@ -5,8 +5,9 @@ node_modules/
 .next/
 out/
 
-# environment files
+# environment files — never commit secrets
 .env*.local
+.env.vercel*
 
 # vercel
 .vercel
