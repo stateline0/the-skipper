@@ -1,6 +1,7 @@
 import Head from 'next/head'
 import { useState, useEffect } from 'react'
 import { useRouter } from 'next/router'
+import MaeTimelineChart from '../components/MaeTimelineChart'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 interface StartComparison {
@@ -220,6 +221,11 @@ export default function AccuracyPage() {
             {scope === 'all' && espnSummary && (
               <EspnHeadToHead espnSummary={espnSummary} />
             )}
+
+            {/* MAE timeline chart (scope=all only — ESPN comparison is whole-MLB).
+                Client-side computes daily MAE + 7-day rolling off the starts
+                array that /api/accuracy already returns. */}
+            {scope === 'all' && <MaeTimelineChart starts={starts} />}
 
             {/* Summary tiles */}
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 24 }}>
