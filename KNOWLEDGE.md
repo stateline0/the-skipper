@@ -175,20 +175,22 @@ https://statsapi.mlb.com
 - `team.abbreviation` occasionally differs from our canonical abbrev (e.g. `AZ` → `ARI`) — same normalization map as probable pitchers applies
 
 ### Name matching
-`Confidence: 9/10 · Last assessed: April 10, 2026`
+`Confidence: 10/10 · Last assessed: April 19, 2026`
 
 - Full lowercase name matching (`full_name.strip().lower()`) — never last-name-only (causes collisions like Shane Smith / Shane Baz)
 - Accent normalization via `unicodedata.normalize('NFD')` required for cross-source matching
+- **Slug form (for KV keys) must also strip accents.** The `_to_slug()` helper applies `_strip_accents()` before the `re.sub(r"[^a-z0-9]+", "-", …)` step — otherwise accented names like "Luis García" or "José Berríos" generate different slugs across MLB Stats API (accents preserved in some responses), ESPN Fantasy (often stripped), and ESPN Forecaster (varies). This bit us in session 24 — ESPN-locked keys for accented pitchers didn't join to Skipper-locked keys until the strip was added to the slug pipeline.
 
 ### Game logs (per-game stats)
-`Confidence: 8/10 · Last assessed: April 11, 2026`
+`Confidence: 10/10 · Last assessed: April 19, 2026`
 
-- Endpoint: `/api/v1/stats?stats=gameLog&playerPool=all&group=pitching&season=YYYY&gameType=R&limit=5000`
-- Returns per-game pitching lines for ALL pitchers in a single call — no need to look up player IDs
-- Each split contains: `player.fullName`, `date`, `stat.inningsPitched`, `stat.hits`, `stat.earnedRuns`, `stat.strikeOuts`, `stat.baseOnBalls`, `stat.hitBatsmen`, `stat.wins`, `stat.losses`, `stat.saves`, `stat.gamesStarted`
-- `gamesStarted` field distinguishes actual starts (gs=1) from relief appearances (gs=0)
-- Used by Layer 2 (recent form weighting) to compute rolling weighted average of last 4 starts
-- Cached with 24hr TTL (`cache:game-logs:YYYY`)
+- ⚠️ **Bulk endpoint DOES NOT WORK.** `/api/v1/stats?stats=gameLog&playerPool=all&group=pitching&season=YYYY` silently returns an empty `splits` array — no error, no warning, no 4xx. We assumed it worked through most of session 13–22 because an earlier ad-hoc test happened to succeed in a different season window. It cost a full session of diagnostic work to pin down (session 24). Do not use this URL shape.
+- ✅ **Correct endpoint: per-player.** `/api/v1/people/{person_id}/stats?stats=gameLog&group=pitching&season=YYYY&gameType=R` returns the full game log for a single pitcher. Parallelize over a list of pitcher IDs using `ThreadPoolExecutor` (12 workers works well — MLB Stats API tolerates it, `fetch_game_logs_for_players()` is the reference implementation).
+- Each split contains: `date`, `stat.inningsPitched`, `stat.hits`, `stat.earnedRuns`, `stat.strikeOuts`, `stat.baseOnBalls`, `stat.hitBatsmen`, `stat.wins`, `stat.losses`, `stat.saves`, `stat.gamesStarted`. `player.fullName` is NOT on the split — you already know whose log you're fetching.
+- `gamesStarted` field distinguishes actual starts (gs=1) from relief appearances (gs=0) — still filter on this.
+- Used by Layer 2 (recent form weighting) to compute rolling weighted average of last 4 starts, and by `actual-all:` cron locking for accuracy dashboard.
+- Cached with 24hr TTL (`cache:game-logs:YYYY`) — cache key is per-season, value is merged across all pitchers fetched.
+- **Silent-failure defense:** any new bulk-style fetch against MLB Stats API should log the returned `len(splits)` and compare against an expected floor (e.g., ≥100 for all-pitcher pulls in-season). If the shape is "200 OK with empty splits," that's the failure mode.
 
 ### Team abbreviation quirks
 `Confidence: 9/10 · Last assessed: April 9, 2026`
@@ -686,6 +688,18 @@ Everything NOT in the negative-lookahead list is protected. To add a new public 
 - Redirect `Location` starts with `https://vercel.com/sso-api?…` → it's Vercel Deployment Protection (fix in Vercel dashboard → Deployment Protection, or use a custom domain which is exempt from Standard Protection)
 
 **Endpoints requiring auth-by-handler rather than middleware exemption:** routes that need a session BUT also need to skip the middleware's `/login` redirect (none today — all protected routes happily use the default middleware behavior).
+
+### Silent API failures: defensive pattern
+`Confidence: 10/10 · Last assessed: April 19, 2026`
+
+Some upstream APIs return 200 OK with an empty payload instead of erroring when a request shape they don't support is sent. The MLB Stats API bulk game-logs endpoint is the canonical example (see "Game logs (per-game stats)" above). These are the worst kind of failures because they look indistinguishable from "no data exists" — production runs green, KV gets written with zero entries, and the bug compounds quietly until something downstream notices the gap.
+
+**Defenses we now use, after session 24's diagnostic burn:**
+
+1. **Floor checks on bulk fetches.** Any call expected to return ≥ N rows in normal operation should log `len(result)` and warn (or fail loudly in cron) when below floor. E.g., an all-pitcher game-log pull in mid-season should never legitimately return 0 splits.
+2. **Per-write counters surfaced to KV.** Cron handlers write a `cache:cron-summary:{date}` blob with `{locked_new, locked_skipped_existing, skipped_unconfirmed, …}` so the after-the-fact debugger has something to inspect even if Vercel logs have rolled off (Hobby tier = 1hr retention).
+3. **SETNX / write-once locking** for projection keys (`proj2:`, `proj2all:`, `projection-espn:`) — prevents a silent-failure rerun from overwriting good data with empty data.
+4. **Prefer per-entity calls when bulk is suspect.** For game logs we now fan out per-player via `ThreadPoolExecutor`; the pattern is more expensive but failures isolate to one player rather than nuking the whole pull.
 
 ### File architecture (refactored session 18)
 `Confidence: 10/10 · Last assessed: April 18, 2026`

@@ -1,16 +1,10 @@
 # The Skipper — Backlog
 
-Last updated: April 18, 2026 (session 23)
+Last updated: April 19, 2026 (session 24)
 
 ---
 
 ## 🔜 Next session priorities
-
-### Accuracy page redesign
-- [ ] Remove matchup period dropdown — show all-time data across all periods
-- [ ] Fix "My Roster" scope leaking FA projections (filter proj2: keys to actual roster players)
-- [ ] MAE timeline chart with model milestone markers (e.g., "Added park factors", "Vegas W/L")
-- [ ] Rolling MAE over time to visualize model improvement
 
 ### Weekly planner / decision automation MVP
 - [ ] AI-powered weekly optimization: recommend add/drop sequence and start/sit decisions
@@ -61,11 +55,16 @@ Last updated: April 18, 2026 (session 23)
 ## 🐛 Known bugs
 
 - [ ] Suspended players (SSPD) not appearing in roster — Reynaldo Lopez added but missing from mRoster response. Likely ESPN uses different eligibleSlots or lineupSlotId for suspended players.
-- [ ] "My Roster" accuracy scope shows non-roster pitchers — FA projections leak into proj2: keys
 - [ ] Free agent actual FPTS only available for players who were rostered at time of start — ESPN API limitation (affects accuracy dashboard too)
 - [ ] `vercel dev` does not serve Python API routes locally (Vercel CLI v50+ known issue)
 
 ---
+
+## ✅ Completed (session 24 — April 19, 2026)
+- [x] **PR E — Accuracy page redesign: all-time aggregation + FA-leak fix** (PR #104). `api/accuracy.py` removed the matchup-period dropdown — endpoint now iterates all locked `proj2:` and `actual-all:` keys across the full season instead of a single period. My-Roster scope: pulls the current roster via `get_my_team_pitchers()` and filters projection keys to roster-slug matches, so FA projections no longer leak into the roster view. `pages/accuracy.tsx` dropped the period selector and updated copy to reflect all-time scope. Shipped alongside a UI tightening pass on the summary tiles.
+- [x] **PR G — Silent game-logs API bug fix + accent-normalized slugs** (PR #105). Root cause: `/api/v1/people/{id}/stats?stats=gameLog&playerPool=all` silently returns empty (no error, no warning) when used as a bulk fetch. Switched `fetch_game_logs_for_players()` to per-player `/api/v1/people/{id}/stats?stats=gameLog` calls parallelized via `ThreadPoolExecutor` (12 workers). Added `_strip_accents()` helper and applied it inside `_to_slug()` so accented names (Luis García, José Berríos, etc.) now produce matchable slugs across MLB Stats API, ESPN Fantasy, and ESPN Forecaster sources. Diagnostic detour: since Vercel Hobby only retains logs for 1 hour, used KV keys as the observability surface — added `cache:cron-summary:{date}` write so we could inspect after-the-fact what the cron actually locked.
+- [x] **PR F — MAE timeline chart with model milestone markers** (PR #106). New `components/MaeTimelineChart.tsx` renders a recharts `LineChart` on the All-MLB tab of the accuracy dashboard: solid lines for daily Skipper vs. ESPN MAE, dashed lines for 7-day trailing rolling averages (calendar-day window, sample-count weighted — not row-count, which would over-smooth on sparse dates), plus vertical `ReferenceLine` markers for model-changing deploys (Vegas W/L + xERA, Blended wOBA + weather, recentForm fix). Zero backend changes — `/api/accuracy` already attaches `espnFpts`/`espnError` to starts when `scope=="all"`, so all computation is client-side off the existing payload. Scoped to `scope === 'all'` only since ESPN projections are whole-MLB and don't map to a single fantasy roster. `recharts@^2` added as a dep (~90kb gz).
+- [x] **Ops — CRON_SECRET rotated** after the old value showed up in a tracked `.env.vercel.prod` dump (caught by PR #98's `.gitignore` pattern). New secret written to Vercel prod env; cron verified green on the next tick.
 
 ## ✅ Completed (session 23 — April 18, 2026)
 - [x] **PR #101 — ESPN empty-state polish on accuracy dashboard.** Two gaps from session 22's PR C closed: (1) `api/accuracy.py` early-return path now computes `espnSummary` when `scope === 'all'` even with no `proj2all:` keys — refactored ESPN lookup + summary math into two module-level helpers (`_fetch_espn_lookup`, `_compute_espn_summary`) shared between the early-return and normal paths. (2) `pages/accuracy.tsx` empty-state branch now wraps in a fragment and renders `EspnHeadToHead` above the empty card when `scope === 'all'` and `espnSummary` is non-null. Empty-state subtext surfaces ESPN lock count so users can see data accumulating before Skipper actuals exist.
