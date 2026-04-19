@@ -15,6 +15,8 @@ interface StartComparison {
   statErrors: Record<string, number>
   matchup: { opponent?: string; woba?: number; park?: number; parkTeam?: string; isHome?: boolean }
   model: { type?: string; blendWeight?: number; recentForm?: number; seasonBase?: number; adjustedBase?: number }
+  espnFpts?: number
+  espnError?: number
 }
 
 interface Summary {
@@ -44,10 +46,18 @@ interface FactorAnalysis {
   recentForm: FactorDetail
 }
 
+interface EspnSummary {
+  totalStarts: number
+  mae: number | null
+  skipperMaeOnIntersection: number | null
+  espnKeysFound: number
+}
+
 interface AccuracyData {
   starts: StartComparison[]
   summary: Summary
   factorAnalysis?: FactorAnalysis
+  espnSummary?: EspnSummary | null
   unmatchedCount?: number
   error?: string
   message?: string
@@ -96,6 +106,7 @@ export default function AccuracyPage() {
   const summary = data?.summary || {}
   const starts = data?.starts || []
   const factors = data?.factorAnalysis
+  const espnSummary = data?.espnSummary ?? null
 
   return (
     <>
@@ -205,6 +216,11 @@ export default function AccuracyPage() {
           </div>
         ) : (
           <>
+            {/* ESPN head-to-head (scope=all only) */}
+            {scope === 'all' && espnSummary && (
+              <EspnHeadToHead espnSummary={espnSummary} />
+            )}
+
             {/* Summary tiles */}
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 24 }}>
               <SummaryTile label="STARTS TRACKED" value={summary.totalStarts ?? 0} />
@@ -325,6 +341,7 @@ export default function AccuracyPage() {
                     <th style={thStyle}>Date</th>
                     <th style={thStyle}>Matchup</th>
                     <th style={thStyle}>Proj</th>
+                    {scope === 'all' && <th style={thStyle}>ESPN</th>}
                     <th style={thStyle}>Actual</th>
                     <th style={thStyle}>Error</th>
                   </tr>
@@ -349,6 +366,11 @@ export default function AccuracyPage() {
                           <td style={tdStyle}>{formatDate(s.date)}</td>
                           <td style={tdStyle}>{location} {s.matchup.opponent || '?'}</td>
                           <td style={{ ...tdStyle, textAlign: 'right' }}>{s.projFpts.toFixed(1)}</td>
+                          {scope === 'all' && (
+                            <td style={{ ...tdStyle, textAlign: 'right', color: 'var(--ink-3)' }}>
+                              {s.espnFpts != null ? s.espnFpts.toFixed(1) : '—'}
+                            </td>
+                          )}
                           <td style={{ ...tdStyle, textAlign: 'right', fontWeight: 600 }}>{s.actualFpts.toFixed(1)}</td>
                           <td style={{
                             ...tdStyle, textAlign: 'right', fontWeight: 600,
@@ -359,7 +381,7 @@ export default function AccuracyPage() {
                         </tr>
                         {isExpanded && (
                           <tr key={`${rowKey}-detail`} style={{ background: 'var(--paper-2)' }}>
-                            <td colSpan={6} style={{ padding: '8px 12px 16px' }}>
+                            <td colSpan={scope === 'all' ? 7 : 6} style={{ padding: '8px 12px 16px' }}>
                               <StatBreakdown start={s} />
                             </td>
                           </tr>
@@ -388,6 +410,94 @@ export default function AccuracyPage() {
 }
 
 // ─── Sub-components ───────────────────────────────────────────────────────────
+function EspnHeadToHead({ espnSummary }: { espnSummary: EspnSummary }) {
+  const haveOverlap = espnSummary.totalStarts > 0 && espnSummary.mae !== null && espnSummary.skipperMaeOnIntersection !== null
+  const skipperMae = espnSummary.skipperMaeOnIntersection
+  const espnMae = espnSummary.mae
+  const skipperWins = haveOverlap && skipperMae! < espnMae!
+  const tied = haveOverlap && skipperMae === espnMae
+  const delta = haveOverlap ? Math.abs(skipperMae! - espnMae!) : null
+
+  return (
+    <div style={{
+      background: 'var(--paper-2)', borderRadius: 10, padding: '14px 18px',
+      marginBottom: 16, border: '1px solid var(--border)',
+    }}>
+      <div style={{
+        display: 'flex', justifyContent: 'space-between', alignItems: 'baseline',
+        marginBottom: 10,
+      }}>
+        <div style={{
+          fontSize: 12, fontFamily: 'var(--mono)', color: 'var(--ink-3)',
+          letterSpacing: '0.04em',
+        }}>
+          SKIPPER vs ESPN — HEAD-TO-HEAD MAE
+        </div>
+        <div style={{ fontSize: 11, fontFamily: 'var(--mono)', color: 'var(--ink-3)' }}>
+          {espnSummary.totalStarts} overlap · {espnSummary.espnKeysFound} ESPN locked
+        </div>
+      </div>
+
+      {haveOverlap ? (
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 10, alignItems: 'stretch' }}>
+          <HeadToHeadTile
+            label="SKIPPER MAE"
+            value={`${skipperMae!.toFixed(2)} pts`}
+            highlight={skipperWins}
+          />
+          <HeadToHeadTile
+            label="ESPN MAE"
+            value={`${espnMae!.toFixed(2)} pts`}
+            highlight={!skipperWins && !tied}
+          />
+          <HeadToHeadTile
+            label="ADVANTAGE"
+            value={
+              tied
+                ? '— tied'
+                : `${skipperWins ? 'Skipper' : 'ESPN'} −${delta!.toFixed(2)}`
+            }
+            color={tied ? 'var(--ink-3)' : (skipperWins ? '#27ae60' : '#c0392b')}
+          />
+        </div>
+      ) : (
+        <div style={{ fontSize: 12, color: 'var(--ink-3)' }}>
+          No completed overlap yet — ESPN projections are locked daily; head-to-head MAE
+          populates once games complete and the next cron stores actual stats.
+          {espnSummary.espnKeysFound > 0
+            ? ` (${espnSummary.espnKeysFound} ESPN projection${espnSummary.espnKeysFound === 1 ? '' : 's'} locked, awaiting matched actuals.)`
+            : ' (No ESPN projections locked yet for this period.)'}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function HeadToHeadTile({
+  label, value, highlight, color,
+}: { label: string; value: string; highlight?: boolean; color?: string }) {
+  return (
+    <div style={{
+      background: highlight ? 'rgba(39, 174, 96, 0.10)' : 'var(--white)',
+      borderRadius: 8, padding: '10px 12px',
+      border: highlight ? '1px solid #27ae6055' : '1px solid var(--border)',
+    }}>
+      <div style={{
+        fontSize: 10, fontFamily: 'var(--mono)', color: 'var(--ink-3)',
+        marginBottom: 4, letterSpacing: '0.04em',
+      }}>
+        {label}
+      </div>
+      <div style={{
+        fontSize: 16, fontWeight: 700, letterSpacing: '-0.02em',
+        color: color ?? 'var(--ink)', fontFamily: 'var(--mono)',
+      }}>
+        {value}
+      </div>
+    </div>
+  )
+}
+
 function SummaryTile({ label, value }: { label: string; value: string | number }) {
   return (
     <div style={{
