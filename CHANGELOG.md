@@ -2,6 +2,60 @@
 
 ---
 
+## Session 22 — April 18, 2026
+
+Executed the two PRs designed at the end of session 21 (ESPN projection locking + accuracy dashboard head-to-head) plus a security chore patching a `.gitignore` gap that surfaced during debugging. Three PRs shipped in one session: PR #97 (cron locks ESPN Forecaster), PR #98 (`.gitignore` tightened for Vercel env dumps), PR #99 (ESPN MAE head-to-head on accuracy dashboard). All three verified in production; the head-to-head comparison will populate with real numbers tomorrow once the next cron writes `actual-all:2026-04-18`.
+
+### Key learnings this session
+- **Vercel "Sensitive" environment variables are write-only.** When `CRON_SECRET` was tagged Sensitive in the dashboard, neither the dashboard UI nor `vercel env pull --environment=production` would return its value — the pull emitted `CRON_SECRET=""` with no warning. Spent a chunk of time debugging a 401 Unauthorized that was really a mismatched secret between local and production. Rotation via `openssl rand -hex 32`, saved to `.env.local` **and** updated in the Vercel dashboard **and** redeployed is the only path back. Worth flagging in KNOWLEDGE.md — the "Sensitive" toggle is not obvious and the failure mode is silent.
+- **`vercel env pull` writes an untracked secret file into the working tree** with whatever environment's values you pulled. Our `.gitignore` only covered `.env*.local`, so `.env.vercel.prod` sat there one `git add -A` away from getting committed. PR #98 fixes this with an explicit `.env.vercel*` pattern. Never use `git add -A`; always name files explicitly — but belt-and-suspenders on the `.gitignore` is still cheap insurance.
+- **Name normalization must be consistent on both sides of a reconciliation join.** ESPN Forecaster capitalizes accented pitchers ("Eury Pérez") while MLB Stats API preserves case ("eury pérez" after lowercasing). Naïve lowercase comparison hits but also silently misses on any variant. Pattern that works: `strip_accents(name.lower())` on both sides before comparing. Our `strip_accents()` helper in `api/fetcher.py` does NFD-normalize + combining-mark strip, which is the right primitive. Then use the original MLB-keyed name when building downstream slugs so everything aligns with existing `proj2all:` keys.
+- **Apples-to-apples MAE requires recomputing Skipper's MAE on the intersection subset.** Comparing full Skipper MAE (all 29 starts) against ESPN MAE (only the starts ESPN also covered, say 25) is misleading — you're comparing different denominators. PR C's `skipperMaeOnIntersection` computes Skipper's MAE on only the overlap set, so the head-to-head comparison is valid. Small but important — easy to ship the wrong version by default.
+- **SETNX + date-filter is the right lock shape for speculative data.** Conner's concern on PR B was valid on its face: locking a 10-day-out ESPN projection would be premature because those values drift before game day. The mitigation lives in the ingestion filter — only the `date == today` entries get locked, so we never store a value that hasn't fully "baked" in the source. SETNX then guarantees same-day idempotency without ever overwriting. Two separate concerns (stale input vs. concurrent writes) handled by two separate mechanisms.
+- **Ship backend + frontend in the same PR when the data contract is new.** PR C's backend adds `espnSummary` to the response and the frontend consumes it immediately. Splitting into two PRs (backend first, then frontend) would have meant landing a payload field that nothing reads and deploying an unused API shape. Tight coupling here is a feature, not a smell.
+
+### PR B — Daily cron locks ESPN Forecaster projections to KV (PR #97)
+- `lock_espn_projections()` added to `api/cron.py`:
+  1. Fetch today's MLB-confirmed probables via `fetch_mlb_probables(today, today)`.
+  2. Build `confirmed_lookup: {accent_stripped_name → original_mlb_key}` keyed on the names where `today_str in dates`.
+  3. Fetch `fetch_forecaster()`, filter to entries where `date == today_str` and `is_placeholder == False`.
+  4. For each surviving entry, `strip_accents(entry["pitcher"])` and look up in `confirmed_lookup`. Misses → `skipped_unconfirmed += 1`. Hits → build slug from the *MLB* key (so it aligns with `proj2all:` slugs) and SETNX-write `projection-espn:{year}:{period}:{slug}:{date}` with 60-day TTL.
+- Value shape: `{fpts, team, opp, opp_is_home, throws, player_id, is_placeholder: false, locked_at}`.
+- Handler updated to call MLB and ESPN locking in independent `try/except` blocks; returns `{ok: mlb.ok AND espn.ok, mlb: {...}, espn: {...}}` so a partial failure is visible.
+- Production verification: first run `locked_new: 29, skipped_unconfirmed: 1, skipped_placeholder: 0`. Second run (idempotency) `locked_new: 0, locked_skipped_existing: 29`. Confirmed accent handling end-to-end — Eury Pérez correctly matched.
+- `ESPN_LOCK_TTL_SECONDS = 60 * 86400` constant added alongside existing `PROJ_LOCK_TTL_SECONDS`.
+
+### `.gitignore` tightening (PR #98)
+- Added `.env.vercel*` to the environment-files block so `vercel env pull --environment=<env>` outputs (e.g. `.env.vercel.prod`) are excluded by default.
+- Existing `.env*.local` pattern stays — covers the standard local dev file.
+- Trigger: `.env.vercel.prod` appeared in `git status` during CRON_SECRET debugging. No harm done (nothing was committed), but one `git add -A` away from leaking a production secret dump into history. Cheap insurance.
+
+### PR C — Accuracy dashboard ESPN MAE head-to-head (PR #99)
+- `api/accuracy.py` (+61 lines): when `scope == "all"`, after the existing match loop:
+  - `_redis.keys("projection-espn:{season}:{period}:*")` → `{slug:date → fpts}` lookup, skipping placeholders.
+  - For each matched start, attach `espnFpts` and `espnError = round(espnFpts - actualFpts, 1)` when an ESPN projection exists at the same slug+date.
+  - Build `intersection: [starts_with_both_proj_and_actual_and_espn]`.
+  - Compute `espnSummary: {totalStarts, mae, skipperMaeOnIntersection, espnKeysFound}` — ESPN's MAE plus Skipper's MAE **re-computed on the same intersection subset** for an apples-to-apples comparison. When intersection is empty, still returns `espnSummary` with `mae: null` and `espnKeysFound` populated so the frontend can render an informative empty state.
+  - Returned at top level under `espnSummary` key.
+- `pages/accuracy.tsx` (+92 lines):
+  - New `EspnHeadToHead` component renders when `scope === 'all'` and `espnSummary` is present. Three tiles (Skipper MAE, ESPN MAE, Advantage) above the existing summary tiles. Winning side highlighted soft-green; ties show "— tied"; no-overlap state shows contextual copy with ESPN lock count.
+  - New `HeadToHeadTile` sub-component for the three tiles — same visual language as existing `SummaryTile` but with highlight + color props.
+  - Optional `ESPN` column added to the starts table between `Proj` and `Actual` when `scope === 'all'`. Renders `espnFpts` or em-dash when no ESPN projection existed for that start.
+  - Expanded-row `colSpan` adjusted dynamically: 7 when scope is All MLB (ESPN column present), 6 otherwise.
+  - Interface additions: `StartComparison.espnFpts?/espnError?`, new `EspnSummary`, `AccuracyData.espnSummary?`.
+- Deploy verification: Roster scope rendered unchanged (empty state for period 3 historical reasons — expected). All MLB scope currently shows the existing empty state because no `actual-all:2026-04-18` keys exist yet (today's games in flight). Tomorrow morning after the 17:00 UTC cron writes today's actuals, the head-to-head block will populate with real numbers.
+- Two small UX gaps flagged to BACKLOG:
+  - Backend early-return (`if not proj_keys`) bypasses ESPN computation — should still surface `espnSummary` when Skipper has no `proj2all:` keys.
+  - Frontend empty-state branch (`starts.length === 0`) never renders the ESPN block — should pass `espnSummary` through so ESPN locks surface before the first overlap exists.
+
+### CRON_SECRET rotation (no PR — ops)
+- Generated new 32-byte hex secret with `openssl rand -hex 32`.
+- Updated `.env.local` and Vercel dashboard (production, preview, development — all three scopes).
+- Redeployed with `vercel --prod` to pick up new env value. Verified `curl -H "Authorization: Bearer $CRON_SECRET" /api/cron` returned a valid lock summary.
+- Root cause: Vercel marks env vars as "Sensitive" by default on some UIs, making their values write-only. `vercel env pull` silently pulled an empty string instead of erroring.
+
+---
+
 ## Session 21 — April 18, 2026
 
 Spike confirmed ESPN's Fantasy API does not publish per-day FPTS projections under any filter shape, so we pivoted to scraping the public Forecaster article. Shipped the scraper + diagnostic endpoint, a Washington-team-abbreviation normalization fix, and a middleware change that exempts public read-only / cron / auth API routes so Vercel Cron and plain-curl verification stop getting 307'd to `/login`. Four PRs shipped (#92–#95) plus four spike iterations (#88–#91) that closed out the Fantasy API investigation. PR B (daily cron locking ESPN projections to KV) and PR C (accuracy dashboard ESPN MAE column) are designed and queued for the next session.
