@@ -29,10 +29,14 @@ except Exception:
     KV_AVAILABLE = False
 
 
-def _fetch_espn_lookup(season: int, period: int) -> dict:
+def _fetch_espn_lookup(season: int, period=None) -> dict:
     """
-    Read all ESPN-locked projection keys for this period and return a
-    {"slug:date" → fpts} lookup, skipping placeholder entries.
+    Read all ESPN-locked projection keys and return a {"slug:date" → fpts}
+    lookup, skipping placeholder entries.
+
+    period=None (default) aggregates across all periods (`projection-espn:
+    {season}:*`). period=N scans a single period (legacy path, still used
+    if an external caller passes an explicit period).
 
     Returns {} if KV is unavailable or no keys exist. Used by both the
     normal accuracy path and the early-return path so ESPN data is always
@@ -40,7 +44,12 @@ def _fetch_espn_lookup(season: int, period: int) -> dict:
     """
     if not KV_AVAILABLE or _redis is None:
         return {}
-    keys = _redis.keys(f"projection-espn:{season}:{period}:*")
+    pattern = (
+        f"projection-espn:{season}:{period}:*"
+        if period is not None
+        else f"projection-espn:{season}:*"
+    )
+    keys = _redis.keys(pattern)
     lookup = {}
     for key in keys or []:
         parts = key.split(":")
@@ -99,23 +108,35 @@ def _compute_espn_summary(espn_lookup: dict, starts: list) -> dict:
     }
 
 
-def get_accuracy_data(season: int, period: int, scope: str = "roster") -> dict:
+def get_accuracy_data(season: int, period=None, scope: str = "roster") -> dict:
     """
-    Match v2 locked projections against actual stats for a given period.
-    
-    scope="roster" — original behavior, uses proj2: keys and cache:daily: actuals
-    scope="all" — all-MLB starters, uses proj2all: keys and actual-all: actuals
-    
-    Returns comparison data for every start where both projected and actual exist.
+    Match v2 locked projections against actual stats.
+
+    scope="roster" — proj2: keys + cache:daily: actuals. Starts are filtered
+                     to those made while the pitcher was actually on my roster
+                     (using cache:daily `my_team` membership) — without this
+                     filter, proj2: leaks Free Agents that were locked the
+                     moment anyone viewed the Free Agents page, polluting the
+                     "My Roster" scope with pitchers who were never on my team.
+    scope="all"    — proj2all: keys + actual-all: actuals. Always whole-MLB;
+                     no roster filter applies.
+
+    period=None (default) aggregates across all 22 matchup periods — the
+    "all-time" view. period=N (1–22) retains the legacy single-period scan
+    for backward compatibility with any external caller still passing one.
+
+    Returns comparison data for every start where both projected and actual
+    exist (and, for roster scope, the pitcher was on my team that day).
     """
     if not KV_AVAILABLE or _redis is None:
         return {"starts": [], "summary": {}, "error": "KV not available"}
 
-    # ── Determine key prefixes based on scope ────────────────────────────
+    # ── Determine key prefixes based on scope + period ───────────────────
     proj_prefix = "proj2all" if scope == "all" else "proj2"
-    
-    # ── Fetch all v2 locked projections for this period ───────────────────
-    proj_keys = _redis.keys(f"{proj_prefix}:{season}:{period}:*")
+    period_glob = f"{period}" if period is not None else "*"
+
+    # ── Fetch all v2 locked projections ───────────────────────────────────
+    proj_keys = _redis.keys(f"{proj_prefix}:{season}:{period_glob}:*")
     if not proj_keys:
         # No Skipper projections, but ESPN data may still exist for this
         # period — surface it so the All MLB scope's head-to-head block
@@ -123,7 +144,7 @@ def get_accuracy_data(season: int, period: int, scope: str = "roster") -> dict:
         empty_response = {
             "starts": [],
             "summary": {},
-            "message": "No v2 projections found for this period",
+            "message": "No v2 projections found",
         }
         if scope == "all":
             empty_response["espnSummary"] = _compute_espn_summary(_fetch_espn_lookup(season, period), [])
@@ -155,6 +176,14 @@ def get_accuracy_data(season: int, period: int, scope: str = "roster") -> dict:
 
     # ── Fetch actual stats for those dates ──────────────────────────────
     actuals_by_date = {}  # { "2026-04-10": { "Player Name/key": { actual breakdown } } }
+
+    # Roster-membership index — only populated for scope="roster". Maps each
+    # date to the SET of full player names that were on my team that day,
+    # using the `my_team` block that `get_actual_fpts()` writes into each
+    # `cache:daily:{date}` entry. Used below to filter out proj2: locks for
+    # free agents who were viewed through the FA page but never rostered.
+    my_team_by_date: dict = {}
+
     for date in sorted(all_dates):
         if scope == "all":
             # All-MLB actuals stored by cron.py under actual-all: keys
@@ -176,10 +205,16 @@ def get_accuracy_data(season: int, period: int, scope: str = "roster") -> dict:
                 actual_stats = daily_data.get("actual_stats", {})
                 if actual_stats:
                     actuals_by_date[date] = actual_stats
+                # Capture roster membership for this date (may be {} if the
+                # cache entry predates my_team tracking — treat as no-roster
+                # and fall through to the safe-drop path in the match loop).
+                my_team_members = daily_data.get("my_team") or {}
+                my_team_by_date[date] = set(my_team_members.keys())
         except (json.JSONDecodeError, TypeError):
             continue
 
-    print(f"[accuracy.py] Found actual stats for {len(actuals_by_date)} dates")
+    print(f"[accuracy.py] Found actual stats for {len(actuals_by_date)} dates"
+          + (f", roster membership for {len(my_team_by_date)} dates" if scope == "roster" else ""))
 
     # ── Match projections to actuals ─────────────────────────────────────
     def make_slug(name: str) -> str:
@@ -188,6 +223,8 @@ def get_accuracy_data(season: int, period: int, scope: str = "roster") -> dict:
     starts = []
     matched = 0
     unmatched = 0
+    filtered_non_roster = 0  # scope="roster" only: dropped because pitcher
+                             # was not on my team that day (FA leak fix)
 
     for proj_key, proj_data in projections.items():
         slug, date = proj_key.rsplit(":", 1)
@@ -205,6 +242,22 @@ def get_accuracy_data(season: int, period: int, scope: str = "roster") -> dict:
         if actual_data is None:
             unmatched += 1
             continue
+
+        # ── Roster-scope FA leak filter ──────────────────────────────────
+        # proj2: keys accumulate locks for any pitcher viewed through the
+        # Free Agents or My Team surfaces — so a pitcher never actually
+        # rostered can appear in the proj2 namespace. cache:daily `my_team`
+        # is the source of truth for who was on the roster on a given day
+        # (session 19 PR #81 uses the same dict for dropped-streamer
+        # intersection). If the player wasn't on my team that day, skip.
+        # Conservative behavior: if no my_team data exists for the date
+        # (pre-my_team cache entry), drop the start rather than risk
+        # re-polluting the roster view.
+        if scope == "roster":
+            rostered_that_day = my_team_by_date.get(date)
+            if rostered_that_day is None or matched_name not in rostered_that_day:
+                filtered_non_roster += 1
+                continue
 
         matched += 1
         proj_stats = proj_data.get("stats", {})
@@ -261,7 +314,11 @@ def get_accuracy_data(season: int, period: int, scope: str = "roster") -> dict:
             },
         })
 
-    print(f"[accuracy.py] Matched {matched} starts, {unmatched} unmatched (no actual stats)")
+    print(
+        f"[accuracy.py] Matched {matched} starts, "
+        f"{unmatched} unmatched (no actual stats)"
+        + (f", {filtered_non_roster} filtered (not on roster that day)" if scope == "roster" else "")
+    )
 
     # ── Compute summary statistics ───────────────────────────────────────
     summary = {}
@@ -384,11 +441,12 @@ def get_accuracy_data(season: int, period: int, scope: str = "roster") -> dict:
     starts.sort(key=lambda s: s["date"], reverse=True)
 
     return {
-        "starts":          starts,
-        "summary":         summary,
-        "factorAnalysis":  factor_analysis,
-        "unmatchedCount":  unmatched,
-        "espnSummary":     espn_summary,
+        "starts":             starts,
+        "summary":            summary,
+        "factorAnalysis":     factor_analysis,
+        "unmatchedCount":     unmatched,
+        "filteredNonRoster":  filtered_non_roster,  # scope="roster" only
+        "espnSummary":        espn_summary,
     }
 
 
@@ -396,7 +454,14 @@ class handler(BaseHTTPRequestHandler):
     def do_GET(self):
         qs = parse_qs(urlparse(self.path).query)
         season = int(qs.get("season", ["2026"])[0])
-        period = int(qs.get("period", ["1"])[0])
+        # period is now optional — omit or pass empty string for the all-time
+        # view (aggregates across all 22 periods). An explicit integer still
+        # scopes to a single period for backward compat with any external caller.
+        period_raw = qs.get("period", [""])[0]
+        try:
+            period = int(period_raw) if period_raw else None
+        except ValueError:
+            period = None
         scope  = qs.get("scope", ["roster"])[0]  # "roster" or "all"
 
         try:
