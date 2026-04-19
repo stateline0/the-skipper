@@ -6,6 +6,10 @@ Projects FPTS for every probable MLB starter and locks projections
 into KV under `proj2all:` prefix. This gives us ~60 data points per day
 for model accuracy tracking instead of ~5-10 from roster-only.
 
+Also reconciles today's ESPN Forecaster projections against MLB-confirmed
+probables and locks matching entries under `projection-espn:` prefix — the
+raw material for the ESPN MAE column on the accuracy dashboard (PR C).
+
 Secured with CRON_SECRET environment variable — Vercel sends it
 automatically as an Authorization header.
 
@@ -27,6 +31,7 @@ from mlb import (
     compute_matchup_win_prob, compute_recent_form_fpts,
 )
 from fetcher import load_cached_data, strip_accents
+from forecaster import fetch_forecaster
 from kv import cache_get, cache_set
 
 try:
@@ -379,6 +384,184 @@ def lock_all_mlb_projections() -> dict:
     return summary
 
 
+# ── ESPN Forecaster projection locking ───────────────────────────────
+#
+# Reconciles today's entries from api/forecaster.py against MLB-confirmed
+# probables. ESPN projects up to 10 days out, many of which won't actually
+# start; MLB Stats API is the authoritative "who's actually starting today"
+# feed. We only lock entries where MLB confirms the same pitcher.
+#
+# Key shape matches the proj2: / proj2all: pattern so PR C (accuracy
+# dashboard ESPN MAE column) can reuse slug-building logic:
+#
+#   projection-espn:{year}:{period}:{slug}:{date} → JSON
+#
+# Written once (SETNX) with a 60-day TTL. Both this lock and proj2all:
+# happen inside the same cron run, so they reflect the same information
+# snapshot — the whole point of locking at all.
+
+ESPN_LOCK_TTL_SECONDS = 60 * 86400  # 60 days
+
+
+def lock_espn_projections() -> dict:
+    """
+    Lock today's ESPN Forecaster projections for MLB-confirmed probables.
+
+    Returns a summary with per-outcome counts:
+    - locked_new: SETNX succeeded, new lock written
+    - locked_skipped_existing: key already existed, left untouched
+    - skipped_unconfirmed: ESPN projected pitcher, MLB did not confirm
+    - skipped_placeholder: entry had is_placeholder=True (FPTS == 1.0)
+    """
+    if not KV_AVAILABLE or _redis is None:
+        return {"ok": False, "error": "KV not available"}
+
+    today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    year_int = int(os.environ.get("ESPN_SEASON", "2026"))
+    period_num, mp = get_current_period()
+
+    if not mp:
+        return {"ok": False, "error": f"No matchup period found for {today_str}"}
+
+    print(f"[cron.py] Starting ESPN Forecaster lock for {today_str} "
+          f"(period {period_num})")
+
+    # ── Fetch MLB-confirmed probables for today ──────────────────────
+    # MLB keys are full-name.strip().lower() but keep accents. ESPN names
+    # in the Forecaster HTML may or may not carry accents, so match on
+    # strip_accents(name). We keep the original MLB-keyed name around so
+    # the KV slug we build (via _make_slug) exactly matches the slug
+    # proj2all: uses for the same pitcher. That lets PR C read both
+    # prefixes with one key-builder.
+    mlb_probables = fetch_mlb_probables(today_str, today_str)
+    confirmed_lookup = {}  # accent-stripped name → original MLB key
+    for mlb_name, dates in mlb_probables.items():
+        if today_str in dates:
+            confirmed_lookup[strip_accents(mlb_name)] = mlb_name
+
+    if not confirmed_lookup:
+        return {
+            "ok": True,
+            "date": today_str,
+            "period": period_num,
+            "message": "No MLB-confirmed probables for today",
+            "locked_new": 0,
+            "locked_skipped_existing": 0,
+            "skipped_unconfirmed": 0,
+            "skipped_placeholder": 0,
+        }
+
+    print(f"[cron.py] MLB confirms {len(confirmed_lookup)} probables "
+          f"for {today_str}")
+
+    # ── Fetch ESPN Forecaster and filter to today's entries ─────────
+    # The 10-day window is intentional; we only lock the game-day row so
+    # the ESPN projection reflects ESPN's most-informed guess, paired
+    # with the proj2all: lock that also happens today at noon CT.
+    forecaster_data = fetch_forecaster()
+    if "error" in forecaster_data:
+        return {
+            "ok": False,
+            "error": f"Forecaster fetch failed: {forecaster_data['error']}",
+        }
+
+    all_entries = forecaster_data.get("entries", [])
+    today_entries = [e for e in all_entries if e.get("date") == today_str]
+
+    print(f"[cron.py] ESPN Forecaster has {len(today_entries)} entries "
+          f"for {today_str}")
+
+    # ── Reconcile and lock ──────────────────────────────────────────
+    locked_new = 0
+    locked_skipped_existing = 0
+    skipped_unconfirmed = 0
+    skipped_placeholder = 0
+    locked_pitchers = []  # for the response summary
+
+    for entry in today_entries:
+        if entry.get("is_placeholder"):
+            skipped_placeholder += 1
+            continue
+
+        espn_name = entry.get("pitcher", "")
+        if not espn_name:
+            skipped_unconfirmed += 1
+            continue
+
+        normalized = strip_accents(espn_name)
+        mlb_key = confirmed_lookup.get(normalized)
+
+        if mlb_key is None:
+            # ESPN projects this pitcher, MLB hasn't confirmed them.
+            # Skip silently — orphans aren't tracked (see PR B design).
+            skipped_unconfirmed += 1
+            continue
+
+        # Use the MLB-keyed name so slug matches proj2all for the same
+        # pitcher. PR C will rely on this alignment.
+        slug = _make_slug(mlb_key)
+        lock_key = f"projection-espn:{year_int}:{period_num}:{slug}:{today_str}"
+
+        # Check existence first (matches lock_all_mlb_projections pattern)
+        existing = _redis.get(lock_key)
+        if existing is not None:
+            locked_skipped_existing += 1
+            continue
+
+        value = {
+            "fpts": entry.get("fpts"),
+            "team": entry.get("team"),
+            "opp": entry.get("opp"),
+            "opp_is_home": entry.get("opp_is_home"),
+            "throws": entry.get("throws"),
+            "player_id": entry.get("player_id"),
+            "is_placeholder": False,
+            "locked_at": datetime.now(timezone.utc)
+                                 .isoformat(timespec="seconds")
+                                 .replace("+00:00", "Z"),
+        }
+
+        try:
+            _redis.set(
+                lock_key,
+                json.dumps(value),
+                nx=True,
+                ex=ESPN_LOCK_TTL_SECONDS,
+            )
+            locked_new += 1
+            locked_pitchers.append({
+                "pitcher": mlb_key,
+                "fpts": entry.get("fpts"),
+            })
+        except Exception as e:
+            print(f"[cron.py] Failed to lock ESPN projection "
+                  f"for {mlb_key}: {e}")
+
+    summary = {
+        "ok": True,
+        "date": today_str,
+        "period": period_num,
+        "mlb_confirmed": len(confirmed_lookup),
+        "espn_entries_today": len(today_entries),
+        "locked_new": locked_new,
+        "locked_skipped_existing": locked_skipped_existing,
+        "skipped_unconfirmed": skipped_unconfirmed,
+        "skipped_placeholder": skipped_placeholder,
+        "topLocked": sorted(
+            locked_pitchers,
+            key=lambda x: -(x["fpts"] or 0),
+        )[:10],
+    }
+
+    print(f"[cron.py] ESPN Forecaster lock done: "
+          f"{locked_new} new, "
+          f"{locked_skipped_existing} skipped (existing), "
+          f"{skipped_unconfirmed} skipped (unconfirmed), "
+          f"{skipped_placeholder} skipped (placeholder)")
+
+    return summary
+
+
 class handler(BaseHTTPRequestHandler):
     def do_GET(self):
         # ── Verify CRON_SECRET ────────────────────────────────────────
@@ -395,10 +578,22 @@ class handler(BaseHTTPRequestHandler):
                 return
 
         try:
-            result = lock_all_mlb_projections()
+            mlb_result = lock_all_mlb_projections()
         except Exception as e:
-            result = {"ok": False, "error": str(e)}
-            print(f"[cron.py] Error: {e}")
+            mlb_result = {"ok": False, "error": str(e)}
+            print(f"[cron.py] MLB lock error: {e}")
+
+        try:
+            espn_result = lock_espn_projections()
+        except Exception as e:
+            espn_result = {"ok": False, "error": str(e)}
+            print(f"[cron.py] ESPN lock error: {e}")
+
+        result = {
+            "ok": bool(mlb_result.get("ok")) and bool(espn_result.get("ok")),
+            "mlb": mlb_result,
+            "espn": espn_result,
+        }
 
         body = json.dumps(result).encode()
         self.send_response(200)
