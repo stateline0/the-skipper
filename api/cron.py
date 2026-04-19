@@ -122,7 +122,16 @@ def lock_all_mlb_projections() -> dict:
     skipped_count = 0
     results = []
 
-    for pitcher_name_lower, starts_info in pitcher_starts.items():
+    for pitcher_name_raw, starts_info in pitcher_starts.items():
+        # pitcher_starts comes from fetch_mlb_probables which keeps accents
+        # ("eury pérez"). But mlb_stats_current, savant_*, and game_logs_current
+        # are ALL keyed by strip_accents() ("eury perez"). Before PR G this
+        # mismatch caused accented-name pitchers to silently drop out of
+        # proj2all: locking (stats lookup returned {} → avgs returned None →
+        # skipped). Normalize once here and use the accent-stripped form for
+        # every downstream lookup and for the KV slug.
+        pitcher_name_lower = strip_accents(pitcher_name_raw)
+
         start_dates = starts_info.get("startDates", [])
         today_start = None
         for sd in start_dates:
@@ -329,12 +338,21 @@ def lock_all_mlb_projections() -> dict:
     # ── Store actual FPTS from game logs for completed past dates ─────
     # Game logs contain actual per-game stats for ALL pitchers.
     # We compute FPTS using our scoring formula and store keyed by date.
+    # PR G added logging around this block because it was silently storing
+    # nothing — fetch_game_logs used a bulk endpoint that returned empty
+    # so `game_logs_current` was {} every run and the block skipped.
     actuals_stored = 0
-    if game_logs_current:
+    actuals_write_errors = 0
+    actuals_dates_eligible = 0
+    if not game_logs_current:
+        print(f"[cron.py] Skipping actual-all: writes — game_logs_current is empty")
+    else:
         # Group game log entries by date, only for starts (gs=1)
         actuals_by_date = {}
+        total_game_rows = 0
         for pitcher_name, games in game_logs_current.items():
             for g in games:
+                total_game_rows += 1
                 if g.get("gs", 0) < 1:
                     continue  # skip relief appearances
                 game_date = g.get("date", "")
@@ -356,6 +374,11 @@ def lock_all_mlb_projections() -> dict:
                     },
                 }
 
+        actuals_dates_eligible = len(actuals_by_date)
+        print(f"[cron.py] Actuals: processed {total_game_rows} game rows "
+              f"across {len(game_logs_current)} pitchers → "
+              f"{actuals_dates_eligible} eligible dates")
+
         # Store each date's actuals if not already cached
         for date_str, pitchers in actuals_by_date.items():
             cache_key = f"actual-all:{date_str}"
@@ -364,8 +387,13 @@ def lock_all_mlb_projections() -> dict:
                 try:
                     cache_set(cache_key, pitchers)
                     actuals_stored += 1
-                except Exception:
-                    pass
+                except Exception as e:
+                    actuals_write_errors += 1
+                    print(f"[cron.py] Failed to write {cache_key}: {e}")
+
+        print(f"[cron.py] Actuals: wrote {actuals_stored} new date keys, "
+              f"{actuals_dates_eligible - actuals_stored} already existed, "
+              f"{actuals_write_errors} errors")
 
     summary = {
         "ok": True,
