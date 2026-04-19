@@ -1,46 +1,17 @@
 # The Skipper — Backlog
 
-Last updated: April 18, 2026 (session 21)
+Last updated: April 18, 2026 (session 22)
 
 ---
 
 ## 🔜 Next session priorities
 
-### PR B — Daily cron: lock ESPN Forecaster projections to KV
-Design decisions (locked in end of session 21):
-- **Reconciliation source: MLB Stats API** (`fetch_mlb_probables(today, today)` from `api/mlb.py`). MLB is the authoritative "who's actually starting today" feed; ESPN Forecaster is speculative up to 10 days out and sometimes wrong.
-- **KV key shape: `projection-espn:{year}:{period}:{slug}:{date}`** — matches the existing `proj2all:` / `proj2:` pattern so reads in PR C can share key-building helpers.
-- **Orphan handling: skip silently.** If ESPN projects pitcher X but MLB confirms pitcher Y for today's game, we just don't lock X. No orphan tracking key.
-- **Write semantics: SETNX** (write-once, never overwrite a locked value). 60-day TTL.
-- **Filter `is_placeholder: true` entries** — don't lock FPTS == 1.0 speculative values.
-- **Hook into existing cron:** extend `api/cron.py` with a new `lock_espn_projections()` function called from the same handler that runs `lock_all_mlb_projections()`. No new Vercel Cron schedule needed.
+### Accuracy dashboard — ESPN block empty-state polish
+Two small gaps surfaced after PR C (#99) shipped — the head-to-head block doesn't render in the cases where it has the most marginal value (when Skipper has no matched actuals but ESPN data exists):
+- [ ] `api/accuracy.py` — the early-return path `if not proj_keys: return {"starts": [], ...}` short-circuits before the ESPN logic runs. Move the ESPN key scan above the early return (or into its own function) so `espnSummary` is still populated when Skipper has no `proj2all:` keys for the period.
+- [ ] `pages/accuracy.tsx` — the `starts.length === 0` branch renders the "No accuracy data yet" empty state and never shows the ESPN block. Pass `espnSummary` into the empty-state branch and render `EspnHeadToHead` there when `scope === 'all'` and `espnSummary` is non-null. Bonus: show ESPN lock count in the empty-state subtext so users see data accumulating.
 
-Value shape:
-```json
-{
-  "fpts": 8.4,
-  "team": "ARI",
-  "opp": "TOR",
-  "opp_is_home": true,
-  "throws": "R",
-  "player_id": 39910,
-  "is_placeholder": false,
-  "locked_at": "2026-04-18T17:00:00Z"
-}
-```
-
-Algorithm:
-1. Fetch today's MLB confirmed probables → `{name_lower: [date]}` dict.
-2. Fetch today's ESPN Forecaster entries (filter to `date == today` and `is_placeholder == false`).
-3. For each ESPN entry, normalize pitcher name (`strip_accents` → lowercase) and check membership in MLB confirmed set.
-4. If confirmed → SETNX to `projection-espn:{year}:{period}:{slug}:{date}`. If skipped → increment counter in summary.
-5. Return summary (`locked_new`, `locked_skipped_existing`, `skipped_unconfirmed`, `skipped_placeholder`).
-
-### PR C — Accuracy dashboard: ESPN MAE column
-- Extend `api/accuracy.py` to read `projection-espn:*` keys alongside existing `proj2all:*` / `proj2:*` keys.
-- Compute ESPN's MAE on the same `actual-all:{date}` dataset Skipper uses.
-- Frontend: third MAE series on the accuracy page (Skipper / Skipper-recent / ESPN).
-- Only compute ESPN MAE on the intersection of dates where both projections exist — don't fabricate missing values.
+Both are 15-minute fixes — good warm-up tasks for next session. No new tests or deploy risk, purely rendering wiring.
 
 ### Accuracy page redesign
 - [ ] Remove matchup period dropdown — show all-time data across all periods
@@ -103,6 +74,11 @@ Algorithm:
 - [ ] `vercel dev` does not serve Python API routes locally (Vercel CLI v50+ known issue)
 
 ---
+
+## ✅ Completed (session 22 — April 18, 2026)
+- [x] **PR B — Daily cron locks ESPN Forecaster projections to KV** (PR #97). `lock_espn_projections()` added to `api/cron.py`: fetches today's MLB-confirmed probables, builds an accent-stripped name lookup, pulls the ESPN Forecaster for today only, reconciles each entry against the MLB set, and SETNX-writes confirmed matches to `projection-espn:{year}:{period}:{slug}:{date}` with a 60-day TTL. Skips placeholder entries (FPTS == 1.0) and orphans (ESPN pitcher not in MLB's confirmed set). First production run locked 29 new keys with 1 skipped_unconfirmed; idempotency verified on second run (locked_new: 0, locked_skipped_existing: 29). Cron handler now calls MLB and ESPN locking independently and returns a merged `{ok, mlb, espn}` summary so one failure doesn't hide the other's counters.
+- [x] **PR #98 — Tighten `.gitignore` to prevent Vercel secret dumps** from ever being tracked. Added `.env.vercel*` pattern after `vercel env pull --environment=production` left `.env.vercel.prod` in the working tree during CRON_SECRET debugging. Previous pattern (`.env*.local`) didn't cover it.
+- [x] **PR C — Accuracy dashboard ESPN MAE head-to-head** (PR #99). Backend: when `scope == "all"`, `api/accuracy.py` fetches `projection-espn:{season}:{period}:*` keys, attaches `espnFpts` / `espnError` to each matched start, and computes an `espnSummary` with ESPN MAE plus the apples-to-apples `skipperMaeOnIntersection` (Skipper's MAE recomputed on only the starts where ESPN also had a projection). Frontend: new `EspnHeadToHead` component renders three tiles (Skipper MAE, ESPN MAE, Advantage) above the existing summary when scope is All MLB. Winning side gets a soft-green highlight. Optional ESPN column added to the starts table. Roster scope unchanged. Deploy verified — head-to-head block awaits first completed actuals overlap (expected April 19 after 17:00 UTC cron).
 
 ## ✅ Completed (session 21 — April 18, 2026)
 - [x] Spike: confirmed ESPN Fantasy API `kona_player_info` returns only full-season projections, not per-day (PRs #88, #89, #90, #91) — `statSourceId: 1` entries all have `statSplitTypeId: 0` and `scoringPeriodId: 0`. No per-day projection data in the Fantasy API at any point in the season.
