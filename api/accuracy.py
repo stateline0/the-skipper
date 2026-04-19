@@ -284,6 +284,66 @@ def get_accuracy_data(season: int, period: int, scope: str = "roster") -> dict:
               f"park impact={factor_analysis['park']['impact']:+.2f}, "
               f"combined impact={factor_analysis['matchupCombined']['impact']:+.2f}")
 
+    # ── ESPN projection overlay (scope="all" only) ───────────────────────
+    # Attach ESPN-locked projections (if any) to each matched start and
+    # compute an apples-to-apples head-to-head MAE against The Skipper's
+    # model on the intersection subset (starts where BOTH systems have a
+    # projection AND the game completed).
+    espn_summary = None
+    if scope == "all":
+        espn_keys = _redis.keys(f"projection-espn:{season}:{period}:*")
+        espn_lookup = {}  # "slug:date" → fpts
+        for key in espn_keys or []:
+            parts = key.split(":")
+            if len(parts) != 5:
+                continue
+            _, _, _, e_slug, e_date = parts
+            val = _redis.get(key)
+            if val is None:
+                continue
+            try:
+                espn_data = json.loads(val)
+                if espn_data.get("is_placeholder"):
+                    continue
+                fpts = espn_data.get("fpts")
+                if fpts is None:
+                    continue
+                espn_lookup[f"{e_slug}:{e_date}"] = fpts
+            except (json.JSONDecodeError, TypeError):
+                continue
+
+        print(f"[accuracy.py] Found {len(espn_lookup)} ESPN-locked projections (scope=all)")
+
+        intersection = []
+        for s in starts:
+            lookup_key = f"{s['slug']}:{s['date']}"
+            espn_fpts = espn_lookup.get(lookup_key)
+            if espn_fpts is not None:
+                s["espnFpts"] = espn_fpts
+                s["espnError"] = round(espn_fpts - s["actualFpts"], 1)
+                intersection.append(s)
+
+        if intersection:
+            espn_errors = [abs(s["espnError"]) for s in intersection]
+            skipper_errors_on_intersection = [abs(s["fptsError"]) for s in intersection]
+            espn_summary = {
+                "totalStarts":               len(intersection),
+                "mae":                       round(sum(espn_errors) / len(espn_errors), 2),
+                "skipperMaeOnIntersection":  round(sum(skipper_errors_on_intersection) / len(skipper_errors_on_intersection), 2),
+                "espnKeysFound":             len(espn_lookup),
+            }
+            print(f"[accuracy.py] ESPN head-to-head on {len(intersection)} starts: "
+                  f"ESPN MAE={espn_summary['mae']}, Skipper MAE={espn_summary['skipperMaeOnIntersection']}")
+        else:
+            espn_summary = {
+                "totalStarts":               0,
+                "mae":                       None,
+                "skipperMaeOnIntersection":  None,
+                "espnKeysFound":             len(espn_lookup),
+            }
+            print(f"[accuracy.py] ESPN head-to-head: no completed overlap yet "
+                  f"(espn_keys={len(espn_lookup)}, matched_starts={len(starts)})")
+
     # Sort starts by date descending
     starts.sort(key=lambda s: s["date"], reverse=True)
 
@@ -292,6 +352,7 @@ def get_accuracy_data(season: int, period: int, scope: str = "roster") -> dict:
         "summary":         summary,
         "factorAnalysis":  factor_analysis,
         "unmatchedCount":  unmatched,
+        "espnSummary":     espn_summary,
     }
 
 
