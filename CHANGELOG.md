@@ -2,6 +2,50 @@
 
 ---
 
+## Session 23 — April 18, 2026
+
+Shipped two PRs closing Session 22's loose ends and advancing the projection model: PR #101 polished the ESPN head-to-head empty state so it renders when Skipper has no locked projections yet, and PR #102 (Weather Phase 2) wired Session 20's weather factor into the live projection pipeline. Direct folder access through Cowork's `request_cowork_directory` replaced the copy/paste workflow for the first time — established the pattern of Claude editing files while Conner runs git and deploy commands locally.
+
+### Key learnings this session
+- **Refactor shared logic into module-level helpers when two control flow paths need the same computation.** PR #101's backend change had two call sites (the normal-return path and the early-return path when no `proj_keys` exist) that both needed to compute the ESPN lookup and summary. Extracting `_fetch_espn_lookup()` and `_compute_espn_summary()` into module-level helpers — rather than repeating the logic inline — made both branches look identical and kept the "what does scope=all do" contract in one place. Rule of thumb: if a nontrivial computation needs to run in two places, the right refactor is usually the helper, not a copy.
+- **Frontend empty states earn their own design pass.** The empty state after PR C shipped was *correct* (no Skipper data yet) but *wrong* in spirit — the head-to-head block was the entire point of that PR, and hiding it during the exact window when it has the most marginal value (before first overlap) was the opposite of what we wanted. Wrapping the empty branch in a React fragment and composing `<EspnHeadToHead>` above the empty card was a 2-line change that flipped the UX from "nothing here yet" to "here's what we're already tracking, Skipper data arrives tomorrow." Small bit of wiring with outsized effect.
+- **Safe-default design makes integration PRs trivial.** PR #102 adding weather as a fourth multiplier went in with no guards, no feature flags, and no per-start null checks in the consumer — because `get_weather_factor()` is *guaranteed* to return `{"factor": 1.0, ...}` on every failure path (dome override, unknown park, Open-Meteo 5xx, cache miss, exception). When the upstream contract is "never break the caller," integration sites can treat the output as always-valid and the math simplifies to `start_base * woba * park * weather`. Contrast with APIs that raise or return None — those spread `if x is None:` checks through every consumer.
+- **Mirror computations verbatim across read and write paths.** `api/projection.py` has a live per-start loop that computes `start_proj` and a lock path that rebuilds the same value for storage. The weather factor had to be applied in both sites identically — otherwise accuracy analysis would be comparing a weather-aware locked projection to a weather-naïve actuals calc, or vice versa. When auditing new multipliers, always grep for "start_proj =" and "start_proj =" in both the display path and the persistence path.
+- **Direct folder access removes the worst part of the iteration loop.** Pre-session 23, each change required: Claude writes file → copy code block out of chat → paste into Cursor/editor → save → run tests. With `request_cowork_directory` mounting `~/Developer/the-skipper` into Claude's sandbox, the loop is: Claude edits file → Conner runs `git diff` → commit/push. Sandbox permission limits mean Claude can't write to `.git/` or delete staged files, so the clean division of labor is "Claude edits; Conner commits/deploys" — which is actually a better mental model anyway (Claude never accidentally pushes). Worth the 30 seconds of setup.
+
+### PR #101 — Accuracy dashboard ESPN empty-state polish
+- `api/accuracy.py`:
+  - Extracted `_fetch_espn_lookup(season, period) -> {slug:date → fpts}` helper at module scope — scans `projection-espn:{season}:{period}:*` keys, skips placeholders, returns a flat lookup dict. Guards against missing Redis (returns `{}`).
+  - Extracted `_compute_espn_summary(espn_lookup, starts) -> {totalStarts, mae, skipperMaeOnIntersection, espnKeysFound}` — mutates `starts` in place to attach `espnFpts`/`espnError`, computes the intersection subset, returns the summary dict. Handles empty-intersection gracefully with `mae: null` and still surfaces `espnKeysFound` so the frontend can render "X ESPN projections locked for this period" before any overlap exists.
+  - Early-return path `if not proj_keys: return {...}` now calls `_compute_espn_summary(_fetch_espn_lookup(season, period), [])` when `scope == "all"` — response gains `espnSummary` even with no Skipper projections. The ~60-line inline ESPN block at the end of `get_accuracy_data` replaced by ~10 lines calling the two helpers.
+- `pages/accuracy.tsx`:
+  - Empty-state branch (`starts.length === 0`) wrapped in a React fragment so both the `EspnHeadToHead` block and the existing "No accuracy data yet" card render when `scope === 'all'` and `espnSummary` is non-null.
+  - Empty-state subtext extended: when `espnSummary.espnKeysFound > 0`, shows "{N} ESPN projections locked for this period" in small mono type so users see data accumulating.
+- Deploy verified on production against period with no Skipper locks — `EspnHeadToHead` now renders with "No overlap yet" contextual copy, and the lock count appears in the empty card.
+
+### PR #102 — Weather Phase 2: wire `get_weather_factor()` into projection pipeline
+- `api/projection.py`:
+  - `from weather import get_weather_factor` added alongside existing mlb/kv imports.
+  - Live per-start loop (`not is_rp and start_dates`): after computing `park_factor`, calls `get_weather_factor(park_team, start_date_str)` (with safe fallback dict if park_team or date are empty). Extracts `factor`, `temp_f`, `source`. Chains into `start_proj = start_base * woba_factor * park_factor * weather_factor`. Appends three new keys to `per_start_details`: `weather` (rounded 3dp), `tempF` (raw float or null), `weatherSource` ("forecast"|"dome"|"default").
+  - Lock path (`if today_str and start_dates and not is_rp`): mirrors the same calc — `lock_weather = get_weather_factor(park_tm, date)`, `weather_f` multiplied into `start_proj`, and a new `"weather": { factor, tempF, source }` sub-dict added to the locked breakdown JSON.
+  - Breakdown schema now: `{fpts, stats, matchup, weather, model}` — the new `weather` block enables factor-contribution analysis on the accuracy dashboard (same pattern as the existing `matchup` block).
+- `components/ProjectionTooltip.tsx`:
+  - `StartDetail` interface extended with optional `weather?: number`, `tempF?: number | null`, `weatherSource?: string`.
+  - Single-start tooltip mode: new `Row` after Park — `Weather (72°F) ×1.012` with a `FactorLabel`. Only rendered when `weatherSource === 'forecast'` (dome and default hide to reduce noise).
+  - Total tooltip mode per-start summary: compact weather `FactorLabel` appended after park between the park factor and win-probability chip. Same `weatherSource === 'forecast'` guard.
+- Safety (no change from Phase 1): `get_weather_factor` always returns `factor=1.0` on any failure (dome override, unknown park, Open-Meteo timeout, cache error, exception). 3hr Redis TTL under `cache:weather:{park}:{date}` prevents per-refresh API pressure. ±5% hard cap prevents pathological weather from distorting the model.
+- Integration test: TypeScript `tsc --noEmit` clean; Python `ast.parse` clean on both `projection.py` and `weather.py`; `import projection` succeeds with `get_weather_factor` resolving.
+- Deploy verified — tooltips now show weather row on outdoor-park starts, dome parks stay clean, diagnostic endpoint still functional.
+
+### Workflow note — direct folder access
+- Invoked `request_cowork_directory` at Conner's prompt ("How can I give access to the correct local folder so I don't need to download, copy/paste, save files?").
+- User selected `~/Developer/the-skipper`, mounted under `/sessions/eloquent-serene-curie/mnt/the-skipper` in Claude's sandbox.
+- Claude can read/edit files directly, run `python3 ast.parse`, `tsc --noEmit`, `git status`, `git diff`, `git log`. Cannot reliably write to `.git/` (sandbox permission model blocks some operations on lock files).
+- Division of labor established: **Claude edits source files and does dry-run checks; Conner runs `git commit`, `git push`, `gh pr create`, `vercel --prod`**. Keeps commit authorship clean and lets Conner gate every deploy.
+- Two PRs shipped under the new pattern (#101, #102) with no copy/paste friction — confirms the workflow is production-ready.
+
+---
+
 ## Session 22 — April 18, 2026
 
 Executed the two PRs designed at the end of session 21 (ESPN projection locking + accuracy dashboard head-to-head) plus a security chore patching a `.gitignore` gap that surfaced during debugging. Three PRs shipped in one session: PR #97 (cron locks ESPN Forecaster), PR #98 (`.gitignore` tightened for Vercel env dumps), PR #99 (ESPN MAE head-to-head on accuracy dashboard). All three verified in production; the head-to-head comparison will populate with real numbers tomorrow once the next cron writes `actual-all:2026-04-18`.
