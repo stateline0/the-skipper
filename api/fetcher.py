@@ -119,7 +119,12 @@ def today_has_started(schedule: dict) -> bool:
 
 def fetch_season_stats(yr: int) -> dict:
     """Fetch season pitching stats from MLB Stats API.
-    Returns { fullname_lower: stat_dict }"""
+    Returns { fullname_lower: stat_dict } where each stat_dict has an
+    extra "_mlbId" key holding the MLB Stats API personId. PR G added
+    this so fetch_game_logs() can iterate the /people/{id}/stats endpoint
+    (the bulk /stats?stats=gameLog&playerPool=all endpoint silently
+    returns empty — MLB Stats API does not support playerPool=all on
+    the gameLog stats type)."""
     try:
         r = requests.get(
             "https://statsapi.mlb.com/api/v1/stats",
@@ -134,11 +139,16 @@ def fetch_season_stats(yr: int) -> dict:
         if r.status_code != 200:
             return {}
         splits = r.json().get("stats", [{}])[0].get("splits", [])
-        return {
-            strip_accents(s.get("player", {}).get("fullName", "")):
-                s.get("stat", {})
-            for s in splits if s.get("player", {}).get("fullName")
-        }
+        result = {}
+        for s in splits:
+            player = s.get("player", {})
+            full_name = player.get("fullName", "")
+            if not full_name:
+                continue
+            stat = dict(s.get("stat", {}))  # shallow copy so we don't mutate upstream
+            stat["_mlbId"] = player.get("id")
+            result[strip_accents(full_name)] = stat
+        return result
     except Exception as e:
         print(f"[fetcher.py] Failed to fetch {yr} MLB stats: {e}")
         return {}
@@ -413,6 +423,12 @@ def load_cached_data(year_int: int) -> dict:
           f"{len(mlb_stats_previous)} previous")
 
     # ── Game logs for recent form weighting ────────────────────────────
+    # PR G: fetch_game_logs now requires mlb_stats_current because it
+    # iterates the per-player /people/{id}/stats endpoint (see docstring
+    # on mlb.fetch_game_logs). The bulk /stats?playerPool=all endpoint
+    # silently returns empty for gameLog — this went undetected for
+    # weeks, zeroing out recent-form weighting and blocking actual-all:
+    # writes in cron.py.
     game_logs_current = {}
     try:
         game_logs_current = cache_get(f"cache:game-logs:{year_int}") or {}
@@ -421,7 +437,7 @@ def load_cached_data(year_int: int) -> dict:
 
     if not game_logs_current:
         try:
-            game_logs_current = fetch_game_logs(year_int) or {}
+            game_logs_current = fetch_game_logs(year_int, mlb_stats_current) or {}
             if game_logs_current:
                 try:
                     cache_set(f"cache:game-logs:{year_int}", game_logs_current,

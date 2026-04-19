@@ -799,9 +799,22 @@ def _strip_accents_mlb(s: str) -> str:
     ).lower()
 
 
-def fetch_game_logs(season: int) -> dict:
+def fetch_game_logs(season: int, mlb_stats: dict = None) -> dict:
     """
-    Fetch per-game pitching stats for all pitchers in a season.
+    Fetch per-game pitching stats for all pitchers in `mlb_stats`.
+
+    mlb_stats is the dict returned by fetcher.fetch_season_stats — keys are
+    accent-stripped lowercase names ("garrett crochet") and each value has
+    an "_mlbId" field holding the MLB Stats API personId. We iterate those
+    IDs and hit /api/v1/people/{id}/stats?stats=gameLog in parallel.
+
+    Why not one bulk call? Because the bulk /api/v1/stats endpoint does
+    NOT support stats=gameLog with playerPool=all — it silently returns
+    {"stats": []} with a 200 response. The gameLog stats type is only
+    served via the per-player /people/{id}/stats endpoint. Verified
+    manually (see PR G notes in CHANGELOG). This function used to fire
+    the broken bulk call, which is why actual-all: writes were missing
+    and recentForm was null for every projection.
 
     Returns: {
         "garrett crochet": [
@@ -812,43 +825,62 @@ def fetch_game_logs(season: int) -> dict:
         ...
     }
 
-    Games are sorted by date (most recent last) so we can easily
-    grab the last N starts for recent form weighting.
+    Games are sorted by date (oldest first, most recent last) so callers
+    can slice the tail for recent-form weighting.
+
+    Returns {} if mlb_stats is missing or has no _mlbId entries — this
+    handles the caching transition: if the cache contains a pre-PR-G
+    mlb_stats dict without _mlbId, we skip and log rather than hang.
     """
-    try:
-        r = requests.get(
-            "https://statsapi.mlb.com/api/v1/stats",
-            params={
-                "stats": "gameLog",
-                "playerPool": "all",
-                "group": "pitching",
-                "season": str(season),
-                "gameType": "R",
-                "limit": 5000,
-            },
-            headers={"User-Agent": "Mozilla/5.0"},
-            timeout=20,
-        )
-        if r.status_code != 200:
-            print(f"[mlb.py] Game logs returned HTTP {r.status_code}")
-            return {}
+    from concurrent.futures import ThreadPoolExecutor, as_completed
 
-        splits = r.json().get("stats", [{}])[0].get("splits", [])
-        print(f"[mlb.py] Game logs: {len(splits)} total entries for {season}")
+    if not mlb_stats:
+        print("[mlb.py] fetch_game_logs: empty mlb_stats, returning {}")
+        return {}
 
-        result = {}
+    # Extract (name_key, player_id) pairs from mlb_stats. Skip entries
+    # missing _mlbId — would happen if the cache predates PR G and still
+    # holds bare stat dicts. Natural recovery path: cache:mlb-stats: TTL
+    # is 24h, so the next cron run writes _mlbId entries and this clears.
+    id_pairs = [
+        (name_key, int(stat["_mlbId"]))
+        for name_key, stat in mlb_stats.items()
+        if stat.get("_mlbId")
+    ]
+    if not id_pairs:
+        print("[mlb.py] fetch_game_logs: no _mlbId in any mlb_stats entry "
+              "(likely stale cache from pre-PR-G build). Returning {}.")
+        return {}
+
+    print(f"[mlb.py] fetch_game_logs: fetching per-player logs for "
+          f"{len(id_pairs)} pitchers (season {season})")
+
+    def _fetch_one(name_key: str, player_id: int):
+        """Hit /people/{id}/stats and parse. Return (name_key, games_list)."""
+        try:
+            r = requests.get(
+                f"https://statsapi.mlb.com/api/v1/people/{player_id}/stats",
+                params={
+                    "stats":    "gameLog",
+                    "group":    "pitching",
+                    "season":   str(season),
+                    "gameType": "R",
+                },
+                headers={"User-Agent": "Mozilla/5.0"},
+                timeout=10,
+            )
+            if r.status_code != 200:
+                return (name_key, [])
+            splits = r.json().get("stats", [{}])[0].get("splits", [])
+        except Exception:
+            return (name_key, [])
+
+        games = []
         for split in splits:
-            player = split.get("player", {})
-            full_name = player.get("fullName", "")
-            if not full_name:
-                continue
-
             stat = split.get("stat", {})
             game_date = split.get("date", "")
             if not game_date:
                 continue
-
-            name_key = _strip_accents_mlb(full_name)
 
             # Parse IP from string format (e.g., "6.2" = 6 innings + 2 outs)
             ip_str = str(stat.get("inningsPitched", "0.0"))
@@ -858,7 +890,7 @@ def fetch_game_logs(season: int) -> dict:
             except Exception:
                 ip = 0.0
 
-            game_entry = {
+            games.append({
                 "date": game_date,
                 "ip":   ip,
                 "h":    int(stat.get("hits", 0)),
@@ -870,22 +902,34 @@ def fetch_game_logs(season: int) -> dict:
                 "l":    int(stat.get("losses", 0)),
                 "sv":   int(stat.get("saves", 0)),
                 "gs":   int(stat.get("gamesStarted", 0)),
-            }
+            })
+        games.sort(key=lambda g: g["date"])
+        return (name_key, games)
 
-            if name_key not in result:
-                result[name_key] = []
-            result[name_key].append(game_entry)
-
-        # Sort each pitcher's games by date (oldest first, most recent last)
-        for name_key in result:
-            result[name_key].sort(key=lambda g: g["date"])
-
-        print(f"[mlb.py] Game logs: {len(result)} unique pitchers")
-        return result
-
+    result = {}
+    errors = 0
+    try:
+        with ThreadPoolExecutor(max_workers=10) as executor:
+            futures = [
+                executor.submit(_fetch_one, name_key, pid)
+                for name_key, pid in id_pairs
+            ]
+            for future in as_completed(futures):
+                try:
+                    name_key, games = future.result()
+                except Exception:
+                    errors += 1
+                    continue
+                if games:
+                    result[name_key] = games
     except Exception as e:
-        print(f"[mlb.py] fetch_game_logs failed: {e}")
+        print(f"[mlb.py] fetch_game_logs thread pool failed: {e}")
         return {}
+
+    total_games = sum(len(v) for v in result.values())
+    print(f"[mlb.py] Game logs: {len(result)} pitchers with entries, "
+          f"{total_games} total game rows ({errors} per-player fetches errored)")
+    return result
 
 
 def compute_recent_form_fpts(games: list, n_starts: int = 4) -> float:
