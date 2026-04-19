@@ -196,24 +196,37 @@ export default function AccuracyPage() {
             Loading accuracy data...
           </div>
         ) : starts.length === 0 ? (
-          <div style={{
-            textAlign: 'center', padding: 60, background: 'var(--paper-2)',
-            borderRadius: 12, color: 'var(--ink-3)',
-          }}>
-            <div style={{ fontSize: 32, marginBottom: 12 }}>📊</div>
-            <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 8, color: 'var(--ink)' }}>
-              No accuracy data yet
-            </div>
-            <div style={{ fontSize: 13, maxWidth: 400, margin: '0 auto' }}>
-              Accuracy tracking started in session 14. Data will accumulate as more starts are locked
-              and completed. Check back after more games are played.
-            </div>
-            {data?.unmatchedCount ? (
-              <div style={{ fontSize: 12, marginTop: 12, fontFamily: 'var(--mono)' }}>
-                {data.unmatchedCount} projected start{data.unmatchedCount > 1 ? 's' : ''} without matching actual stats
+          <>
+            {/* ESPN head-to-head renders above the empty state when scope=all,
+                so ESPN-locked projections surface even before Skipper has any
+                matched actuals for the period. */}
+            {scope === 'all' && espnSummary && (
+              <EspnHeadToHead espnSummary={espnSummary} />
+            )}
+            <div style={{
+              textAlign: 'center', padding: 60, background: 'var(--paper-2)',
+              borderRadius: 12, color: 'var(--ink-3)',
+            }}>
+              <div style={{ fontSize: 32, marginBottom: 12 }}>📊</div>
+              <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 8, color: 'var(--ink)' }}>
+                No accuracy data yet
               </div>
-            ) : null}
-          </div>
+              <div style={{ fontSize: 13, maxWidth: 400, margin: '0 auto' }}>
+                Accuracy tracking started in session 14. Data will accumulate as more starts are locked
+                and completed. Check back after more games are played.
+              </div>
+              {data?.unmatchedCount ? (
+                <div style={{ fontSize: 12, marginTop: 12, fontFamily: 'var(--mono)' }}>
+                  {data.unmatchedCount} projected start{data.unmatchedCount > 1 ? 's' : ''} without matching actual stats
+                </div>
+              ) : null}
+              {scope === 'all' && espnSummary && espnSummary.espnKeysFound > 0 ? (
+                <div style={{ fontSize: 12, marginTop: 8, fontFamily: 'var(--mono)' }}>
+                  {espnSummary.espnKeysFound} ESPN projection{espnSummary.espnKeysFound === 1 ? '' : 's'} locked for this period
+                </div>
+              ) : null}
+            </div>
+          </>
         ) : (
           <>
             {/* ESPN head-to-head (scope=all only) */}

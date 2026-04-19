@@ -29,6 +29,76 @@ except Exception:
     KV_AVAILABLE = False
 
 
+def _fetch_espn_lookup(season: int, period: int) -> dict:
+    """
+    Read all ESPN-locked projection keys for this period and return a
+    {"slug:date" → fpts} lookup, skipping placeholder entries.
+
+    Returns {} if KV is unavailable or no keys exist. Used by both the
+    normal accuracy path and the early-return path so ESPN data is always
+    surfaced when scope=="all", even when Skipper has no proj2all: keys.
+    """
+    if not KV_AVAILABLE or _redis is None:
+        return {}
+    keys = _redis.keys(f"projection-espn:{season}:{period}:*")
+    lookup = {}
+    for key in keys or []:
+        parts = key.split(":")
+        if len(parts) != 5:
+            continue
+        _, _, _, slug, date = parts
+        val = _redis.get(key)
+        if val is None:
+            continue
+        try:
+            data = json.loads(val)
+            if data.get("is_placeholder"):
+                continue
+            fpts = data.get("fpts")
+            if fpts is None:
+                continue
+            lookup[f"{slug}:{date}"] = fpts
+        except (json.JSONDecodeError, TypeError):
+            continue
+    return lookup
+
+
+def _compute_espn_summary(espn_lookup: dict, starts: list) -> dict:
+    """
+    Build the espnSummary block by intersecting the ESPN lookup with the
+    matched starts list. Mutates each matched start in place to attach
+    espnFpts/espnError so the frontend's optional ESPN column can render.
+
+    When the intersection is empty (no overlap yet), returns a summary with
+    mae=None and the espnKeysFound count populated so the frontend can
+    render an informative empty state.
+    """
+    intersection = []
+    for s in starts:
+        lookup_key = f"{s['slug']}:{s['date']}"
+        espn_fpts = espn_lookup.get(lookup_key)
+        if espn_fpts is not None:
+            s["espnFpts"] = espn_fpts
+            s["espnError"] = round(espn_fpts - s["actualFpts"], 1)
+            intersection.append(s)
+
+    if intersection:
+        espn_errors = [abs(s["espnError"]) for s in intersection]
+        skipper_errors = [abs(s["fptsError"]) for s in intersection]
+        return {
+            "totalStarts":               len(intersection),
+            "mae":                       round(sum(espn_errors) / len(espn_errors), 2),
+            "skipperMaeOnIntersection":  round(sum(skipper_errors) / len(skipper_errors), 2),
+            "espnKeysFound":             len(espn_lookup),
+        }
+    return {
+        "totalStarts":               0,
+        "mae":                       None,
+        "skipperMaeOnIntersection":  None,
+        "espnKeysFound":             len(espn_lookup),
+    }
+
+
 def get_accuracy_data(season: int, period: int, scope: str = "roster") -> dict:
     """
     Match v2 locked projections against actual stats for a given period.
@@ -47,7 +117,17 @@ def get_accuracy_data(season: int, period: int, scope: str = "roster") -> dict:
     # ── Fetch all v2 locked projections for this period ───────────────────
     proj_keys = _redis.keys(f"{proj_prefix}:{season}:{period}:*")
     if not proj_keys:
-        return {"starts": [], "summary": {}, "message": "No v2 projections found for this period"}
+        # No Skipper projections, but ESPN data may still exist for this
+        # period — surface it so the All MLB scope's head-to-head block
+        # can render its informative empty state instead of vanishing.
+        empty_response = {
+            "starts": [],
+            "summary": {},
+            "message": "No v2 projections found for this period",
+        }
+        if scope == "all":
+            empty_response["espnSummary"] = _compute_espn_summary(_fetch_espn_lookup(season, period), [])
+        return empty_response
 
     projections = {}  # { "player-slug:date": { proj2 data } }
     slug_to_dates = {}  # { "player-slug": ["2026-04-10", ...] }
@@ -285,62 +365,18 @@ def get_accuracy_data(season: int, period: int, scope: str = "roster") -> dict:
               f"combined impact={factor_analysis['matchupCombined']['impact']:+.2f}")
 
     # ── ESPN projection overlay (scope="all" only) ───────────────────────
-    # Attach ESPN-locked projections (if any) to each matched start and
-    # compute an apples-to-apples head-to-head MAE against The Skipper's
-    # model on the intersection subset (starts where BOTH systems have a
-    # projection AND the game completed).
+    # _compute_espn_summary mutates each matched start in place to attach
+    # espnFpts/espnError, then returns the head-to-head summary (or a
+    # "no overlap yet" summary when the intersection is empty).
     espn_summary = None
     if scope == "all":
-        espn_keys = _redis.keys(f"projection-espn:{season}:{period}:*")
-        espn_lookup = {}  # "slug:date" → fpts
-        for key in espn_keys or []:
-            parts = key.split(":")
-            if len(parts) != 5:
-                continue
-            _, _, _, e_slug, e_date = parts
-            val = _redis.get(key)
-            if val is None:
-                continue
-            try:
-                espn_data = json.loads(val)
-                if espn_data.get("is_placeholder"):
-                    continue
-                fpts = espn_data.get("fpts")
-                if fpts is None:
-                    continue
-                espn_lookup[f"{e_slug}:{e_date}"] = fpts
-            except (json.JSONDecodeError, TypeError):
-                continue
-
+        espn_lookup = _fetch_espn_lookup(season, period)
         print(f"[accuracy.py] Found {len(espn_lookup)} ESPN-locked projections (scope=all)")
-
-        intersection = []
-        for s in starts:
-            lookup_key = f"{s['slug']}:{s['date']}"
-            espn_fpts = espn_lookup.get(lookup_key)
-            if espn_fpts is not None:
-                s["espnFpts"] = espn_fpts
-                s["espnError"] = round(espn_fpts - s["actualFpts"], 1)
-                intersection.append(s)
-
-        if intersection:
-            espn_errors = [abs(s["espnError"]) for s in intersection]
-            skipper_errors_on_intersection = [abs(s["fptsError"]) for s in intersection]
-            espn_summary = {
-                "totalStarts":               len(intersection),
-                "mae":                       round(sum(espn_errors) / len(espn_errors), 2),
-                "skipperMaeOnIntersection":  round(sum(skipper_errors_on_intersection) / len(skipper_errors_on_intersection), 2),
-                "espnKeysFound":             len(espn_lookup),
-            }
-            print(f"[accuracy.py] ESPN head-to-head on {len(intersection)} starts: "
+        espn_summary = _compute_espn_summary(espn_lookup, starts)
+        if espn_summary["mae"] is not None:
+            print(f"[accuracy.py] ESPN head-to-head on {espn_summary['totalStarts']} starts: "
                   f"ESPN MAE={espn_summary['mae']}, Skipper MAE={espn_summary['skipperMaeOnIntersection']}")
         else:
-            espn_summary = {
-                "totalStarts":               0,
-                "mae":                       None,
-                "skipperMaeOnIntersection":  None,
-                "espnKeysFound":             len(espn_lookup),
-            }
             print(f"[accuracy.py] ESPN head-to-head: no completed overlap yet "
                   f"(espn_keys={len(espn_lookup)}, matched_starts={len(starts)})")
 
