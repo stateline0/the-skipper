@@ -799,7 +799,7 @@ def _strip_accents_mlb(s: str) -> str:
     ).lower()
 
 
-def fetch_game_logs(season: int, mlb_stats: dict = None) -> dict:
+def fetch_game_logs(season: int, mlb_stats: dict = None) -> tuple:
     """
     Fetch per-game pitching stats for all pitchers in `mlb_stats`.
 
@@ -816,27 +816,46 @@ def fetch_game_logs(season: int, mlb_stats: dict = None) -> dict:
     the broken bulk call, which is why actual-all: writes were missing
     and recentForm was null for every projection.
 
-    Returns: {
-        "garrett crochet": [
-            {"date": "2026-04-07", "ip": 6.0, "h": 4, "er": 1, "so": 8,
-             "bb": 2, "hb": 0, "w": 1, "l": 0, "sv": 0, "gs": 1},
-            ...
-        ],
-        ...
-    }
+    Returns a tuple (data, stats):
+      data = {
+          "garrett crochet": [
+              {"date": "2026-04-07", "ip": 6.0, "h": 4, "er": 1, "so": 8,
+               "bb": 2, "hb": 0, "w": 1, "l": 0, "sv": 0, "gs": 1},
+              ...
+          ],
+          ...
+      }
+      stats = {
+          "requested":       250,   # number of pitchers we tried
+          "with_data":       247,   # 200 OK with at least one game
+          "empty":           1,     # 200 OK but zero games (silent-failure mode)
+          "http_errors":     1,     # non-200 status
+          "exceptions":      1,     # threading-level or request exceptions
+          "total_game_rows": 1847,
+      }
+
+    Stats surfaced because session 25 found that yesterday's cron silently
+    returned 200-but-empty for most pitchers, leading to a 2-entry partial
+    actual-all: blob being NX-locked permanently. Counting "empty" lets
+    that exact failure mode be visible in the cron-summary KV blob.
 
     Games are sorted by date (oldest first, most recent last) so callers
     can slice the tail for recent-form weighting.
 
-    Returns {} if mlb_stats is missing or has no _mlbId entries — this
-    handles the caching transition: if the cache contains a pre-PR-G
+    Returns ({}, {…}) if mlb_stats is missing or has no _mlbId entries —
+    this handles the caching transition: if the cache contains a pre-PR-G
     mlb_stats dict without _mlbId, we skip and log rather than hang.
     """
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
+    empty_stats = {
+        "requested": 0, "with_data": 0, "empty": 0,
+        "http_errors": 0, "exceptions": 0, "total_game_rows": 0,
+    }
+
     if not mlb_stats:
         print("[mlb.py] fetch_game_logs: empty mlb_stats, returning {}")
-        return {}
+        return {}, dict(empty_stats)
 
     # Extract (name_key, player_id) pairs from mlb_stats. Skip entries
     # missing _mlbId — would happen if the cache predates PR G and still
@@ -850,13 +869,19 @@ def fetch_game_logs(season: int, mlb_stats: dict = None) -> dict:
     if not id_pairs:
         print("[mlb.py] fetch_game_logs: no _mlbId in any mlb_stats entry "
               "(likely stale cache from pre-PR-G build). Returning {}.")
-        return {}
+        return {}, dict(empty_stats)
 
     print(f"[mlb.py] fetch_game_logs: fetching per-player logs for "
           f"{len(id_pairs)} pitchers (season {season})")
 
     def _fetch_one(name_key: str, player_id: int):
-        """Hit /people/{id}/stats and parse. Return (name_key, games_list)."""
+        """Hit /people/{id}/stats and parse.
+
+        Return (name_key, games_list, status) where status is:
+          - "ok"        : HTTP 200, parsed cleanly (games may still be empty)
+          - "http"      : non-200 response
+          - "exception" : threw on request or parse
+        """
         try:
             r = requests.get(
                 f"https://statsapi.mlb.com/api/v1/people/{player_id}/stats",
@@ -870,10 +895,10 @@ def fetch_game_logs(season: int, mlb_stats: dict = None) -> dict:
                 timeout=10,
             )
             if r.status_code != 200:
-                return (name_key, [])
+                return (name_key, [], "http")
             splits = r.json().get("stats", [{}])[0].get("splits", [])
         except Exception:
-            return (name_key, [])
+            return (name_key, [], "exception")
 
         games = []
         for split in splits:
@@ -904,10 +929,10 @@ def fetch_game_logs(season: int, mlb_stats: dict = None) -> dict:
                 "gs":   int(stat.get("gamesStarted", 0)),
             })
         games.sort(key=lambda g: g["date"])
-        return (name_key, games)
+        return (name_key, games, "ok")
 
     result = {}
-    errors = 0
+    counters = {"with_data": 0, "empty": 0, "http_errors": 0, "exceptions": 0}
     try:
         with ThreadPoolExecutor(max_workers=10) as executor:
             futures = [
@@ -916,20 +941,44 @@ def fetch_game_logs(season: int, mlb_stats: dict = None) -> dict:
             ]
             for future in as_completed(futures):
                 try:
-                    name_key, games = future.result()
+                    name_key, games, status = future.result()
                 except Exception:
-                    errors += 1
+                    counters["exceptions"] += 1
                     continue
-                if games:
+
+                if status == "http":
+                    counters["http_errors"] += 1
+                elif status == "exception":
+                    counters["exceptions"] += 1
+                elif games:
                     result[name_key] = games
+                    counters["with_data"] += 1
+                else:
+                    # 200 OK, parsed cleanly, zero games returned. This is
+                    # the silent-failure mode session 25 chased — looks
+                    # successful at every layer, but contributes nothing
+                    # downstream. Counted separately so a future spike
+                    # ("empty: 240 of 250") jumps out in cron-summary.
+                    counters["empty"] += 1
     except Exception as e:
         print(f"[mlb.py] fetch_game_logs thread pool failed: {e}")
-        return {}
+        return {}, dict(empty_stats)
 
     total_games = sum(len(v) for v in result.values())
+    stats = {
+        "requested":       len(id_pairs),
+        "with_data":       counters["with_data"],
+        "empty":           counters["empty"],
+        "http_errors":     counters["http_errors"],
+        "exceptions":      counters["exceptions"],
+        "total_game_rows": total_games,
+    }
     print(f"[mlb.py] Game logs: {len(result)} pitchers with entries, "
-          f"{total_games} total game rows ({errors} per-player fetches errored)")
-    return result
+          f"{total_games} total game rows "
+          f"({counters['empty']} empty, "
+          f"{counters['http_errors']} HTTP errors, "
+          f"{counters['exceptions']} exceptions)")
+    return result, stats
 
 
 def compute_recent_form_fpts(games: list, n_starts: int = 4) -> float:

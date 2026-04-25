@@ -56,6 +56,14 @@ MIN_STARTS_SP = 3
 STARTER_WIN_SHARE = 0.57
 DEFAULT_WIN_PROB = 0.5
 
+# Floor below which we treat a date's actuals dict as a partial fetch
+# rather than a legitimate small slate. Regular-season MLB days reliably
+# have 10+ starts; anything below 4 is almost certainly the silent-failure
+# mode session 25 chased — fetch_game_logs returning HTTP 200 with empty
+# splits for most pitchers, leaving us with 1-2 entries that NX would
+# then permanently lock in as the canonical record.
+ACTUALS_FLOOR = 4
+
 
 def _make_slug(name: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", name.lower().strip()).strip("-")
@@ -96,6 +104,24 @@ def lock_all_mlb_projections() -> dict:
         return {"error": f"No matchup period found for {today_str}"}
 
     print(f"[cron.py] Starting all-MLB lock for {today_str} (period {period_num})")
+
+    # ── Force-refresh game-log and season-stats caches ───────────────────
+    # The 24h cache TTL aligns with the daily cron schedule, creating a
+    # race where new pitchers/games may not be in cache yet at run time.
+    # Since actual-all: writes are NX (write-once), any miss becomes a
+    # permanent gap requiring manual KV cleanup — the exact scenario
+    # session 25 chased down with the partial 380-byte Apr 23 blob. The
+    # cost of always-fresh is ~3-5 seconds for the per-player game-log
+    # fan-out, well worth eliminating the staleness trap on a daily cron.
+    # Other caches (savant, team-woba, team-win-data) are kept since
+    # their data changes more slowly and they don't gate write-once data.
+    try:
+        _redis.delete(f"cache:mlb-stats:{year_int}")
+        _redis.delete(f"cache:game-logs:{year_int}")
+        print(f"[cron.py] Invalidated mlb-stats and game-logs caches "
+              f"to force fresh fetch")
+    except Exception as e:
+        print(f"[cron.py] Cache invalidation failed (continuing): {e}")
 
     # ── Fetch all probable starters for today ────────────────────────────
     mlb_data = fetch_mlb_probables(today_str, today_str)
@@ -344,12 +370,13 @@ def lock_all_mlb_projections() -> dict:
     actuals_stored = 0
     actuals_write_errors = 0
     actuals_dates_eligible = 0
+    actuals_skipped_partial = 0
+    total_game_rows = 0
     if not game_logs_current:
         print(f"[cron.py] Skipping actual-all: writes — game_logs_current is empty")
     else:
         # Group game log entries by date, only for starts (gs=1)
         actuals_by_date = {}
-        total_game_rows = 0
         for pitcher_name, games in game_logs_current.items():
             for g in games:
                 total_game_rows += 1
@@ -382,6 +409,19 @@ def lock_all_mlb_projections() -> dict:
         # Store each date's actuals if not already cached
         for date_str, pitchers in actuals_by_date.items():
             cache_key = f"actual-all:{date_str}"
+
+            # Floor check (session 25): regular-season MLB dates reliably
+            # have 10+ starts. A date with fewer than ACTUALS_FLOOR entries
+            # is almost certainly a partial fetch. Skip the NX-write so
+            # the next cron run can try again with a complete dataset
+            # rather than locking in the partial blob permanently.
+            if len(pitchers) < ACTUALS_FLOOR:
+                actuals_skipped_partial += 1
+                print(f"[cron.py] Skipping write for {cache_key}: only "
+                      f"{len(pitchers)} entries (floor={ACTUALS_FLOOR}). "
+                      f"Likely partial fetch — leaving for next run.")
+                continue
+
             existing = cache_get(cache_key)
             if existing is None:
                 try:
@@ -391,8 +431,12 @@ def lock_all_mlb_projections() -> dict:
                     actuals_write_errors += 1
                     print(f"[cron.py] Failed to write {cache_key}: {e}")
 
+        already_existed = (
+            actuals_dates_eligible - actuals_stored - actuals_skipped_partial
+        )
         print(f"[cron.py] Actuals: wrote {actuals_stored} new date keys, "
-              f"{actuals_dates_eligible - actuals_stored} already existed, "
+              f"{already_existed} already existed, "
+              f"{actuals_skipped_partial} skipped as partial, "
               f"{actuals_write_errors} errors")
 
     summary = {
@@ -403,11 +447,17 @@ def lock_all_mlb_projections() -> dict:
         "locked": locked_count,
         "skipped": skipped_count,
         "actualsStored": actuals_stored,
+        "actualsSkippedPartial": actuals_skipped_partial,
+        "actualsDatesEligible": actuals_dates_eligible,
+        "actualsWriteErrors": actuals_write_errors,
+        "totalGameRows": total_game_rows,
+        "gameLogStats": cached.get("game_log_stats", {}),
         "topProjections": sorted(results, key=lambda x: -x["proj"])[:10],
     }
 
     print(f"[cron.py] Done: {locked_count} locked, {skipped_count} skipped, "
-          f"{actuals_stored} actual dates stored")
+          f"{actuals_stored} actual dates stored, "
+          f"{actuals_skipped_partial} actual dates skipped (partial)")
 
     return summary
 
@@ -622,6 +672,26 @@ class handler(BaseHTTPRequestHandler):
             "mlb": mlb_result,
             "espn": espn_result,
         }
+
+        # Persist this run's outcomes to KV. Vercel Hobby retains logs
+        # for ~1hr only, so without this any post-hoc debug on a once-
+        # a-day cron has to happen in that one-hour window. KV makes the
+        # counters survive in Upstash for 60 days, which was exactly the
+        # observability hole session 25 ran into when cron-summary:
+        # 2026-04-24 was nil. Wrapped in try/except — write failure here
+        # must NEVER break the cron's HTTP response.
+        if KV_AVAILABLE and _redis is not None:
+            today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+            summary_key = f"cache:cron-summary:{today_str}"
+            try:
+                _redis.set(
+                    summary_key,
+                    json.dumps(result),
+                    ex=60 * 86400,  # 60-day TTL
+                )
+                print(f"[cron.py] Wrote cron-summary to {summary_key}")
+            except Exception as e:
+                print(f"[cron.py] Failed to write cron-summary: {e}")
 
         body = json.dumps(result).encode()
         self.send_response(200)
