@@ -429,7 +429,12 @@ def load_cached_data(year_int: int) -> dict:
     # silently returns empty for gameLog — this went undetected for
     # weeks, zeroing out recent-form weighting and blocking actual-all:
     # writes in cron.py.
+    #
+    # Session 25: fetch_game_logs now returns (data, stats). On a cache
+    # hit we have no stats — leave game_log_stats empty in that case.
+    # Stats only carry meaningful values when we did a fresh fetch.
     game_logs_current = {}
+    game_log_stats = {}
     try:
         game_logs_current = cache_get(f"cache:game-logs:{year_int}") or {}
     except Exception:
@@ -437,7 +442,9 @@ def load_cached_data(year_int: int) -> dict:
 
     if not game_logs_current:
         try:
-            game_logs_current = fetch_game_logs(year_int, mlb_stats_current) or {}
+            game_logs_current, game_log_stats = fetch_game_logs(
+                year_int, mlb_stats_current
+            )
             if game_logs_current:
                 try:
                     cache_set(f"cache:game-logs:{year_int}", game_logs_current,
@@ -446,6 +453,8 @@ def load_cached_data(year_int: int) -> dict:
                     pass
         except Exception as e:
             print(f"[fetcher.py] Game logs fetch failed: {e}")
+            game_logs_current = {}
+            game_log_stats = {}
 
     print(f"[fetcher.py] Game logs: {len(game_logs_current)} pitchers with game-level data")
 
@@ -499,6 +508,7 @@ def load_cached_data(year_int: int) -> dict:
         "mlb_stats_current":  mlb_stats_current,
         "mlb_stats_previous": mlb_stats_previous,
         "game_logs_current":  game_logs_current,
+        "game_log_stats":     game_log_stats,
         "team_win_data":      team_win_data,
         "team_woba_factors":  team_woba_factors,
     }
