@@ -337,7 +337,9 @@ def lock_all_mlb_projections() -> dict:
                 "sv": round(blended["sv"], 3),
             },
             "matchup": {
-                "winProb": round(win_prob, 3),
+                "opponent": opp,
+                "isHome":   today_start.get("is_home", True),
+                "winProb":  round(win_prob, 3),
                 "wpSource": wp_source,
             },
             "model": {
