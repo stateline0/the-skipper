@@ -116,11 +116,17 @@ Pass multiple `view` params as repeated tuples: `params=[("view", "mRoster"), ("
 - `appliedStatTotal` from `kona_player_info` returns empty/zero early in season — do not rely on it
 
 ### Transaction lag behavior
-`Confidence: 8/10 · Last assessed: April 10, 2026`
+`Confidence: 9/10 · Last assessed: April 25, 2026`
 
-Once any MLB game starts for the day, ESPN locks the current scoring period's roster. Roster transactions (adds/drops) made after lock are reflected in `scoringPeriodId + 1` (tomorrow's period). The Skipper re-fetches with tomorrow's period to pick up same-day transactions.
+Once any MLB game starts for the day, ESPN locks the current scoring period's roster. Roster transactions (adds/drops) made after lock are reflected in `scoringPeriodId + 1` (tomorrow's period). The Skipper re-fetches with tomorrow's period to pick up same-day transactions. The trigger for this branch is `today_has_started(schedule)` returning true — i.e. any of today's games is `in_progress` or `final`.
 
-**Important:** The re-fetched data returns tomorrow's `lineupSlotId` values, not today's. This is correct API behavior — it accurately reflects tomorrow's lineup. Since bench status is irrelevant to The Skipper's projections, this does not affect functionality.
+**Important — the re-fetched data returns tomorrow's `lineupSlotId` values, not today's.** This is correct API behavior. Since bench status is irrelevant to The Skipper's projections, this does not affect functionality.
+
+**Gotcha — derived structures aren't rebuilt after the refetch (open bug, diagnosed session 26, fix scoped in BACKLOG.md).** The lag-fix block updates `roster_entries` from the next-period mRoster but does NOT automatically refresh anything derived from the original roster fetch. Specifically, `all_player_names`, `roster_team_map`, and `starts_map` are computed from the *first* fetch's player list. If a pitcher is on the next-period roster but missing from the first-period roster (common case: added today, after lock), they pass through the projection pipeline with `starts_map.get(name, {})` returning the empty default — rendering a row with `starts=0`, `startDates=[]`, no projection, and all gray cells in the schedule grid.
+
+The fix (logged to BACKLOG.md → Next session priorities) is to recompute `all_player_names` and `roster_team_map` from the refreshed `roster_entries` inside the `if today_has_started:` branch, then re-call `get_starts_for_players` to rebuild `starts_map`. One extra MLB Stats API call only on the codepath where the lag fix actually fires.
+
+**The bug has existed since session 18 PR #73** (when the lag fix was first added) but only became visible in session 26 when Conner happened to add a player during a locked period. Symptom in production: row appears in the table because `roster_entries` has the player, but every cell is gray with no green ✓ and the row's Starts/Proj FPTS columns both read 0. Free Agents view shows the same player's starts correctly because that surface fetches `fa_starts_map` independently, untouched by the lag fix.
 
 ### Known limitations
 `Confidence: 8/10 · Last assessed: April 10, 2026`
@@ -704,6 +710,31 @@ Some upstream APIs return 200 OK with an empty payload instead of erroring when 
 5. **Floor checks on the writer, not just the reader.** SETNX is a footgun without a write-side floor: if a partial fetch produces a small dict, the writer happily writes it and NX then permanently locks the bad data. `api/cron.py` `ACTUALS_FLOOR = 4` (PR #108) skips writes for any date whose dict has fewer than 4 entries — regular-season MLB days reliably have 10+ starts, so anything below 4 is almost certainly partial. This is the missing piece between "detect the failure" (counter granularity) and "tolerate the failure" (don't lock in bad data; let the next run try again with a complete dataset).
 6. **Force-refresh caches feeding write-once paths.** A 24h cache TTL aligned with a 24h cron schedule creates a race where stale or partial data from one cron run can be reused by the next, and any partial write becomes permanent via NX (see #5). PR #108 adds `_redis.delete()` of `cache:mlb-stats:{year}` and `cache:game-logs:{year}` at the top of every cron run. Cost: ~3-5 seconds of per-player API fan-out. Benefit: staleness is no longer a risk vector for the actuals path. Other caches (savant, team-woba, team-win-data) are NOT force-refreshed since they don't feed write-once data.
 7. **Prefer per-entity calls when bulk is suspect.** For game logs we fan out per-player via `ThreadPoolExecutor`; the pattern is more expensive but failures isolate to one player rather than nuking the whole pull.
+
+### Post-hoc adjustment vs data-flow reorder
+`Confidence: 9/10 · Last assessed: April 25, 2026`
+
+When a new piece of context (e.g. roster ownership history) needs to influence an output that's already been computed (e.g. per-pitcher projections + locked KV writes), there are two structural choices:
+
+1. **Reorder the data flow** so the new context is available before the consumer runs. Cleaner end state. Higher up-front cost — touching the top of the orchestrator (`get_league_data` in our case) is a wide blast radius. Often pulls in unrelated structural changes (e.g. moving the FA fetch up because the actuals fetch needs FA names).
+2. **Post-hoc adjustment** after the consumer has run. Tag the new context onto already-built output objects, recompute aggregates from per-item details. Lower up-front cost. Forward-only deferral on side effects the consumer baked in (e.g. `proj2:` locks already written by `projection.py` can't be unwritten).
+
+Reach for **post-hoc** when:
+- The consumer has bounded side effects, and the side effects don't need the new context for correctness (just for optimization). Example: `projection.py`'s per-start KV locks are already mostly populated by the all-MLB cron and prior owners; a per-roster pitcher locking pre-acq starts now and not later doesn't materially change the accuracy dashboard's roster scope behavior.
+- The aggregates can be recomputed from already-emitted per-item detail. Per-start `proj` values in `per_start_details` let us subtract pre-acq contributions without re-running the full projection.
+- The orchestrator reorder would touch unrelated code (FA fetch ordering, etc.) and the risk of breaking something incidental is non-trivial.
+
+Reach for **reorder** when:
+- The consumer's side effects are *destructive* without the new context. Example: if `projection.py` were sending emails or charging credit cards based on the un-tagged data, post-hoc would be wrong.
+- The orchestrator is small enough that the reorder is contained.
+- The post-hoc recompute would need information that wasn't emitted (forcing an even uglier "expose internals" workaround).
+
+**Examples in the codebase:**
+- **PR #111 (session 26)** — chose post-hoc for the pre-acquisition tagging. Trade was: contained ~65-line addition vs. a top-of-orchestrator reorder that would have moved the FA fetch up and changed the actuals-fetch ordering. Cost paid: lock-skip in projection.py is forward-only deferred.
+- **PR #81 (session 19)** — also post-hoc for dropped streamers. Same pattern: the dropped-player branch built `dropped_intersected[name]` from a filtered `startDates`, then ran projection on the intersected data. Worked because dropped players were a *new* code path being added, not an existing computation that needed retrofitting.
+- **Pattern this rules out:** "wrap the consumer in an early-exit branch" is usually worse than both options. It muddies the consumer's contract and tends to leak the new context throughout the function. If the consumer needs the context, fix one of the two structural cases instead of plumbing flags.
+
+**Always log post-hoc adjustments visibly.** PR #111 prints `[espn.py] Pre-acquisition: <name> — tagged N start(s) (...)` for every affected player. Future regressions in the tagging logic surface in Vercel logs at deploy time — this is the cheap version of write-path observability for any post-hoc mutation.
 
 ### File architecture (refactored session 18)
 `Confidence: 10/10 · Last assessed: April 25, 2026`
