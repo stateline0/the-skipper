@@ -31,6 +31,10 @@ export interface StartDetail {
   wpSource?: string  // "vegas" | "pyth" | "default"
   wlContrib?: number // +1.2 — net FPTS from W/L adjustment
   proj: number       // 16.2
+  // Tagged true when a start happened before the pitcher was on our
+  // roster. The start is shown in the schedule grid for context but
+  // isn't counted toward Projected Starts / projFpts / Acts FPTS.
+  preAcquisition?: boolean
 }
 
 export interface ProjectionBreakdown {
@@ -146,6 +150,45 @@ export default function ProjectionTooltip({ children, breakdown, startDate }: Pr
   // ── Start mode: single start breakdown ──────────────────────────────
   if (startDate) {
     if (!startDetail) return <>{children}</>
+
+    // Pre-acquisition variant: a different body explaining that the
+    // start happened before this pitcher was on the user's roster.
+    // We still show the would-have-been projection for context.
+    if (startDetail.preAcquisition) {
+      return (
+        <div
+          ref={containerRef}
+          onMouseEnter={handleMouseEnter}
+          onMouseLeave={() => setShow(false)}
+          style={{ display: 'inline-block', cursor: 'help' }}
+        >
+          {children}
+          {show && portalTarget && createPortal(
+            <div style={{
+              ...tooltipBase,
+              top: coords.above ? undefined : coords.top,
+              bottom: coords.above ? `calc(100vh - ${coords.top}px)` : undefined,
+              left: coords.left,
+              transform: 'translateX(-50%)',
+              padding: '10px 12px',
+              minWidth: 200,
+              whiteSpace: 'normal',
+            }}>
+              <div style={{ fontSize: 11, fontWeight: 700, marginBottom: 6, color: '#e2e8f0', letterSpacing: '0.03em' }}>
+                Pre-acquisition · {startDetail.label}
+              </div>
+              <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.7)', lineHeight: 1.5 }}>
+                This start happened before you picked up this pitcher.
+                It&apos;s shown for context but isn&apos;t counted toward
+                your totals.
+              </div>
+              <Divider />
+              <Row label="Would have projected" value={`${startDetail.proj.toFixed(1)}`} dim />
+            </div>
+          , portalTarget)}
+        </div>
+      )
+    }
 
     return (
       <div

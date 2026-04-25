@@ -201,15 +201,21 @@ export default function MyTeam() {
       const actual = allStartingSPs.reduce((a: number, p: any) => {
         // Past starts: any date that's already happened (regardless of confirmed status —
         // a game that already played is by definition no longer "projected").
-        const pastStarts = (p.startDates || []).filter((s: any) => s.date <= today)
+        // Excludes pre-acquisition starts (dates before the pitcher was on the roster) —
+        // those are tagged by the backend and shown muted in the schedule grid for context
+        // but should not count toward Actual Starts.
+        const pastStarts = (p.startDates || []).filter(
+          (s: any) => s.date <= today && !s.preAcquisition
+        )
         return a + pastStarts.length
       }, 0)
       const projected = allStartingSPs.reduce((a: number, p: any) => {
         // All scheduled starts in the matchup window — past (already happened), future
         // MLB-confirmed probables, AND future ESPN-scoreboard projections (blue P). The
-        // backend already scopes startDates to the current matchup period and (for dropped
-        // players) to the rostered window, so every entry here counts. Matches the per-row
-        // `Starts` column which renders p.starts directly.
+        // backend already scopes startDates to the rostered window for both dropped
+        // streamers (PR #81) and currently-rostered pitchers (this PR). For the latter,
+        // the `starts` count was already adjusted server-side to exclude pre-acquisition
+        // entries, so summing p.starts naturally gives the correct projected total.
         return a + (p.starts || 0)
       }, 0)
 

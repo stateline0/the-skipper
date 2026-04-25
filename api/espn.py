@@ -411,6 +411,71 @@ def get_league_data(team_id: int, week: int) -> dict:
     fa_actual_fpts = {name: actual_fpts[name] for name in fa_pitcher_names if name in actual_fpts}
     roster_actual_fpts = {name: actual_fpts[name] for name in all_pitcher_names if name in actual_fpts}
 
+    # ── Roster-window intersection for currently-rostered pitchers ────
+    # Generalizes PR #81's `startDates ∩ days_on_team` logic (which
+    # previously only ran for *dropped* streamers) to currently-rostered
+    # pitchers. Mid-week pickups like a Wrobleski case (added today,
+    # whose Apr 20 @COL start happened before he was on the roster)
+    # were previously double-counting toward Projected Starts, Actual
+    # Starts, projFpts, and Acts FPTS.
+    #
+    # Approach: tag pre-acquisition starts with `preAcquisition: True`
+    # on the startDates entry rather than dropping them. The frontend
+    # uses the flag to render the cell in muted styling ("informative
+    # — what we missed") while excluding the start from totals.
+    #
+    # Note on locking: projection.py's per-start lock writes have
+    # already fired by this point, so any pre-acq start may have a
+    # `proj2:` lock value attributed to its current owner in KV. That
+    # interacts with the accuracy dashboard's roster scope and is
+    # handled as a separate follow-up — see BACKLOG.md.
+    today_iso = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    for player in roster_sps:
+        name = player["name"]
+        days_on_team_set = {
+            d for d, players in my_team_pitchers_by_day.items()
+            if name in players
+        }
+        if not days_on_team_set:
+            # Pitcher never appeared in any past day's mRoster within the
+            # window. Either he was added today (no past dates to filter)
+            # or the window has no past dates yet. Nothing to tag.
+            continue
+
+        pre_acq_dates = set()
+        for sd in player.get("startDates", []):
+            sd_date = sd.get("date", "")
+            if sd_date and sd_date <= today_iso and sd_date not in days_on_team_set:
+                sd["preAcquisition"] = True
+                pre_acq_dates.add(sd_date)
+
+        if not pre_acq_dates:
+            continue
+
+        # Effective starts count excludes pre-acquisition entries
+        player["starts"] = sum(
+            1 for sd in player.get("startDates", [])
+            if not sd.get("preAcquisition")
+        )
+
+        # Subtract pre-acquisition per-start projections from the total
+        # and propagate the flag onto per_start_details so the tooltip
+        # can render the pre-acquisition variant.
+        breakdown = proj_details_roster.get(name)
+        if breakdown:
+            pre_acq_proj_total = 0.0
+            for s in breakdown.get("starts", []):
+                if s.get("date") in pre_acq_dates:
+                    s["preAcquisition"] = True
+                    pre_acq_proj_total += s.get("proj", 0)
+            new_total = round(player["projFpts"] - pre_acq_proj_total, 1)
+            player["projFpts"] = new_total
+            breakdown["total"] = new_total
+
+        print(f"[espn.py] Pre-acquisition: {name} — tagged {len(pre_acq_dates)} "
+              f"start(s) ({sorted(pre_acq_dates)}); effective starts={player['starts']}, "
+              f"projFpts={player['projFpts']}")
+
     # ── Detect dropped players ────────────────────────────────────────
     dropped_players = []
     current_roster_names = set(p["name"] for p in roster_sps)
