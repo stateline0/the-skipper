@@ -10,6 +10,11 @@ import ProjectionTooltip, { ProjectionBreakdown } from './ProjectionTooltip'
 interface StartDate {
   date: string        // "2026-03-26"
   confirmed: boolean  // true = MLB confirmed, false = ESPN projected
+  // Tagged by the backend when a start happened before this pitcher
+  // was on the user's roster. The cell still renders (informative —
+  // shows what we missed) but in muted styling, and the start is
+  // excluded from row totals and aggregate tiles.
+  preAcquisition?: boolean
 }
 
 interface Pitcher {
@@ -158,6 +163,48 @@ function DayCell({ pitcher, date, schedule, today, actualFpts, benchDays, actual
 
   // Past or live game
   if (isPast || isToday) {
+    // Pre-acquisition variant: keep the cell content (informative —
+    // shows what we missed) but mute it visually and explain via
+    // tooltip that it isn't counted toward totals.
+    if (isStarting && startInfo.preAcquisition) {
+      const fpts = actualFpts?.[pitcher.name]?.[date]
+      const hasFpts = fpts !== undefined && fpts !== 0
+      const breakdown = projectionDetails?.[pitcher.name]
+      const startDetail = breakdown?.starts?.find((s: any) => s.date === date)
+      const displayProj = startDetail?.proj
+      const muted = 'var(--ink-3)'
+      return (
+        <ProjectionTooltip breakdown={breakdown} startDate={date}>
+          <div style={{ textAlign: 'center', cursor: 'help' }}>
+            <div style={{
+              fontSize: 11, fontFamily: 'var(--mono)', fontWeight: 600,
+              color: muted,
+              display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 3,
+            }}>
+              {oppLabel}
+              <span style={{ fontSize: 10, color: muted }}>—</span>
+            </div>
+            {hasFpts && (
+              <div style={{
+                fontSize: 10, fontFamily: 'var(--mono)', fontWeight: 500,
+                color: muted,
+                marginTop: 1,
+              }}>
+                ({fpts > 0 ? '+' : ''}{fpts.toFixed(1)})
+              </div>
+            )}
+            {!hasFpts && displayProj !== undefined && (
+              <div style={{
+                fontSize: 9, fontFamily: 'var(--mono)', color: muted, marginTop: 1,
+              }}>
+                (proj: {displayProj >= 0 ? '+' : ''}{displayProj.toFixed(1)})
+              </div>
+            )}
+          </div>
+        </ProjectionTooltip>
+      )
+    }
+
     if (isStarting) {
       const isLive = isToday && gameInfo.status === 'in_progress'
       const isFinal = gameInfo.status === 'final'
@@ -579,9 +626,19 @@ export default function ScheduleGrid({
                     : pitcher.starts}
                 </td>
 
-                {/* Actual FPTS total — only rendered when actualFpts prop is provided */}
+                {/* Actual FPTS total — only rendered when actualFpts prop is provided.
+                    Excludes any date tagged as a pre-acquisition start so mid-week
+                    pickups don't double-count their pre-roster starts in the row total. */}
                 {actualFpts && (() => {
-                  const total = Object.values(actualFpts[pitcher.name] || {}).reduce((a, b) => a + b, 0)
+                  const preAcqDates = new Set(
+                    (pitcher.startDates || [])
+                      .filter(s => s.preAcquisition)
+                      .map(s => s.date)
+                  )
+                  const total = Object.entries(actualFpts[pitcher.name] || {}).reduce(
+                    (a, [d, v]) => a + (preAcqDates.has(d) ? 0 : v),
+                    0
+                  )
                   return (
                     <td style={{
                       ...cellStyle,
