@@ -428,12 +428,13 @@ proj:{season}:{period}:{player-slug}:{date} → float
 Example: proj:2026:3:garrett-crochet:2026-04-07 → 17.6
 Data caching (TTL-based):
 cache:savant:{year}             → JSON dict of expected stats by pitcher name
-cache:mlb-stats:{year}          → JSON dict of season pitching stats by pitcher name
-cache:game-logs:{year}          → JSON dict of per-game pitching stats by pitcher name
+cache:mlb-stats:{year}          → JSON dict of season pitching stats by pitcher name (force-refreshed at start of every cron run since session 25)
+cache:game-logs:{year}          → JSON dict of per-game pitching stats by pitcher name (force-refreshed at start of every cron run since session 25)
 cache:team-woba:{year}          → JSON dict of BLENDED team wOBA factors (65% season + 35% last-14-day)
 cache:team-win-data:{year}      → JSON dict of team RS/RA/ERA for Pythagorean model
 cache:weather:{park}:{date}     → JSON dict of weather factor + temp/wind (3hr TTL)
 cache:daily:{date}              → JSON dict {fpts, saves, bench, my_team} for all league pitchers
+cache:cron-summary:{date}       → JSON dict — full result of the day's cron run (60-day TTL). Written by handler regardless of MLB/ESPN lock outcome. Includes gameLogStats with per-outcome counters (with_data/empty/http_errors/exceptions). Use this as the post-hoc debugger when Vercel's 1hr log retention has rolled past.
 Cache TTL strategy
 Key patternTTLRationalecache:savant:2025PermanentLast year's data is finalcache:savant:202624 hoursUpdates daily during seasoncache:mlb-stats:2025PermanentLast year's data is finalcache:mlb-stats:202624 hoursUpdates daily during seasoncache:game-logs:202624 hoursNew games happen dailycache:team-woba:202624 hoursStores blended season+recent factor; recent window shifts dailycache:team-win-data:202624 hoursPythagorean model data updates dailycache:weather:{park}:{date}3 hoursForecasts update throughout day as game time approachescache:daily:2026-04-06PermanentCompleted day's stats never changecache:daily:{today}Never cachedGames may be in progressproj:*PermanentWrite-once, never overwritten (NX flag)proj2:*PermanentV2 rich projection locks (roster pitchers)proj2all:*PermanentV2 projection locks (all MLB starters, from cron)actual-all:*PermanentAll-MLB actuals from game logs (from cron)
 Performance impact
@@ -690,49 +691,64 @@ Everything NOT in the negative-lookahead list is protected. To add a new public 
 **Endpoints requiring auth-by-handler rather than middleware exemption:** routes that need a session BUT also need to skip the middleware's `/login` redirect (none today — all protected routes happily use the default middleware behavior).
 
 ### Silent API failures: defensive pattern
-`Confidence: 10/10 · Last assessed: April 19, 2026`
+`Confidence: 10/10 · Last assessed: April 25, 2026`
 
 Some upstream APIs return 200 OK with an empty payload instead of erroring when a request shape they don't support is sent. The MLB Stats API bulk game-logs endpoint is the canonical example (see "Game logs (per-game stats)" above). These are the worst kind of failures because they look indistinguishable from "no data exists" — production runs green, KV gets written with zero entries, and the bug compounds quietly until something downstream notices the gap.
 
-**Defenses we now use, after session 24's diagnostic burn:**
+**Defenses we now use, after sessions 24 and 25's diagnostic burns:**
 
 1. **Floor checks on bulk fetches.** Any call expected to return ≥ N rows in normal operation should log `len(result)` and warn (or fail loudly in cron) when below floor. E.g., an all-pitcher game-log pull in mid-season should never legitimately return 0 splits.
-2. **Per-write counters surfaced to KV.** Cron handlers write a `cache:cron-summary:{date}` blob with `{locked_new, locked_skipped_existing, skipped_unconfirmed, …}` so the after-the-fact debugger has something to inspect even if Vercel logs have rolled off (Hobby tier = 1hr retention).
-3. **SETNX / write-once locking** for projection keys (`proj2:`, `proj2all:`, `projection-espn:`) — prevents a silent-failure rerun from overwriting good data with empty data.
-4. **Prefer per-entity calls when bulk is suspect.** For game logs we now fan out per-player via `ThreadPoolExecutor`; the pattern is more expensive but failures isolate to one player rather than nuking the whole pull.
+2. **Per-outcome counters with granularity.** Single "errors" counters obscure silent-failure modes. `fetch_game_logs` (post-PR #108) splits each per-player call into `with_data` / `empty` / `http_errors` / `exceptions` because the 200-OK-but-empty case is the silent-failure mode and looks identical to "errors=0" otherwise. A spike in `empty` is the diagnostic signature of an upstream regression.
+3. **Per-write counters surfaced to KV.** Cron handlers write a `cache:cron-summary:{date}` blob (60-day TTL) with the full result of the run including granular counters so the after-the-fact debugger has something to inspect even if Vercel logs have rolled off (Hobby tier = 1hr retention). The handler writes this blob unconditionally and inside try/except — write failure on the summary must NEVER break the cron's HTTP response.
+4. **SETNX / write-once locking** for projection keys (`proj2:`, `proj2all:`, `projection-espn:`) — prevents a silent-failure rerun from overwriting good data with empty data.
+5. **Floor checks on the writer, not just the reader.** SETNX is a footgun without a write-side floor: if a partial fetch produces a small dict, the writer happily writes it and NX then permanently locks the bad data. `api/cron.py` `ACTUALS_FLOOR = 4` (PR #108) skips writes for any date whose dict has fewer than 4 entries — regular-season MLB days reliably have 10+ starts, so anything below 4 is almost certainly partial. This is the missing piece between "detect the failure" (counter granularity) and "tolerate the failure" (don't lock in bad data; let the next run try again with a complete dataset).
+6. **Force-refresh caches feeding write-once paths.** A 24h cache TTL aligned with a 24h cron schedule creates a race where stale or partial data from one cron run can be reused by the next, and any partial write becomes permanent via NX (see #5). PR #108 adds `_redis.delete()` of `cache:mlb-stats:{year}` and `cache:game-logs:{year}` at the top of every cron run. Cost: ~3-5 seconds of per-player API fan-out. Benefit: staleness is no longer a risk vector for the actuals path. Other caches (savant, team-woba, team-win-data) are NOT force-refreshed since they don't feed write-once data.
+7. **Prefer per-entity calls when bulk is suspect.** For game logs we fan out per-player via `ThreadPoolExecutor`; the pattern is more expensive but failures isolate to one player rather than nuking the whole pull.
 
 ### File architecture (refactored session 18)
-`Confidence: 10/10 · Last assessed: April 18, 2026`
+`Confidence: 10/10 · Last assessed: April 25, 2026`
 
 | File | Lines | Responsibility |
 |---|---|---|
 | `api/espn.py` | ~504 | Orchestrator: `get_league_data()` + HTTP handler |
 | `api/projection.py` | ~415 | Projection model: Savant hybrid, year blend, recent form, matchup adjustments, W/L scaling, locking |
-| `api/fetcher.py` | ~457 | ESPN data fetching, auth, pro team map, actual FPTS, cached data loading |
-| `api/mlb.py` | ~939 | MLB probables, schedule, wOBA (season + recent + blended), park factors, Pythagorean model, game logs |
+| `api/fetcher.py` | ~470 | ESPN data fetching, auth, pro team map, actual FPTS, cached data loading (load_cached_data unpacks fetch_game_logs tuple as of session 25) |
+| `api/mlb.py` | ~1035 | MLB probables, schedule, wOBA (season + recent + blended), park factors, Pythagorean model, game logs (returns (data, stats) tuple as of session 25) |
 | `api/savant.py` | ~255 | Baseball Savant CSV data fetching |
 | `api/weather.py` | ~315 | Open-Meteo client + park coords + temperature factor + diagnostic endpoint |
 | `api/kv.py` | ~255 | Upstash Redis helpers for projection locking and caching |
 | `api/accuracy.py` | ~322 | Accuracy tracking endpoint (roster + all-MLB scopes) |
-| `api/cron.py` | ~414 | Daily cron: lock all-MLB projections + store actuals |
+| `api/cron.py` | ~490 | Daily cron: lock all-MLB projections + store actuals + cron-summary write (session 25 hardened) |
 | `api/config.py` | ~73 | Matchup period table + current period lookup |
 | `api/analyze.py` | ~100 | Claude AI analysis endpoint |
 
 ### Daily cron job
-`Confidence: 8/10 · Last assessed: April 12, 2026`
+`Confidence: 9/10 · Last assessed: April 25, 2026`
 
 `/api/cron` runs daily at noon CT (17:00 UTC) via Vercel Cron (`vercel.json` → `crons` config).
 Secured with `CRON_SECRET` env var — Vercel sends it automatically as `Authorization: Bearer {secret}`.
 
-What it does:
-1. Fetches all probable starters for today from ESPN scoreboard + MLB Stats API
-2. Loads cached model data (Savant, MLB Stats, game logs)
-3. Runs projection model for every probable starter (~60 per day)
-4. Locks projections to `proj2all:{season}:{period}:{slug}:{date}` KV keys (NX flag)
-5. Computes actual FPTS from game logs for completed past dates
-6. Stores actuals under `actual-all:{date}` KV keys
+What it does (post-PR #108):
+1. **Force-invalidates `cache:mlb-stats:{year}` and `cache:game-logs:{year}`** so the run starts on guaranteed-fresh data. Other caches (savant, team-woba, team-win-data) are kept since their data changes more slowly and they don't feed write-once paths.
+2. Fetches all probable starters for today from ESPN scoreboard + MLB Stats API
+3. Loads cached model data (Savant, MLB Stats, game logs) — the two invalidated caches refill via fresh fetches inside `load_cached_data()`
+4. Runs projection model for every probable starter (~60 per day)
+5. Locks projections to `proj2all:{season}:{period}:{slug}:{date}` KV keys (NX flag) — matchup sub-dict includes `opponent`, `isHome`, `winProb`, `wpSource` (PR #109 added the first two)
+6. Computes actual FPTS from game logs for completed past dates
+7. **Floor check (`ACTUALS_FLOOR = 4`)** before each `actual-all:{date}` NX-write — skips dates with fewer than 4 entries, on the heuristic that regular-season MLB days reliably have 10+ starts. Prevents partial fetches from being NX-locked permanently.
+8. Stores actuals under `actual-all:{date}` KV keys
+9. Locks today's ESPN Forecaster projections under `projection-espn:{year}:{period}:{slug}:{date}` (60-day TTL)
+10. **Writes `cache:cron-summary:{date}`** with the full result blob (60-day TTL) including `gameLogStats`, `actualsStored`, `actualsSkippedPartial`, `actualsDatesEligible`, `totalGameRows`, etc. Persists past Vercel's 1hr log retention.
 
-Hobby plan limit: 2 cron jobs, each triggered once per day.
+Hobby plan limit: 2 cron jobs, each triggered once per day. We use 1.
+
+**Manual trigger (when debugging):**
+```
+curl -i "https://the-skipper-iota.vercel.app/api/cron" \
+  -H "Authorization: Bearer $CRON_SECRET"
+```
+
+**Reading the response:** `gameLogStats: {requested, with_data, empty, http_errors, exceptions}` is the new health-check surface. A clean run is `requested == with_data` with `empty == 0`. A spike in `empty` is the silent-failure mode session 25 chased — that's the diagnostic signature of an upstream `fetch_game_logs` regression.
 
 ### Known ESPN API gaps
 `Confidence: 7/10 · Last assessed: April 12, 2026`

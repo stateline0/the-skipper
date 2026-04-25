@@ -1,12 +1,29 @@
 # The Skipper — Backlog
 
-Last updated: April 19, 2026 (session 24)
+Last updated: April 25, 2026 (session 25)
 
 ---
 
 ## 🔜 Next session priorities
 
+### Roster-window bug for mid-week pickups
+Scoped + diagnosed in session 25 around the Wrobleski case (added mid-week, his pre-acquisition Apr 20 @COL start was double-counting toward Projected Starts and Acts FPTS):
+- [ ] Generalize PR #81's `startDates ∩ days_on_team` intersection so it applies to all currently-rostered players — PR #81 only handled dropped streamers
+- [ ] Affected per-player fields: `starts`, `projFpts`, `actFpts`. Affected aggregate tiles: Projected Starts (13/12 → 12/12 for the Wrobleski example), Actual Starts. Verify Acts FPTS aggregate too
+- [ ] Schedule grid visual: keep the cell content for pre-acquisition starts (informative — what we missed) but mute the FPTS color, drop the green ✓, add tooltip "Pre-acquisition — not counted toward your totals"
+- [ ] Touches: `api/fetcher.py` (compute `days_on_team` for currently-rostered players, not just dropped), `api/projection.py` (apply intersection universally), schedule grid component
+
+### Stats view tab on My Team / Free Agents
+Pitcher-first feature designed in session 25:
+- [ ] Tab toggle on each existing page (Schedule view ↔ Stats view); same data fetch, different lens — design choice was tabs over a separate sidebar entry
+- [ ] Columns: % rostership (from ESPN `kona_player_info.percentOwned`), FPTS/game, season counters (W/L, ERA, K/9, BB/9), Savant-derived expecteds (xERA, xwOBA, woba_diff, Barrel%, Whiff%)
+- [ ] Luck indicator badge (3-state: Trending up / On pace / Trending down) computed from `fpts_per_start_actual` vs `fpts_per_start_expected` delta — show the underlying deltas in a tooltip rather than a continuous-scale number
+- [ ] Projected season pace FPTS — `actual_fpts_to_date + expected_fpts_per_start × estimated_remaining_starts`. Pace is a comparator, not a prediction
+- [ ] Column system data-driven from a config array per role so a future hitter expansion is cheap; `PITCHER_COLUMNS` const for v1
+- [ ] Source data already cached: `cache:savant`, `cache:mlb-stats`, `cache:game-logs` — only `% rostership` requires extending the existing `kona_player_info` extraction (already called for free-agent projections)
+
 ### Weekly planner / decision automation MVP
+The big-picture feature still on the roadmap but not next-up:
 - [ ] AI-powered weekly optimization: recommend add/drop sequence and start/sit decisions
 - [ ] Teach Anthropic API about ESPN transaction rules (daily locks, waiver priority)
 - [ ] Hybrid mode: AI suggests plan, user picks A/B for key decisions, AI outputs full sequence
@@ -15,6 +32,9 @@ Last updated: April 19, 2026 (session 24)
 ### Model Improvements
 - [ ] Weather impact — Phase 3: wind direction model (add `PARK_OUTFIELD_BEARING` per park, compute out-to-outfield wind component, combine with temp into single weather multiplier)
 - [ ] ProjectionTooltip: split opponent wOBA display into season + last-14-day components (currently shows only the blended factor; show `seasonFactor`, `recentFactor`, and `blendedFactor` with weights)
+
+### Display polish (low priority)
+- [ ] Title-case edge cases on accuracy page: store original `fullName` (case + accents preserved) in `mlb_stats_current` and `actual-all:` entries so the dashboard renders "Lance McCullers Jr." (not "Mccullers"), "Eury Pérez" (not "Perez"), "JT Brubaker" (not "Jt"). PR #109's `\b\w` regex client-side `titleCase()` is the v1 fallback; proper fix is server-side preservation of original case + accents
 
 ---
 
@@ -59,6 +79,13 @@ Last updated: April 19, 2026 (session 24)
 - [ ] `vercel dev` does not serve Python API routes locally (Vercel CLI v50+ known issue)
 
 ---
+
+## ✅ Completed (session 25 — April 25, 2026)
+- [x] **PR #108 — Cron actuals silent-failure hardening.** Long diagnostic detour traced an accuracy-dashboard data gap (Apr 23 showing 2 entries vs ~15 expected) to yesterday's cron run partially failing in `fetch_game_logs` — most per-player MLB Stats API calls returned HTTP 200 with empty splits, the `if games:` filter silently dropped them, the actuals block wrote a 380-byte 2-pitcher blob, and NX-write-once on `actual-all:2026-04-23` permanently locked it in. Three-layer fix: (1) `api/mlb.py` `fetch_game_logs` now returns `(data, stats)` where stats distinguishes 4 outcomes — `with_data`, `empty` (the silent-failure mode that was previously invisible), `http_errors`, `exceptions`. (2) `api/cron.py` invalidates `cache:mlb-stats:{year}` and `cache:game-logs:{year}` at the top of `lock_all_mlb_projections` to break the 24h-TTL/24h-cron race that was reusing stale partial data. (3) `ACTUALS_FLOOR = 4` skips NX-writes for any date with fewer than 4 entries — regular-season MLB days reliably have 10+ starts, so anything below 4 is almost certainly partial. Cron handler also now writes `cache:cron-summary:{date}` with 60-day TTL so post-hoc debugging survives Vercel Hobby's 1hr log retention. Verified in production: `gameLogStats: {requested: 519, with_data: 519, empty: 0, http_errors: 0, exceptions: 0}` — picture-perfect.
+- [x] **PR #109 — Accuracy page display polish: lowercase names + missing matchup column.** Two bugs visible on the All MLB scope: player names rendered lowercase (`cade cavalli`) because they came from `actual-all:` keys which are accent-stripped and lowercased per session 24's slug normalization, and every row's matchup column showed `@?` because the `proj2all:` lock value's matchup sub-dict only stored `winProb` and `wpSource` (the projection.py path for `proj2:` already wrote `opponent`/`isHome`, but the cron path didn't). Fixes: `api/cron.py` matchup sub-dict gains `opponent` and `isHome` (now mirrors `projection.py`'s shape). `pages/accuracy.tsx` adds a `titleCase()` helper using `\b\w` regex applied to `s.player` rendering — idempotent for already-cased names so safe to apply universally regardless of scope. Forward-only on matchup: legacy `proj2all:` keys still show `@?` until they cycle out of the rolling window; new locks from the next 17:00 UTC cron onward populate correctly. Known imperfections logged to backlog: internal capitals (Mccullers/Degrom/Dejong) and 2-letter all-caps initials (Jt/Aj) — proper fix needs server-side `fullName` preservation.
+- [x] **Diagnostic infrastructure pattern formalized.** `cache:cron-summary:{date}` joins the existing diagnostic surfaces in KV (`cache:daily:`, `proj2all:`, `actual-all:`, `projection-espn:`). Counter granularity in `gameLogStats` (with_data / empty / http_errors / exceptions split out) makes silent-failure modes spike visible in JSON without needing log retention. The "use KV as the debugger" pattern from session 24 is now a routine practice for any once-a-day cron-style write path.
+- [x] **Decision: 24h cron cadence stays.** Discussed splitting projections (~9am CT for ESPN-confirmed probables) and actuals (~3am CT, after Pacific games end) into two cron jobs to use Hobby's 2-cron limit. Outcome: deferred. The win is small (slightly fresher actuals), the cost is real (refactor cron handler to accept a mode, update vercel.json), and the brittleness was the actual problem, not the schedule. After PR #108's hardening the case for splitting becomes purely UX-driven and can be revisited when there's a clearer reason.
+- [x] **Workflow lesson reinforced: sandbox git operations are off-limits, even read-only.** Running `git status` / `git diff` from the sandbox left a `.git/index.lock` that blocked the user's terminal. Session 24's "Claude edits files; Conner drives git" rule extends to inspection commands, not just writes. Local validation in the sandbox is now restricted to `python3 ast.parse` and similar non-VCS-touching commands.
 
 ## ✅ Completed (session 24 — April 19, 2026)
 - [x] **PR E — Accuracy page redesign: all-time aggregation + FA-leak fix** (PR #104). `api/accuracy.py` removed the matchup-period dropdown — endpoint now iterates all locked `proj2:` and `actual-all:` keys across the full season instead of a single period. My-Roster scope: pulls the current roster via `get_my_team_pitchers()` and filters projection keys to roster-slug matches, so FA projections no longer leak into the roster view. `pages/accuracy.tsx` dropped the period selector and updated copy to reflect all-time scope. Shipped alongside a UI tightening pass on the summary tiles.
