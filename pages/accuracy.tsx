@@ -80,6 +80,19 @@ function formatDate(dateStr: string): string {
   return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
 }
 
+// Capitalize the first character after every word boundary so "cade cavalli"
+// renders as "Cade Cavalli" and "hyun-jin ryu" as "Hyun-Jin Ryu". Idempotent
+// for already-proper-cased names ("Garrett Crochet" → "Garrett Crochet") so
+// it's safe to apply unconditionally regardless of which scope produced the
+// name. The `\b\w` regex matches the start of any word, including across
+// hyphens, periods, and apostrophes — covering hyphenated names and the
+// common "O'Neill" / "J.T." patterns. Imperfect for two-letter all-caps
+// initials ("JT Brubaker" → "Jt Brubaker"), which is acceptable for v1.
+function titleCase(name: string): string {
+  if (!name) return name
+  return name.replace(/\b\w/g, c => c.toUpperCase())
+}
+
 function errorColor(error: number, invert = false): string {
   const val = invert ? -error : error
   if (Math.abs(val) < 0.5) return 'var(--ink-3)'
@@ -368,7 +381,7 @@ export default function AccuracyPage() {
                             background: isExpanded ? 'var(--paper-2)' : i % 2 === 0 ? 'transparent' : 'var(--paper-2)',
                           }}
                         >
-                          <td style={tdStyle}>{s.player}</td>
+                          <td style={tdStyle}>{titleCase(s.player)}</td>
                           <td style={tdStyle}>{formatDate(s.date)}</td>
                           <td style={tdStyle}>{location} {s.matchup.opponent || '?'}</td>
                           <td style={{ ...tdStyle, textAlign: 'right' }}>{s.projFpts.toFixed(1)}</td>
