@@ -1,17 +1,18 @@
 # The Skipper — Backlog
 
-Last updated: April 25, 2026 (session 25)
+Last updated: April 25, 2026 (session 26)
 
 ---
 
 ## 🔜 Next session priorities
 
-### Roster-window bug for mid-week pickups
-Scoped + diagnosed in session 25 around the Wrobleski case (added mid-week, his pre-acquisition Apr 20 @COL start was double-counting toward Projected Starts and Acts FPTS):
-- [ ] Generalize PR #81's `startDates ∩ days_on_team` intersection so it applies to all currently-rostered players — PR #81 only handled dropped streamers
-- [ ] Affected per-player fields: `starts`, `projFpts`, `actFpts`. Affected aggregate tiles: Projected Starts (13/12 → 12/12 for the Wrobleski example), Actual Starts. Verify Acts FPTS aggregate too
-- [ ] Schedule grid visual: keep the cell content for pre-acquisition starts (informative — what we missed) but mute the FPTS color, drop the green ✓, add tooltip "Pre-acquisition — not counted toward your totals"
-- [ ] Touches: `api/fetcher.py` (compute `days_on_team` for currently-rostered players, not just dropped), `api/projection.py` (apply intersection universally), schedule grid component
+### Refresh `starts_map` after the transaction-lag refetch (Montero case)
+Diagnosed in session 26 but not fixed. In production right now: any pitcher added mid-day during a locked scoring period renders with `starts=0`, `projFpts=0.0`, and all-gray cells in the schedule grid until the next day's data load. Free Agents view shows their starts correctly because that surface uses an independent `fa_starts_map` fetch.
+- [ ] Inside the existing `if today_has_started(schedule):` branch in `api/espn.py`, after the refetch succeeds and `roster_entries` is reassigned: re-extract `all_player_names` and `roster_team_map` from the refreshed entries
+- [ ] Re-call `get_starts_for_players(all_player_names, week, team_map=roster_team_map)` to rebuild `starts_map`. Schedule from this call can be discarded — the original `schedule` is still authoritative
+- [ ] One extra MLB Stats API call only on the codepath where the lag fix actually fires (typically afternoon onward in CT)
+- [ ] Verify post-deploy by adding a player mid-day during the locked period; confirm their next-day start shows up with green ✓ and a per-start projection
+- [ ] Bug existed since session 18 PR #73 — small, contained surface (one branch, one file)
 
 ### Stats view tab on My Team / Free Agents
 Pitcher-first feature designed in session 25:
@@ -32,6 +33,12 @@ The big-picture feature still on the roadmap but not next-up:
 ### Model Improvements
 - [ ] Weather impact — Phase 3: wind direction model (add `PARK_OUTFIELD_BEARING` per park, compute out-to-outfield wind component, combine with temp into single weather multiplier)
 - [ ] ProjectionTooltip: split opponent wOBA display into season + last-14-day components (currently shows only the blended factor; show `seasonFactor`, `recentFactor`, and `blendedFactor` with weights)
+
+### Pre-acquisition follow-ups (deferred from session 26 PR #111)
+PR #111 fixed the user-visible aggregates for mid-week pickups but deliberately punted on three downstream concerns. None are user-blocking; all are forward-only fixes that get cleaner the longer they sit.
+- [ ] **`projection.py` lock-skip for pre-acquisition starts.** PR #111 tags `preAcquisition` post-hoc in `espn.py` after `get_projected_fpts` has already run, so per-start `proj2:` locks may be written for starts the user never benefited from. Forward-fix requires moving the actuals fetch above projection (so tagging precedes locking) — a substantial reorder of `get_league_data`. Practical impact today is low because most pre-acq starts already have `proj2:` locks from the cron all-MLB path or from prior owners' roster fetches.
+- [ ] **Accuracy dashboard "My Roster" scope filter for pre-acq starts.** Even after the lock-skip above, legacy `proj2:` locks from before pre-acq tagging existed will still match the current owner's roster slug and surface in the accuracy view. Symmetric fix to PR #104's FA-leak filter: drop matched starts where the matched date falls outside the rostered window (use the same `my_team_by_date` index already in scope).
+- [ ] **Dropped player post-drop `actualFpts` pruning.** PR #81 intersected dropped streamers' `startDates` with `days_on_team`, but their per-row Act FPTS still sums the unfiltered `info["player_fpts"]` blob — so a dropped pitcher's relief appearance after the drop date silently inflates the row total. Same bug shape as the rostered-window issue PR #111 fixed; fix is the same intersection applied to `info["player_fpts"]` in the dropped-player branch of `espn.py`.
 
 ### Display polish (low priority)
 - [ ] Title-case edge cases on accuracy page: store original `fullName` (case + accents preserved) in `mlb_stats_current` and `actual-all:` entries so the dashboard renders "Lance McCullers Jr." (not "Mccullers"), "Eury Pérez" (not "Perez"), "JT Brubaker" (not "Jt"). PR #109's `\b\w` regex client-side `titleCase()` is the v1 fallback; proper fix is server-side preservation of original case + accents
@@ -74,11 +81,17 @@ The big-picture feature still on the roadmap but not next-up:
 
 ## 🐛 Known bugs
 
+- [ ] **Pitcher added mid-day during a locked period renders empty in My Team** — derived structures (`starts_map`, `roster_team_map`, `all_player_names`) aren't refreshed after the transaction-lag refetch. Symptom: row appears in the table but `starts=0`, `projFpts=0.0`, every cell gray. Free Agents view unaffected. Fix scoped under "Next session priorities" → "Refresh `starts_map` after the transaction-lag refetch."
 - [ ] Suspended players (SSPD) not appearing in roster — Reynaldo Lopez added but missing from mRoster response. Likely ESPN uses different eligibleSlots or lineupSlotId for suspended players.
 - [ ] Free agent actual FPTS only available for players who were rostered at time of start — ESPN API limitation (affects accuracy dashboard too)
 - [ ] `vercel dev` does not serve Python API routes locally (Vercel CLI v50+ known issue)
 
 ---
+
+## ✅ Completed (session 26 — April 25, 2026)
+- [x] **PR #111 — Roster-window bug for mid-week pickups (Wrobleski case).** Generalizes PR #81's `startDates ∩ days_on_team` intersection from dropped streamers to all currently-rostered pitchers. Mid-week pickups whose `startDates` included pre-roster dates were inflating Projected Starts (13/12 → 12/12 once corrected), Actual Starts, per-row `projFpts`, and the per-row Act FPTS column. Approach is "tag, don't drop": pre-acquisition starts stay in the data flow with a `preAcquisition: true` flag so the schedule grid can render them in muted styling (gray opp label, em-dash instead of ✓, gray FPTS, opaque `ProjectionTooltip` variant explaining "this start happened before you picked up this pitcher"). Backend tagging is post-hoc in `api/espn.py` after `my_team_pitchers_by_day` is populated, then recomputes effective `starts` count and subtracts pre-acq per-start projections from `projFpts` and `breakdown.total`. Frontend Act FPTS row total filters out pre-acq dates via the `startDates` flag; `pages/my-team.tsx` `actual` aggregate filters too. JSON shape stays backward-compatible (`preAcquisition` only present when true). Three downstream concerns deliberately deferred to backlog (lock-skip in projection.py, accuracy roster scope filter, dropped-player Act FPTS symmetry).
+- [x] **Workflow lesson reinforced: deferred concerns belong in BACKLOG, not in the PR.** PR #111 had three obvious-once-you-look-at-them follow-ups (lock-skip, accuracy filter, dropped-player Act FPTS). Rather than scope-creep PR #111 into a lock-path refactor, all three were captured as backlog items with a one-line "why this is forward-only safe to defer" rationale each. The rule that crystallized: when scope creep tempts, ask "does the user lose anything visible if we ship without this?" — if no, defer with explicit notes; if yes, expand the PR.
+- [x] **Diagnosed but not fixed: transaction-lag refetch leaves `starts_map` stale (Montero case).** Surfaced after PR #111 deployed when Conner added Keider Montero mid-day during the locked scoring period. Symptom: Montero appeared in roster_sps but his @CIN start tomorrow rendered with no green ✓ and the row showed `starts=0`, `projFpts=0.0`. Diagnosis: the existing transaction-lag block in `api/espn.py` (lines 154-181, from session 18 PR #73) updates `roster_entries` from the next-period mRoster but does NOT refresh `all_player_names`, `roster_team_map`, or `starts_map` — those were computed from the first fetch's player list, which doesn't include same-day pickups added during the locked window. Newly-added pitchers fall through `starts_map.get(name, {})` to the empty default. Bug has existed since session 18 PR #73; only surfaced now because Conner happened to add a player during the narrow locked-period window. Logged below as a known bug; fix promoted to next session priorities.
 
 ## ✅ Completed (session 25 — April 25, 2026)
 - [x] **PR #108 — Cron actuals silent-failure hardening.** Long diagnostic detour traced an accuracy-dashboard data gap (Apr 23 showing 2 entries vs ~15 expected) to yesterday's cron run partially failing in `fetch_game_logs` — most per-player MLB Stats API calls returned HTTP 200 with empty splits, the `if games:` filter silently dropped them, the actuals block wrote a 380-byte 2-pitcher blob, and NX-write-once on `actual-all:2026-04-23` permanently locked it in. Three-layer fix: (1) `api/mlb.py` `fetch_game_logs` now returns `(data, stats)` where stats distinguishes 4 outcomes — `with_data`, `empty` (the silent-failure mode that was previously invisible), `http_errors`, `exceptions`. (2) `api/cron.py` invalidates `cache:mlb-stats:{year}` and `cache:game-logs:{year}` at the top of `lock_all_mlb_projections` to break the 24h-TTL/24h-cron race that was reusing stale partial data. (3) `ACTUALS_FLOOR = 4` skips NX-writes for any date with fewer than 4 entries — regular-season MLB days reliably have 10+ starts, so anything below 4 is almost certainly partial. Cron handler also now writes `cache:cron-summary:{date}` with 60-day TTL so post-hoc debugging survives Vercel Hobby's 1hr log retention. Verified in production: `gameLogStats: {requested: 519, with_data: 519, empty: 0, http_errors: 0, exceptions: 0}` — picture-perfect.
