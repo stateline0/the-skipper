@@ -14,7 +14,7 @@ import os
 import requests
 import unicodedata
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from kv import cache_get, cache_set
 
@@ -104,16 +104,29 @@ def date_to_scoring_period(date_str: str) -> int:
     return (d - SEASON_START).days + 1
 
 
-def today_has_started(schedule: dict) -> bool:
+def period_has_started(schedule: dict, period: int) -> bool:
     """
-    Returns True if any MLB game today is in_progress or final.
-    Used to detect whether ESPN has locked today's roster scoring period.
+    Returns True if any MLB game on the date corresponding to `period` is
+    in_progress or final. ESPN locks a scoring period's roster once any
+    of its games starts; same-day transactions made after that lock are
+    reflected in `period + 1` (the next period).
+
+    Replaces an earlier `today_has_started(schedule)` helper which keyed
+    off UTC today. That was off-by-one whenever UTC had crossed midnight
+    while ESPN's scoring-period boundary (which tracks ET, not UTC) had
+    not — causing the lag-fix branch in api/espn.py to silently skip
+    when an add happened in the user's evening. The Montero case
+    (April 25 evening CT, request fired after UTC midnight on April 26):
+    UTC today was already 4/26, no 4/26 games had started yet, so the
+    old check returned False even though period 32 (4/25) was very much
+    locked. Keying off the period ESPN just returned removes the
+    timezone dependency entirely.
     """
-    today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    today_games = schedule.get(today_str, {})
+    period_date = (SEASON_START + timedelta(days=period - 1)).strftime("%Y-%m-%d")
+    period_games = schedule.get(period_date, {})
     return any(
         g.get("status") in ("in_progress", "final")
-        for g in today_games.values()
+        for g in period_games.values()
     )
 
 
