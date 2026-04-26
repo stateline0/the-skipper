@@ -2,6 +2,72 @@
 
 ---
 
+## Session 27 — April 25, 2026
+
+A three-PR session that started with the top-priority backlog item from session 26 (the Montero `starts_map` rebuild) and ended with the rostered-window invariant fully closed across four PRs spanning sessions 19, 26, and 27. Each PR's verification in production surfaced the next bug, which is why what could have been a single ~10-line fix turned into a three-PR cascade. PR #113 shipped the rebuild, then verification revealed Montero was actually landing in `droppedPlayers` because the lag-fix trigger silently skipped during evening usage (UTC-vs-ET drift). PR #114 fixed the trigger. PR #115 closed the third of the three follow-ups from PR #111 (dropped-player Act FPTS pruning), completing the symmetric closure of the rostered-window invariant. Docs sweep at the end articulated the invariant as a new architecture pattern in KNOWLEDGE.md.
+
+### Key learnings this session
+
+- **Verification at the user-action layer surfaces the next bug class.** Pre-deploy theorycraft cannot. PR #113's diff was internally correct — the rebuild logic did exactly what BACKLOG specified. The deeper bug (PR #114) only surfaced because Conner reloaded My Team in production after the deploy and Montero rendered in the EX section instead of the SP rows. There is no test, no review, no static analysis that would have caught this — the trigger was independently reasonable, the rebuild was independently reasonable, and the interaction failure required a real evening-usage timestamp to manifest. Build verification checklists tightly around what the PR changed; let the next user action surface the rest.
+- **UTC is correct for instants; wrong for "what game day is it?"** The bug in PR #114 came from `datetime.now(timezone.utc)` being used as a semantic "today" rather than a wall-clock instant. ESPN's scoring-period day boundary tracks ET (specifically, when MLB games conclude), not UTC. Any time UTC has crossed midnight but ET hasn't, code that asks "is today's game day's data locked?" using UTC today is asking about *tomorrow's* games. The fix sidesteps the timezone-of-the-day question entirely by keying off the scoring period ESPN itself returned — let the data source tell you which day it is. This pattern (let-them-tell-you) is almost always the right move when a data source has a canonical day concept.
+- **Pattern enforcement is more durable than individual fixes.** The rostered-window invariant ("any per-pitcher value the user sees must be scoped to dates that pitcher was actually rostered") is now enforced in four places: PR #81 (dropped streamers' startDates), PR #111 (currently-rostered pitchers' startDates via preAcquisition tagging), PR #114 (the trigger that gets newly-added pitchers to the right code path), PR #115 (dropped streamers' player_fpts). Articulating the invariant in KNOWLEDGE.md gives the next person who touches an aggregation in `api/espn.py` a checklist to run against, instead of having to rediscover the pattern by introducing the fifth violation.
+- **Two interacting bugs can mask each other indefinitely.** PR #113's rebuild logic was written without firing — its absence wasn't visible because PR #114's trigger bug was preventing the lag-fix branch from running at all in evening usage. Without #113, even a correctly-firing branch would produce empty rows. Without #114, #113 never runs for evening adds. The Montero verification crossed the right time-of-day threshold to surface both. Worth remembering: a "diagnosed bug fix verified in production" doesn't actually validate anything if the fix's code path didn't execute.
+- **Don't queue up the next PR's edits while the user is mid-workflow on the previous PR.** Claude proposed PR #114's edits to `api/fetcher.py` and `api/espn.py` while Conner was still finishing PR #113's git workflow. Result: when Conner went to `git checkout main` to start the next PR fresh, the working tree had uncommitted modifications and refused. Recovery cost a stash-and-re-branch dance. Rule that crystallized: one PR fully through the workflow (commit → push → PR → deploy → verify → merge → pull → branch off main) before the next edit lands in the working tree. Conner's reply with verification results is the signal Claude can start drafting; not earlier.
+- **Post-hoc adjustment vs data-flow reorder, applied a fourth time.** Each rostered-window enforcement was a post-hoc adjustment rather than a data-flow reorder. The trade-off (contained, forward-only deferral on side effects) held in all four cases because the consumer in question (`get_projected_fpts`, the unfiltered `info["player_fpts"]` lookup) emits per-item detail that lets us recompute aggregates without re-running the consumer. When that property holds, post-hoc beats reorder.
+
+### PR #113 — Rebuild `starts_map` after transaction-lag refetch
+
+The original Montero fix from session 26's BACKLOG. Inside the existing `if today_has_started(schedule):` branch in `api/espn.py`, after the refetch succeeds and reassigns `roster_entries`:
+
+1. Re-extract `all_player_names` from the refreshed `roster_entries` (same comprehension as the original first-fetch path).
+2. Rebuild `roster_team_map` from the refreshed entries.
+3. Re-call `get_starts_for_players(all_player_names, week, team_map=roster_team_map)` and assign the result to `starts_map`. Discard the schedule from this call — the original `schedule` from the first fetch is still authoritative.
+4. Print a log line with the count of refreshed players and any newly-added names so future regressions surface in Vercel logs.
+
+One extra MLB Stats API call, only on the codepath where the lag fix actually fires. Bug existed since session 18 PR #73; only surfaced session 26 when Conner happened to add a player during the locked window.
+
+Diff: `api/espn.py` only, ~35 lines added inside one branch, no deletions.
+
+### PR #114 — Trigger lag-fix branch off scoring period, not UTC today
+
+Surfaced as the deeper cause when PR #113's verification showed Montero rendering in `droppedPlayers` with slot `EX` and no per-start projection. The API response confirmed via `daysOnTeam: ["2026-04-26"]` that the backend's UTC `today` had already rolled over to April 26 while it was still April 25 in CT.
+
+Replaced `today_has_started(schedule)` with `period_has_started(schedule, period: int)` in `api/fetcher.py`. New helper derives the date from the scoring period ESPN just returned (using the existing `SEASON_START` constant) and checks game status on that date. Removes the timezone dependency entirely.
+
+Single call site in `api/espn.py:155` updated to pass `current_week`. Comment block above the branch expanded to explain the timezone history so the next reader doesn't re-introduce the regression.
+
+`today_has_started` removed since it had only one caller and re-introducing the UTC-keyed check anywhere else would be a regression.
+
+Diff: `api/fetcher.py` (+18/-9), `api/espn.py` (+15/-2). Two files.
+
+### PR #115 — Prune dropped player Act FPTS to rostered window
+
+Closed the third of the three follow-ups from session 26 PR #111 (lock-skip and accuracy filter remain in BACKLOG). Symmetric to PR #81's `startDates` intersection, applied to `info["player_fpts"]` in the dropped-player branch of `api/espn.py`.
+
+The bug shape: PR #81 already filtered dropped players' `startDates` to dates within `days_on_team_set`, so the Projected Starts and Actual Starts tiles were correct. But `info["player_fpts"]` (a dict keyed by date with the actual fpts value) was passed unfiltered into `roster_actual_fpts[name]`, which the frontend uses both for per-cell rendering and for the row total. Net effect: a dropped pitcher's post-drop activity (relief appearance, post-drop add via the FA actual_fpts path) silently inflated the Act FPTS row total.
+
+Fix: compute `days_on_team_set` once at the top of the existing build-loop, build `filtered_fpts = {d: f for d, f in raw_fpts.items() if d in days_on_team_set}`, log pruned dates if any, store the filtered dict. New log line `[espn.py] Dropped Act FPTS pruning: {name} — pruned {N} post-drop entr(ies) ([dates])` fires only when there's actually something to prune.
+
+Verification in production was silent — Merrill Kelly (the only currently-dropped pitcher with FPTS in the window) had no post-drop attribution, so his row was unchanged. The fix is preventative for the next time someone adds-then-drops a streamer who pitches in relief afterward.
+
+Diff: `api/espn.py` only, ~22 lines added, 2 lines removed.
+
+### Decisions and architecture
+
+- **Rostered-window invariant articulated as a new architecture pattern in KNOWLEDGE.md.** Four enforcement points (#81, #111, #114, #115) catalogued with the property that any future aggregation in `api/espn.py` summing or counting a per-date value should be checked against. PR #113 catalogued as gating infrastructure.
+- **Backlog item closed:** dropped-player post-drop `actualFpts` pruning (was Pre-acquisition follow-up #3 from session 26).
+- **Backlog items still open from PR #111 follow-ups:** projection.py lock-skip for pre-acq starts, accuracy dashboard My-Roster scope filter for pre-acq legacy locks. Both forward-only safe to defer.
+- **New backlog item logged:** dropped-player per-start projection display. Schedule grid reads the global `projectionDetails` map only; dropped players' `projDetails` live on the player object and are never reached. Surfaced during PR #114 verification when pre-fix Montero landed in `droppedPlayers`. Two fix options sketched (merge dropped projDetails into the global map, or fall back in frontend); option 1 cleaner. Low urgency — most dropped pitchers' starts are in the past where the cell shows actual FPTS instead.
+- **Known-bug entry resolved:** "Pitcher added mid-day during a locked period renders empty in My Team" — closed by PR #113 + PR #114 working together.
+
+### Workflow notes
+
+- **Sandbox validation rules from sessions 24/25 held throughout.** All Python validation done via `python3 -c "import ast; ast.parse(...)"`. All git operations in Conner's terminal. Zero `.git/` lock contention this session.
+- **Recovery from the mid-workflow edit collision was clean.** The `git stash push` → `git checkout main` → `git pull` → `git checkout -b ...` → `git stash pop` sequence resolved the situation in five commands. Recovery wouldn't have been needed if Claude had waited for Conner's "All looks good in production" before drafting the next PR's edits — that's the rule going forward.
+- **Three PRs shipped without scope creep.** Each had its own commit message, its own verification path, and its own merge cycle. The temptation after PR #113's verification surfaced the trigger bug was to fold the trigger fix into a single "Montero fix" PR; resisted because the two diffs touched different files for different reasons and the diagnostic story is preserved better as two commits.
+
+---
+
 ## Session 26 — April 25, 2026
 
 A focused session that started with the top-priority backlog item from session 25 — the roster-window bug for mid-week pickups — and ended with one PR shipped plus one new bug diagnosed-but-not-fixed. PR #111 generalized PR #81's `startDates ∩ days_on_team` intersection from dropped streamers to all currently-rostered pitchers (the Wrobleski case: added today, Apr 20 @COL pre-acquisition start was double-counting). After deploy, a separate pre-existing bug surfaced when Conner added Keider Montero mid-day during the locked scoring period — Montero's row rendered empty in My Team because the transaction-lag refetch updates `roster_entries` but leaves `starts_map` stale. Diagnosed but deliberately not patched today; logged as a known bug and promoted to next session priorities.

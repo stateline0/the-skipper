@@ -116,17 +116,19 @@ Pass multiple `view` params as repeated tuples: `params=[("view", "mRoster"), ("
 - `appliedStatTotal` from `kona_player_info` returns empty/zero early in season — do not rely on it
 
 ### Transaction lag behavior
-`Confidence: 9/10 · Last assessed: April 25, 2026`
+`Confidence: 10/10 · Last assessed: April 25, 2026`
 
-Once any MLB game starts for the day, ESPN locks the current scoring period's roster. Roster transactions (adds/drops) made after lock are reflected in `scoringPeriodId + 1` (tomorrow's period). The Skipper re-fetches with tomorrow's period to pick up same-day transactions. The trigger for this branch is `today_has_started(schedule)` returning true — i.e. any of today's games is `in_progress` or `final`.
+Once any MLB game starts for the active scoring period, ESPN locks that period's roster. Roster transactions (adds/drops) made after lock are reflected in `scoringPeriodId + 1` (the next period). The Skipper re-fetches with the next period to pick up same-day transactions. The trigger for this branch is `period_has_started(schedule, current_week)` returning true — i.e. any game on the date corresponding to the period ESPN just returned is `in_progress` or `final`.
 
-**Important — the re-fetched data returns tomorrow's `lineupSlotId` values, not today's.** This is correct API behavior. Since bench status is irrelevant to The Skipper's projections, this does not affect functionality.
+**Re-fetched data returns the next period's `lineupSlotId` values, not the locked period's.** Correct API behavior. Bench status is irrelevant to The Skipper's projections, so this does not affect functionality.
 
-**Gotcha — derived structures aren't rebuilt after the refetch (open bug, diagnosed session 26, fix scoped in BACKLOG.md).** The lag-fix block updates `roster_entries` from the next-period mRoster but does NOT automatically refresh anything derived from the original roster fetch. Specifically, `all_player_names`, `roster_team_map`, and `starts_map` are computed from the *first* fetch's player list. If a pitcher is on the next-period roster but missing from the first-period roster (common case: added today, after lock), they pass through the projection pipeline with `starts_map.get(name, {})` returning the empty default — rendering a row with `starts=0`, `startDates=[]`, no projection, and all gray cells in the schedule grid.
+**Trigger keys off the returned period, not UTC today (PR #114, session 27).** Earlier code used `today_has_started(schedule)` which checked games on UTC today. ESPN's scoring-period boundary tracks ET, not UTC, so any time UTC had crossed midnight while ET hadn't (typical evening usage in CT/PT), the old check returned False even when the active period was very much locked. Concrete repro: a 7–9pm CT roster add on April 25 fired the backend request after UTC midnight (April 26 UTC); `today_has_started` checked April 26 games (none started), the trigger silently skipped, and the locked Apr 25 roster stayed as `roster_entries`. Keying off `current_week` (the period ESPN itself returned) removes the timezone dependency entirely — the question "is the period ESPN just gave us a locked one?" has the same answer regardless of where the user's wall clock has rolled to.
 
-The fix (logged to BACKLOG.md → Next session priorities) is to recompute `all_player_names` and `roster_team_map` from the refreshed `roster_entries` inside the `if today_has_started:` branch, then re-call `get_starts_for_players` to rebuild `starts_map`. One extra MLB Stats API call only on the codepath where the lag fix actually fires.
+**Derived structures are rebuilt after the refetch (PR #113, session 27).** When the lag-fix branch fires, `all_player_names`, `roster_team_map`, and `starts_map` are all recomputed from the refreshed `roster_entries` — which now reflects same-day pickups. Earlier behavior (session 18 PR #73 → session 27 PR #113) was to update only `roster_entries` and leave the derived structures stale, with the consequence that newly-added pitchers fell through `starts_map.get(name, {})` to the empty default and rendered with `starts=0`, no startDates, all-gray cells. PR #113 fixed the rebuild; PR #114 fixed the trigger that was causing PR #113 to never fire in evening usage.
 
-**The bug has existed since session 18 PR #73** (when the lag fix was first added) but only became visible in session 26 when Conner happened to add a player during a locked period. Symptom in production: row appears in the table because `roster_entries` has the player, but every cell is gray with no green ✓ and the row's Starts/Proj FPTS columns both read 0. Free Agents view shows the same player's starts correctly because that surface fetches `fa_starts_map` independently, untouched by the lag fix.
+**The two bugs interacted invisibly.** Either bug alone could mask the other. Without PR #113's rebuild, even a correctly-firing lag-fix branch would have produced the empty-row symptom. Without PR #114's trigger fix, PR #113's rebuild would never run for evening adds and the user would land in the dropped-player branch with slot `EX` instead. The Montero case in session 27 surfaced both because verification of PR #113 happened to fall in the evening, exposing the trigger bug. Lesson recorded in the post-hoc adjustment architecture decision below: verification at the user-action layer surfaces the next bug class; pre-deploy theorycraft cannot.
+
+**Verify post-deploy by:** adding a pitcher mid-day during a locked period (or in the user's evening once UTC has rolled over). Confirm the pitcher appears in the SP rows (not the EX/dropped section), with green ✓ on upcoming starts and a per-start projection in the cell. Vercel logs show `[espn.py] Games in progress — fetching roster at scoringPeriodId={N}` and `[espn.py] Lag-fix rebuild: starts_map refreshed for {N} players; new names: [...]` when the branch fires.
 
 ### Known limitations
 `Confidence: 8/10 · Last assessed: April 10, 2026`
@@ -735,6 +737,26 @@ Reach for **reorder** when:
 - **Pattern this rules out:** "wrap the consumer in an early-exit branch" is usually worse than both options. It muddies the consumer's contract and tends to leak the new context throughout the function. If the consumer needs the context, fix one of the two structural cases instead of plumbing flags.
 
 **Always log post-hoc adjustments visibly.** PR #111 prints `[espn.py] Pre-acquisition: <name> — tagged N start(s) (...)` for every affected player. Future regressions in the tagging logic surface in Vercel logs at deploy time — this is the cheap version of write-path observability for any post-hoc mutation.
+
+### Rostered-window invariant
+`Confidence: 10/10 · Last assessed: April 25, 2026`
+
+Any per-pitcher value the user sees on the My Team page must be scoped to dates that pitcher was actually on the roster within the matchup window. This applies uniformly across all three pitcher-state branches in `api/espn.py`: currently-rostered pitchers (whose start history may include pre-acquisition dates), dropped streamers (whose start history may include post-drop dates), and the lag-fix newly-added case (whose start history wraps yet another timing edge). The rule is the same: a value attributed to a pitcher for a date outside their `days_on_team` set must not aggregate into row totals or tile counts.
+
+The invariant is enforced in four places, each closing a different facet:
+
+1. **PR #81 (session 19)** — dropped streamers' `startDates` intersected with `days_on_team`. Projected Starts and Actual Starts tiles only count rostered-window starts. The original instance.
+2. **PR #111 (session 26)** — currently-rostered pitchers' `startDates` tagged `preAcquisition: true` for dates before the pickup. Effective `starts` and `projFpts` recomputed to exclude tagged entries. Frontend renders muted cells with the pre-acq `ProjectionTooltip` variant for context. Generalization of PR #81's pattern from one branch to all three.
+3. **PR #114 (session 27)** — the lag-fix trigger fires off the returned scoring period, not UTC today, so newly-added pitchers reach the right code path regardless of UTC-vs-ET drift. Without this, evening adds fell through into the dropped-player branch and got the wrong invariant applied (slot `EX`, no per-start projection).
+4. **PR #115 (session 27)** — dropped streamers' `info["player_fpts"]` intersected with `days_on_team`. Act FPTS row total excludes any post-drop FPTS attributed via the FA actual_fpts path. Symmetric closure of the same shape PR #81 fixed for `startDates`.
+
+PR #113 (session 27) is gating infrastructure for #114 — when the lag-fix branch fires, derived structures (`starts_map`, `roster_team_map`, `all_player_names`) get rebuilt from the refreshed `roster_entries` so newly-added pitchers reach the projection model with their start data intact.
+
+**When you next touch an aggregation in `api/espn.py` that sums or counts a per-date value across pitchers, ask: "is this scoped to the rostered window, or is it summing the raw dict?"** If raw, you have a fifth enforcement point to add. The pattern is `set(info["days_on_team"])` followed by a comprehension that filters keys/dates against that set. PR #115 is the smallest worked example.
+
+**The invariant ends at the rendering layer.** The frontend trusts backend-emitted values — `pages/my-team.tsx` doesn't re-enforce. Any new aggregation must apply the intersection at the point of emission in `api/espn.py`; you can't fix it later in the frontend because the data is already wrong by the time it gets there.
+
+**Connection to the post-hoc adjustment decision above.** All four enforcements are post-hoc adjustments rather than data-flow reorders. The choice was made independently each time but the rationale is the same: the consumer (`get_projected_fpts` for #111/#114, the `info["player_fpts"]` lookup for #81/#115) emits per-item detail that lets us recompute aggregates without re-running the consumer. When that property holds, post-hoc beats reorder.
 
 ### File architecture (refactored session 18)
 `Confidence: 10/10 · Last assessed: April 25, 2026`
