@@ -22,7 +22,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__)))
 from mlb import get_starts_for_players, MATCHUP_PERIODS
 from kv import get_all_locked_projections
 from fetcher import (
-    get_headers_and_cookies, get_pro_team_map, today_has_started,
+    get_headers_and_cookies, get_pro_team_map, period_has_started,
     get_actual_fpts, load_cached_data,
 )
 from projection import get_projected_fpts
@@ -152,7 +152,18 @@ def get_league_data(team_id: int, week: int) -> dict:
     starts_map, schedule = get_starts_for_players(all_player_names, week, team_map=roster_team_map)
 
     # ── Roster transaction lag fix ────────────────────────────────────
-    if today_has_started(schedule):
+    # ESPN locks the active scoring period's roster once any game in
+    # that period starts. Same-day transactions made after the lock
+    # are reflected in `current_week + 1` (the next period), so we
+    # refetch with that ID to pick up adds/drops the user just made.
+    #
+    # Trigger off `period_has_started(schedule, current_week)`, NOT
+    # off UTC today — the previous `today_has_started` check silently
+    # skipped this branch whenever UTC had rolled over while ESPN's
+    # scoring-period boundary (ET) had not, which is exactly when
+    # evening adds in CT/PT need this fix the most. See the Montero
+    # case write-up in the helper's docstring.
+    if period_has_started(schedule, current_week):
         next_period = current_week + 1
         print(f"[espn.py] Games in progress — fetching roster at scoringPeriodId={next_period}")
         r2 = requests.get(
