@@ -175,6 +175,40 @@ def get_league_data(team_id: int, week: int) -> dict:
                 my_team        = my_team2
                 roster_entries = my_team.get("roster", {}).get("entries", [])
                 print(f"[espn.py] Roster re-fetched successfully at period {next_period}")
+
+                # Rebuild derived structures from the refreshed roster_entries.
+                # The lag-fix updates roster_entries, but all_player_names,
+                # roster_team_map, and starts_map were computed from the *first*
+                # fetch's player list — which doesn't include same-day pickups
+                # added during the locked window. Without this rebuild, those
+                # pitchers fall through `starts_map.get(name, {})` to the empty
+                # default and render with starts=0, no startDates, gray cells,
+                # and projFpts=0 (Montero case, diagnosed session 26 — bug
+                # existed since session 18 PR #73).
+                #
+                # One extra MLB Stats API call, only on the codepath where the
+                # lag fix actually fires. The original `schedule` is still
+                # authoritative — discard the new one.
+                previous_names_set = set(all_player_names)
+                all_player_names = [
+                    e.get("playerPoolEntry", {}).get("player", {}).get("fullName", "")
+                    for e in roster_entries
+                    if e.get("playerPoolEntry", {}).get("player", {}).get("fullName")
+                ]
+                roster_team_map = {}
+                for e in roster_entries:
+                    pool   = e.get("playerPoolEntry", {})
+                    player = pool.get("player", {})
+                    name   = player.get("fullName", "")
+                    pro_id = player.get("proTeamId", 0)
+                    if name and pro_id:
+                        roster_team_map[name] = PRO_TEAM_MAP.get(pro_id, "")
+                new_names = sorted(set(all_player_names) - previous_names_set)
+                starts_map, _ = get_starts_for_players(
+                    all_player_names, week, team_map=roster_team_map
+                )
+                print(f"[espn.py] Lag-fix rebuild: starts_map refreshed for "
+                      f"{len(all_player_names)} players; new names: {new_names}")
             else:
                 print(f"[espn.py] Re-fetch succeeded but team {team_id} not found — keeping original")
         else:
