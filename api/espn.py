@@ -599,8 +599,16 @@ def get_league_data(team_id: int, week: int) -> dict:
         dropped_proj_details = {}
 
     # Build the dropped player dicts using the real starts + projection data.
+    # Symmetric to PR #81 (which intersected startDates with days_on_team) and
+    # PR #111 (which did the same for currently-rostered pitchers' pre-acquisition
+    # starts). Without this intersection on `info["player_fpts"]`, a dropped
+    # pitcher's post-drop relief appearance (or anything else ESPN attributes
+    # to him via the FA actual_fpts path) would silently sum into the row's
+    # Act FPTS total — overstating performance during the rostered window.
     for name, info in dropped_sp_info.items():
-        intersected = dropped_intersected.get(name, {"starts": 0, "startDates": []})
+        intersected      = dropped_intersected.get(name, {"starts": 0, "startDates": []})
+        days_on_team_set = set(info["days_on_team"])
+
         dropped_players.append({
             "name":         name,
             "team":         info["team_abbrev"],
@@ -615,8 +623,18 @@ def get_league_data(team_id: int, week: int) -> dict:
             "percentOwned": 0.0,
             "daysOnTeam":   info["days_on_team"],
         })
-        if name not in roster_actual_fpts and info["player_fpts"]:
-            roster_actual_fpts[name] = info["player_fpts"]
+
+        raw_fpts = info["player_fpts"]
+        if not raw_fpts:
+            continue
+        filtered_fpts = {d: f for d, f in raw_fpts.items() if d in days_on_team_set}
+        pruned_dates  = sorted(set(raw_fpts.keys()) - days_on_team_set)
+        if pruned_dates:
+            print(f"[espn.py] Dropped Act FPTS pruning: {name} — pruned "
+                  f"{len(pruned_dates)} post-drop entr{'y' if len(pruned_dates) == 1 else 'ies'} "
+                  f"({pruned_dates})")
+        if name not in roster_actual_fpts and filtered_fpts:
+            roster_actual_fpts[name] = filtered_fpts
 
     return {
         "ok":                True,
