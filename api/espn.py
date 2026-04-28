@@ -128,11 +128,19 @@ def get_league_data(team_id: int, week: int) -> dict:
         timeout=15
     )
     proj_fpts_by_player = {}
+    # Ownership lives on `kona_player_info` under `player.ownership.percentOwned`
+    # (same path the FA path reads from at the bottom of this file).
+    # The mRoster response itself doesn't include ownership data, so we
+    # capture it here from the kona_player_info call we're already making
+    # for projections — no extra HTTP request needed.
+    percent_owned_by_player = {}
     if stats_r.status_code == 200:
         for p in stats_r.json().get("players", []):
             pid  = p.get("id")
             proj = p.get("playerPoolEntry", {}).get("appliedStatTotal", 0)
             proj_fpts_by_player[pid] = round(float(proj or 0), 1)
+            own  = p.get("player", {}).get("ownership", {}).get("percentOwned", 0)
+            percent_owned_by_player[pid] = round(float(own or 0), 1)
 
     # ── Fetch probable pitchers + full game schedule ──────────────────
     roster_entries   = my_team.get("roster", {}).get("entries", [])
@@ -314,7 +322,12 @@ def get_league_data(team_id: int, week: int) -> dict:
             "startDates":   start_dates,
             "projFpts":     proj_fpts,
             "projBlend":    proj_blend_by_name.get(player_name, 0.0),
-            "percentOwned": round(pool_entry.get("percentOwned", 100), 1),
+            # Read ownership from the kona_player_info lookup built above.
+            # mRoster does NOT carry ownership data — the previous code path
+            # (`pool_entry.get("percentOwned", 100)`) silently fell through
+            # to the default 100 for every rostered player, which only
+            # became visible when the Stats tab started displaying the value.
+            "percentOwned": percent_owned_by_player.get(player_id, 0.0),
         })
 
     slot_order = {"SP": 0, "RP": 1, "IL": 2, "Bench": 3, "P": 1}
