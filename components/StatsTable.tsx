@@ -18,6 +18,31 @@ interface StartDate {
   preAcquisition?: boolean
 }
 
+// Compact season-stat payload built on the backend in api/espn.py.
+// Returned as null when the pitcher has no IP yet (avoids divide-by-zero
+// and lets cells render an em-dash without per-field null checks).
+export interface SeasonStats {
+  w: number
+  l: number
+  era: number
+  k9: number
+  bb9: number
+  ip: number
+  gs: number
+}
+
+// Combined Savant payload — expected stats + statcast. Each field is
+// only present when its source had a non-zero value, so rendering must
+// gracefully handle any field being absent (the whole object is null
+// only for pitchers with no Savant footprint at all).
+export interface SavantExpected {
+  xera?: number
+  xwoba?: number
+  wobaDiff?: number   // est_woba - woba: positive = unlucky, due to improve
+  barrelPct?: number
+  whiffPct?: number
+}
+
 export interface Pitcher {
   name: string
   team: string
@@ -27,6 +52,8 @@ export interface Pitcher {
   projBlend?: number
   percentOwned?: number
   startDates?: StartDate[]
+  seasonStats?: SeasonStats | null
+  savantExpected?: SavantExpected | null
 }
 
 // Lookups the table needs but that don't live on the player object itself.
@@ -46,6 +73,10 @@ export interface PitcherColumn {
   sortValue?: (p: Pitcher, ctx: StatsTableContext) => number
   stringValue?: (p: Pitcher, ctx: StatsTableContext) => string
   render: (p: Pitcher, ctx: StatsTableContext) => React.ReactNode
+  // First-click sort direction. Defaults: 'desc' for numeric, 'asc' for string.
+  // Override for "lower is better" stats (ERA, BB/9, xERA, xwOBA, Barrel%) so
+  // a single click puts the best pitchers at the top.
+  preferredDir?: 'asc' | 'desc'
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -77,6 +108,35 @@ function actFptsTotal(p: Pitcher, ctx: StatsTableContext): number {
     (a, [d, v]) => a + (preAcqDates.has(d) ? 0 : v),
     0
   )
+}
+
+// Baseball convention: rate stats with a max of 1 (BA, wOBA, xwOBA) are
+// rendered without a leading zero (".285" not "0.285"). Negative values
+// keep their sign in front of the dot.
+function fmtBaseballDecimal(v: number, places: number = 3): string {
+  const sign = v < 0 ? '-' : ''
+  const abs = Math.abs(v).toFixed(places)
+  return abs.startsWith('0.') ? `${sign}${abs.slice(1)}` : `${sign}${abs}`
+}
+
+// Same convention with an explicit + sign for non-negative values, so
+// "+.012" reads as a clearly-positive luck delta on the wOBA-diff column.
+function fmtWobaDiff(v: number): string {
+  const sign = v > 0 ? '+' : v < 0 ? '-' : ''
+  const abs = Math.abs(v).toFixed(3)
+  return abs.startsWith('0.') ? `${sign}${abs.slice(1)}` : `${sign}${abs}`
+}
+
+// Render an em-dash for missing numeric values — wraps a value-or-null
+// pattern that recurs across every season/Savant column.
+function NumOrDash({ value, render }: {
+  value: number | undefined | null
+  render: (v: number) => React.ReactNode
+}) {
+  if (value === undefined || value === null || !Number.isFinite(value)) {
+    return <span style={{ color: 'var(--ink-3)' }}>—</span>
+  }
+  return <>{render(value)}</>
 }
 
 // ─── Column definitions ──────────────────────────────────────────────────────
@@ -123,6 +183,114 @@ export const PITCHER_COLUMNS: PitcherColumn[] = [
       </span>
     ),
   },
+
+  // ── Season real stats (from MLB Stats API season pitching totals) ──
+  // Missing data → render em-dash AND return NaN from sortValue so the
+  // pitcher sinks to the bottom regardless of sort direction.
+  {
+    key: 'wl', label: 'W-L', minWidth: 56,
+    sortValue: (p) => p.seasonStats ? p.seasonStats.w : NaN,
+    render: (p) => (
+      <NumOrDash value={p.seasonStats?.w} render={(_w) => (
+        <span style={{ fontFamily: 'var(--mono)' }}>
+          {p.seasonStats!.w}-{p.seasonStats!.l}
+        </span>
+      )} />
+    ),
+  },
+  {
+    key: 'era', label: 'ERA', minWidth: 56, preferredDir: 'asc',
+    sortValue: (p) => p.seasonStats ? p.seasonStats.era : NaN,
+    render: (p) => (
+      <NumOrDash value={p.seasonStats?.era} render={(v) => (
+        <span style={{ fontFamily: 'var(--mono)' }}>{v.toFixed(2)}</span>
+      )} />
+    ),
+  },
+  {
+    key: 'k9', label: 'K/9', minWidth: 56,
+    sortValue: (p) => p.seasonStats ? p.seasonStats.k9 : NaN,
+    render: (p) => (
+      <NumOrDash value={p.seasonStats?.k9} render={(v) => (
+        <span style={{ fontFamily: 'var(--mono)' }}>{v.toFixed(1)}</span>
+      )} />
+    ),
+  },
+  {
+    key: 'bb9', label: 'BB/9', minWidth: 56, preferredDir: 'asc',
+    sortValue: (p) => p.seasonStats ? p.seasonStats.bb9 : NaN,
+    render: (p) => (
+      <NumOrDash value={p.seasonStats?.bb9} render={(v) => (
+        <span style={{ fontFamily: 'var(--mono)' }}>{v.toFixed(1)}</span>
+      )} />
+    ),
+  },
+
+  // ── Savant expecteds (xERA, xwOBA, wOBA-diff from cache:savant; ──
+  // Barrel%, Whiff% from cache:savant-statcast). Each field is independently
+  // optional — render em-dash for any missing one without dimming the row.
+  {
+    key: 'xera', label: 'xERA', minWidth: 60, preferredDir: 'asc',
+    sortValue: (p) => p.savantExpected?.xera ?? NaN,
+    render: (p) => (
+      <NumOrDash value={p.savantExpected?.xera} render={(v) => (
+        <span style={{ fontFamily: 'var(--mono)', color: 'var(--ink-2)' }}>
+          {v.toFixed(2)}
+        </span>
+      )} />
+    ),
+  },
+  {
+    key: 'xwoba', label: 'xwOBA', minWidth: 64, preferredDir: 'asc',
+    sortValue: (p) => p.savantExpected?.xwoba ?? NaN,
+    render: (p) => (
+      <NumOrDash value={p.savantExpected?.xwoba} render={(v) => (
+        <span style={{ fontFamily: 'var(--mono)', color: 'var(--ink-2)' }}>
+          {fmtBaseballDecimal(v, 3)}
+        </span>
+      )} />
+    ),
+  },
+  {
+    // Higher = pitcher has been more unlucky (xwOBA > wOBA allowed) and
+    // is statistically due for positive regression. Default desc surfaces
+    // the most-due-to-improve names at the top — a "buy low" lens.
+    key: 'wobaDiff', label: 'wOBAΔ', minWidth: 64,
+    sortValue: (p) => p.savantExpected?.wobaDiff ?? NaN,
+    render: (p) => (
+      <NumOrDash value={p.savantExpected?.wobaDiff} render={(v) => (
+        <span style={{
+          fontFamily: 'var(--mono)',
+          color: v > 0 ? 'var(--green)' : v < 0 ? 'var(--red)' : 'var(--ink-3)',
+        }}>
+          {fmtWobaDiff(v)}
+        </span>
+      )} />
+    ),
+  },
+  {
+    key: 'barrelPct', label: 'Brl%', minWidth: 56, preferredDir: 'asc',
+    sortValue: (p) => p.savantExpected?.barrelPct ?? NaN,
+    render: (p) => (
+      <NumOrDash value={p.savantExpected?.barrelPct} render={(v) => (
+        <span style={{ fontFamily: 'var(--mono)', color: 'var(--ink-2)' }}>
+          {v.toFixed(1)}%
+        </span>
+      )} />
+    ),
+  },
+  {
+    key: 'whiffPct', label: 'Whiff%', minWidth: 64,
+    sortValue: (p) => p.savantExpected?.whiffPct ?? NaN,
+    render: (p) => (
+      <NumOrDash value={p.savantExpected?.whiffPct} render={(v) => (
+        <span style={{ fontFamily: 'var(--mono)', color: 'var(--ink-2)' }}>
+          {v.toFixed(1)}%
+        </span>
+      )} />
+    ),
+  },
+
   {
     key: 'fptsPerStart', label: 'FPTS/G', minWidth: 64,
     sortValue: (_p, ctx) => 0,  // overridden inline below — see note
@@ -203,8 +371,12 @@ export default function StatsTable({
       setSortDir(d => (d === 'desc' ? 'asc' : 'desc'))
     } else {
       setSortCol(col.key)
-      // Numeric columns default to descending (best first); string columns to ascending (A→Z).
-      setSortDir(col.sortValue ? 'desc' : 'asc')
+      // First-click direction:
+      // 1. Honor an explicit preferredDir if the column declares one
+      //    (used for "lower is better" stats like ERA, BB/9, xERA).
+      // 2. Else: numeric columns default to desc (best first), strings to asc (A→Z).
+      const defaultDir: 'asc' | 'desc' = col.sortValue ? 'desc' : 'asc'
+      setSortDir(col.preferredDir || defaultDir)
     }
   }
 
@@ -226,6 +398,14 @@ export default function StatsTable({
       if (col.sortValue) {
         const av = col.sortValue(a, ctx)
         const bv = col.sortValue(b, ctx)
+        // Missing data (sortValue returns NaN) always sinks to the bottom
+        // regardless of sort direction — flipping desc→asc shouldn't bring
+        // pitchers without season stats to the top.
+        const aMissing = !Number.isFinite(av)
+        const bMissing = !Number.isFinite(bv)
+        if (aMissing && !bMissing) return 1
+        if (bMissing && !aMissing) return -1
+        if (aMissing && bMissing) return 0
         return sortDir === 'desc' ? bv - av : av - bv
       }
       return 0
