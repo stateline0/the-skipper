@@ -77,6 +77,10 @@ export interface PitcherColumn {
   // Override for "lower is better" stats (ERA, BB/9, xERA, xwOBA, Barrel%) so
   // a single click puts the best pitchers at the top.
   preferredDir?: 'asc' | 'desc'
+  // Help text rendered as the native HTML title attribute on the column
+  // header. Hover the header for ~1 second and the browser shows the
+  // tooltip. Skip for self-explanatory columns (Pitcher, Team, Starts).
+  tooltip?: string
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -162,11 +166,13 @@ export const PITCHER_COLUMNS: PitcherColumn[] = [
   },
   {
     key: 'slot', label: 'Slot', minWidth: 52,
+    tooltip: 'SP = starter · RP = reliever · IL = injured list · EX = recently dropped',
     stringValue: (p) => p.slot,
     render: (p) => <SlotBadge slot={p.slot} />,
   },
   {
     key: 'percentOwned', label: 'Own%', minWidth: 60,
+    tooltip: 'Percentage of ESPN leagues that have this pitcher rostered',
     sortValue: (p) => p.percentOwned ?? 0,
     render: (p) => (
       <span style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--ink-3)' }}>
@@ -176,6 +182,7 @@ export const PITCHER_COLUMNS: PitcherColumn[] = [
   },
   {
     key: 'starts', label: 'Starts', minWidth: 56,
+    tooltip: 'Projected starts in this matchup period (confirmed + scheduled)',
     sortValue: (p) => p.starts ?? 0,
     render: (p) => (
       <span style={{ fontFamily: 'var(--mono)', fontWeight: 700 }}>
@@ -189,6 +196,7 @@ export const PITCHER_COLUMNS: PitcherColumn[] = [
   // pitcher sinks to the bottom regardless of sort direction.
   {
     key: 'wl', label: 'W-L', minWidth: 56,
+    tooltip: 'Season wins and losses. Sorts by wins.',
     sortValue: (p) => p.seasonStats ? p.seasonStats.w : NaN,
     render: (p) => (
       <NumOrDash value={p.seasonStats?.w} render={(_w) => (
@@ -200,6 +208,7 @@ export const PITCHER_COLUMNS: PitcherColumn[] = [
   },
   {
     key: 'era', label: 'ERA', minWidth: 56, preferredDir: 'asc',
+    tooltip: 'Earned run average — earned runs allowed per 9 innings. Lower is better.',
     sortValue: (p) => p.seasonStats ? p.seasonStats.era : NaN,
     render: (p) => (
       <NumOrDash value={p.seasonStats?.era} render={(v) => (
@@ -209,6 +218,7 @@ export const PITCHER_COLUMNS: PitcherColumn[] = [
   },
   {
     key: 'k9', label: 'K/9', minWidth: 56,
+    tooltip: 'Strikeouts per 9 innings pitched. Higher is better.',
     sortValue: (p) => p.seasonStats ? p.seasonStats.k9 : NaN,
     render: (p) => (
       <NumOrDash value={p.seasonStats?.k9} render={(v) => (
@@ -218,6 +228,7 @@ export const PITCHER_COLUMNS: PitcherColumn[] = [
   },
   {
     key: 'bb9', label: 'BB/9', minWidth: 56, preferredDir: 'asc',
+    tooltip: 'Walks per 9 innings pitched. Lower is better.',
     sortValue: (p) => p.seasonStats ? p.seasonStats.bb9 : NaN,
     render: (p) => (
       <NumOrDash value={p.seasonStats?.bb9} render={(v) => (
@@ -231,6 +242,7 @@ export const PITCHER_COLUMNS: PitcherColumn[] = [
   // optional — render em-dash for any missing one without dimming the row.
   {
     key: 'xera', label: 'xERA', minWidth: 60, preferredDir: 'asc',
+    tooltip: 'Expected ERA from Statcast contact quality. xERA below ERA suggests the pitcher has been unlucky — actual results worse than the underlying batted-ball data implies.',
     sortValue: (p) => p.savantExpected?.xera ?? NaN,
     render: (p) => (
       <NumOrDash value={p.savantExpected?.xera} render={(v) => (
@@ -242,6 +254,7 @@ export const PITCHER_COLUMNS: PitcherColumn[] = [
   },
   {
     key: 'xwoba', label: 'xwOBA', minWidth: 64, preferredDir: 'asc',
+    tooltip: 'Expected weighted on-base average allowed. Single best contact-quality summary stat — what hitters’ EV and launch angle off this pitcher say their wOBA should be. Lower is better.',
     sortValue: (p) => p.savantExpected?.xwoba ?? NaN,
     render: (p) => (
       <NumOrDash value={p.savantExpected?.xwoba} render={(v) => (
@@ -256,6 +269,7 @@ export const PITCHER_COLUMNS: PitcherColumn[] = [
     // is statistically due for positive regression. Default desc surfaces
     // the most-due-to-improve names at the top — a "buy low" lens.
     key: 'wobaDiff', label: 'wOBAΔ', minWidth: 64,
+    tooltip: 'xwOBA minus actual wOBA allowed. Positive (green) = pitcher has been unlucky and is statistically due for improvement. Negative (red) = pitcher has been lucky and is due for regression.',
     sortValue: (p) => p.savantExpected?.wobaDiff ?? NaN,
     render: (p) => (
       <NumOrDash value={p.savantExpected?.wobaDiff} render={(v) => (
@@ -270,6 +284,7 @@ export const PITCHER_COLUMNS: PitcherColumn[] = [
   },
   {
     key: 'barrelPct', label: 'Brl%', minWidth: 56, preferredDir: 'asc',
+    tooltip: 'Barrel rate — % of batted balls hit at the optimal exit-velocity / launch-angle combo for extra-base contact. Lower is better for the pitcher.',
     sortValue: (p) => p.savantExpected?.barrelPct ?? NaN,
     render: (p) => (
       <NumOrDash value={p.savantExpected?.barrelPct} render={(v) => (
@@ -281,6 +296,7 @@ export const PITCHER_COLUMNS: PitcherColumn[] = [
   },
   {
     key: 'whiffPct', label: 'Whiff%', minWidth: 64,
+    tooltip: 'Swinging-strike rate — % of swings that miss. Higher is better. (Data plumbing in progress — see PR 4.)',
     sortValue: (p) => p.savantExpected?.whiffPct ?? NaN,
     render: (p) => (
       <NumOrDash value={p.savantExpected?.whiffPct} render={(v) => (
@@ -293,6 +309,7 @@ export const PITCHER_COLUMNS: PitcherColumn[] = [
 
   {
     key: 'fptsPerStart', label: 'FPTS/G', minWidth: 64,
+    tooltip: 'Projected fantasy points per start, including matchup adjustments (opponent wOBA, park factor, win probability, weather).',
     sortValue: (_p, ctx) => 0,  // overridden inline below — see note
     render: (p, ctx) => {
       const v = ctx.fptsPerStart[p.name]
@@ -308,6 +325,7 @@ export const PITCHER_COLUMNS: PitcherColumn[] = [
   },
   {
     key: 'projFpts', label: 'Proj FPTS', minWidth: 84,
+    tooltip: 'Total projected fantasy points across this matchup period (FPTS/G × projected starts in window).',
     sortValue: (p) => p.projFpts ?? 0,
     render: (p) => (
       <span style={{
@@ -320,6 +338,7 @@ export const PITCHER_COLUMNS: PitcherColumn[] = [
   },
   {
     key: 'actFpts', label: 'Act FPTS', minWidth: 84,
+    tooltip: 'Actual fantasy points scored so far in this matchup period. Excludes pre-acquisition starts (dates before this pitcher was on your roster).',
     sortValue: (p, ctx) => actFptsTotal(p, ctx),
     render: (p, ctx) => {
       const total = actFptsTotal(p, ctx)
@@ -464,6 +483,10 @@ export default function StatsTable({
                 <th
                   key={col.key}
                   onClick={() => handleSort(col)}
+                  // Native browser tooltip — shows after ~1s hover. No custom
+                  // styling, but consistent across browsers and accessible to
+                  // screen readers without extra ARIA wiring.
+                  title={col.tooltip}
                   style={{
                     ...headerBase,
                     minWidth: col.minWidth,
