@@ -357,7 +357,7 @@ def load_cached_data(year_int: int) -> dict:
       mlb_stats_current, mlb_stats_previous,
       game_logs_current
     """
-    from savant import fetch_expected_stats
+    from savant import fetch_expected_stats, fetch_statcast_stats
     from mlb import fetch_game_logs, get_team_win_data, get_team_woba_blended
 
     # ── Savant expected stats ─────────────────────────────────────────
@@ -396,6 +396,32 @@ def load_cached_data(year_int: int) -> dict:
             print(f"[fetcher.py] Savant fetch failed: {e}")
 
     print(f"[fetcher.py] Savant: {len(savant_current)} current, {len(savant_previous)} previous")
+
+    # ── Savant Statcast stats (Barrel%, Whiff%) ───────────────────────
+    # Currently only used for display on the Stats tab — not threaded into
+    # projections. Cached separately from savant_current under its own
+    # key so a Statcast-only outage can't poison the projection cache.
+    # Single-year fetch (no _previous) since these are snapshot displays.
+    savant_statcast_current = {}
+    try:
+        savant_statcast_current = cache_get(f"cache:savant-statcast:{year_int}") or {}
+    except Exception:
+        pass
+
+    if not savant_statcast_current:
+        try:
+            result = fetch_statcast_stats(year_int) or {}
+            if result:
+                savant_statcast_current = result
+                try:
+                    cache_set(f"cache:savant-statcast:{year_int}", result,
+                              ttl_seconds=86400)
+                except Exception:
+                    pass
+        except Exception as e:
+            print(f"[fetcher.py] Savant statcast fetch failed: {e}")
+
+    print(f"[fetcher.py] Savant statcast: {len(savant_statcast_current)} pitchers")
 
     # ── MLB Stats API season stats ────────────────────────────────────
     mlb_stats_previous = {}
@@ -516,12 +542,13 @@ def load_cached_data(year_int: int) -> dict:
     print(f"[fetcher.py] Team wOBA (blended): {len(team_woba_factors)} teams")
 
     return {
-        "savant_current":     savant_current,
-        "savant_previous":    savant_previous,
-        "mlb_stats_current":  mlb_stats_current,
-        "mlb_stats_previous": mlb_stats_previous,
-        "game_logs_current":  game_logs_current,
-        "game_log_stats":     game_log_stats,
-        "team_win_data":      team_win_data,
-        "team_woba_factors":  team_woba_factors,
+        "savant_current":          savant_current,
+        "savant_previous":         savant_previous,
+        "savant_statcast_current": savant_statcast_current,
+        "mlb_stats_current":       mlb_stats_current,
+        "mlb_stats_previous":      mlb_stats_previous,
+        "game_logs_current":       game_logs_current,
+        "game_log_stats":          game_log_stats,
+        "team_win_data":           team_win_data,
+        "team_woba_factors":       team_woba_factors,
     }

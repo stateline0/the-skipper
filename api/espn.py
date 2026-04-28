@@ -25,7 +25,68 @@ from fetcher import (
     get_headers_and_cookies, get_pro_team_map, period_has_started,
     get_actual_fpts, load_cached_data,
 )
-from projection import get_projected_fpts
+from projection import get_projected_fpts, strip_accents, parse_ip
+
+
+# ── Stats-tab helpers ──────────────────────────────────────────────────
+# Build the compact per-pitcher payloads consumed by the My Team / Free
+# Agents Stats tab. Returning None for missing data lets the frontend
+# render an em-dash without each cell needing its own null check.
+
+def _safe_float(value, default: float = 0.0) -> float:
+    """Cast a stat value to float; returns default on any conversion error.
+    MLB Stats API often returns numeric stats as strings (e.g. '3.45'), and
+    occasionally as '-.--' or '' for early-season pitchers with no data."""
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _build_season_stats(stat_dict: dict) -> dict | None:
+    """Compact season-stats payload for the Stats tab. Pulls W, L, ERA
+    from MLB Stats API and computes K/9 and BB/9 on the backend so the
+    frontend can stay renderer-only. Returns None when there are no
+    innings to display (avoids divide-by-zero and empty rows)."""
+    if not stat_dict:
+        return None
+    ip = parse_ip(stat_dict.get("inningsPitched", "0.0"))
+    if ip <= 0:
+        return None
+    so = int(stat_dict.get("strikeOuts", 0))
+    bb = int(stat_dict.get("baseOnBalls", 0))
+    return {
+        "w":   int(stat_dict.get("wins",   0)),
+        "l":   int(stat_dict.get("losses", 0)),
+        "era": _safe_float(stat_dict.get("era", 0)),
+        "k9":  round(so / ip * 9, 2),
+        "bb9": round(bb / ip * 9, 2),
+        "ip":  round(ip, 1),
+        "gs":  int(stat_dict.get("gamesStarted", 0)),
+    }
+
+
+def _build_savant_expected(expected: dict, statcast: dict) -> dict | None:
+    """Combined Savant payload — expected stats from `cache:savant:{year}`
+    plus Statcast (Barrel%, Whiff%) from `cache:savant-statcast:{year}`.
+    Each field is included only when its source has a non-zero value, so
+    the frontend can render an em-dash for any missing piece without the
+    whole sub-dict being null. Returns None only when both sources are
+    empty (e.g. fresh-call-up rookies with no Savant footprint yet)."""
+    if not expected and not statcast:
+        return None
+    out: dict = {}
+    if expected:
+        if expected.get("xera", 0):  out["xera"]  = round(expected["xera"], 2)
+        if expected.get("xwoba", 0): out["xwoba"] = round(expected["xwoba"], 3)
+        # woba_diff can legitimately be negative (lucky pitcher) or zero;
+        # only suppress when the source key is missing entirely.
+        if "woba_diff" in expected:
+            out["wobaDiff"] = round(expected["woba_diff"], 3)
+    if statcast:
+        if statcast.get("brl_pct", 0):   out["barrelPct"] = round(statcast["brl_pct"], 1)
+        if statcast.get("whiff_pct", 0): out["whiffPct"]  = round(statcast["whiff_pct"], 1)
+    return out if out else None
 
 
 # ── Roster helpers ────────────────────────────────────────────────────
@@ -65,13 +126,14 @@ def get_league_data(team_id: int, week: int) -> dict:
 
     # ── Load cached external data (Savant, MLB Stats, game logs, team win) ─
     cached = load_cached_data(year_int)
-    savant_current     = cached["savant_current"]
-    savant_previous    = cached["savant_previous"]
-    mlb_stats_current  = cached["mlb_stats_current"]
-    mlb_stats_previous = cached["mlb_stats_previous"]
-    game_logs_current  = cached["game_logs_current"]
-    team_win_data      = cached["team_win_data"]
-    team_woba_factors  = cached["team_woba_factors"]
+    savant_current          = cached["savant_current"]
+    savant_previous         = cached["savant_previous"]
+    savant_statcast_current = cached["savant_statcast_current"]
+    mlb_stats_current       = cached["mlb_stats_current"]
+    mlb_stats_previous      = cached["mlb_stats_previous"]
+    game_logs_current       = cached["game_logs_current"]
+    team_win_data           = cached["team_win_data"]
+    team_woba_factors       = cached["team_woba_factors"]
 
     # ── Matchup period metadata ──────────────────────────────────────
     mp            = MATCHUP_PERIODS.get(week, {})
@@ -312,6 +374,15 @@ def get_league_data(team_id: int, week: int) -> dict:
         else:
             position = "P"
 
+        # Stats-tab payloads — keyed by the same accent-stripped lowercase
+        # name the upstream MLB Stats / Savant fetches use as their dict key.
+        name_key = strip_accents(player_name)
+        season_stats     = _build_season_stats(mlb_stats_current.get(name_key, {}))
+        savant_expected  = _build_savant_expected(
+            savant_current.get(name_key, {}),
+            savant_statcast_current.get(name_key, {}),
+        )
+
         roster_sps.append({
             "name":         player_name,
             "team":         team_abbrev,
@@ -327,7 +398,9 @@ def get_league_data(team_id: int, week: int) -> dict:
             # (`pool_entry.get("percentOwned", 100)`) silently fell through
             # to the default 100 for every rostered player, which only
             # became visible when the Stats tab started displaying the value.
-            "percentOwned": percent_owned_by_player.get(player_id, 0.0),
+            "percentOwned":   percent_owned_by_player.get(player_id, 0.0),
+            "seasonStats":    season_stats,
+            "savantExpected": savant_expected,
         })
 
     slot_order = {"SP": 0, "RP": 1, "IL": 2, "Bench": 3, "P": 1}
@@ -430,17 +503,27 @@ def get_league_data(team_id: int, week: int) -> dict:
             raw_inj      = player.get("injuryStatus", "ACTIVE")
             pitcher_data = fa_starts_map.get(fa_name, {"starts": 0, "startDates": []})
 
+            # Stats-tab payloads — same shape as the rostered loop above.
+            fa_name_key = strip_accents(fa_name)
+            fa_season_stats    = _build_season_stats(mlb_stats_current.get(fa_name_key, {}))
+            fa_savant_expected = _build_savant_expected(
+                savant_current.get(fa_name_key, {}),
+                savant_statcast_current.get(fa_name_key, {}),
+            )
+
             free_agents.append({
-                "name":         fa_name,
-                "team":         team_abbrev,
-                "injuryStatus": inj_label_map.get(raw_inj, raw_inj),
-                "percentOwned": round(player.get("ownership", {}).get("percentOwned", 0), 1),
-                "projFpts":     fa_proj_fpts.get(fa_name, 0.0),
-                "projBlend":    fa_proj_blend.get(fa_name, 0.0),
-                "starts":       pitcher_data["starts"],
-                "startDates":   pitcher_data["startDates"],
-                "opps":         "",
-                "checked":      player.get("ownership", {}).get("percentOwned", 0) >= 15,
+                "name":           fa_name,
+                "team":           team_abbrev,
+                "injuryStatus":   inj_label_map.get(raw_inj, raw_inj),
+                "percentOwned":   round(player.get("ownership", {}).get("percentOwned", 0), 1),
+                "projFpts":       fa_proj_fpts.get(fa_name, 0.0),
+                "projBlend":      fa_proj_blend.get(fa_name, 0.0),
+                "starts":         pitcher_data["starts"],
+                "startDates":     pitcher_data["startDates"],
+                "opps":           "",
+                "checked":        player.get("ownership", {}).get("percentOwned", 0) >= 15,
+                "seasonStats":    fa_season_stats,
+                "savantExpected": fa_savant_expected,
             })
 
     # ── Fetch actual FPTS for past dates + today (for live stats) ────
@@ -614,19 +697,30 @@ def get_league_data(team_id: int, week: int) -> dict:
     # Build the dropped player dicts using the real starts + projection data.
     for name, info in dropped_sp_info.items():
         intersected = dropped_intersected.get(name, {"starts": 0, "startDates": []})
+
+        # Stats-tab payloads — same shape as the rostered/FA loops above.
+        dp_name_key = strip_accents(name)
+        dp_season_stats    = _build_season_stats(mlb_stats_current.get(dp_name_key, {}))
+        dp_savant_expected = _build_savant_expected(
+            savant_current.get(dp_name_key, {}),
+            savant_statcast_current.get(dp_name_key, {}),
+        )
+
         dropped_players.append({
-            "name":         name,
-            "team":         info["team_abbrev"],
-            "slot":         "EX",
-            "position":     "SP",
-            "injuryStatus": "Dropped",
-            "starts":       intersected["starts"],
-            "startDates":   intersected["startDates"],
-            "projFpts":     dropped_proj_fpts.get(name, 0.0),
-            "projBlend":    dropped_proj_blend.get(name, 0.0),
-            "projDetails":  dropped_proj_details.get(name),
-            "percentOwned": 0.0,
-            "daysOnTeam":   info["days_on_team"],
+            "name":           name,
+            "team":           info["team_abbrev"],
+            "slot":           "EX",
+            "position":       "SP",
+            "injuryStatus":   "Dropped",
+            "starts":         intersected["starts"],
+            "startDates":     intersected["startDates"],
+            "projFpts":       dropped_proj_fpts.get(name, 0.0),
+            "projBlend":      dropped_proj_blend.get(name, 0.0),
+            "projDetails":    dropped_proj_details.get(name),
+            "percentOwned":   0.0,
+            "daysOnTeam":     info["days_on_team"],
+            "seasonStats":    dp_season_stats,
+            "savantExpected": dp_savant_expected,
         })
         if name not in roster_actual_fpts and info["player_fpts"]:
             roster_actual_fpts[name] = info["player_fpts"]
