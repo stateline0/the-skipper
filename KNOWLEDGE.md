@@ -37,6 +37,13 @@ https://lm-api-reads.fantasy.espn.com/apis/v3/games/flb/seasons/{year}/segments/
 - `mMatchupScore` — matchup scoring data
 - `kona_player_info` — player projections and ownership; requires `x-fantasy-filter` JSON header
 
+### Ownership data location
+`Confidence: 10/10 · Last assessed: April 27, 2026`
+
+**Ownership (`percentOwned`) lives only on `kona_player_info`, never on `mRoster`.** This bit us silently for many sessions. The path is `player.ownership.percentOwned` on each entry of the `kona_player_info` response. The free-agent loop has always read from there correctly. The rostered loop was using `pool_entry.get("percentOwned", 100)` from the `mRoster` response — a field that doesn't exist there — and silently falling through to a default of `100` for every rostered player. The bug was invisible until session 28's Stats tab introduced an Own% column for rostered players (PR #117). Fix: the rostered code path now reads ownership from the `kona_player_info` call we already make for projections, capturing it into a `percent_owned_by_player` dict alongside `proj_fpts_by_player` in the same parsing loop. No extra HTTP call required.
+
+**Generalization:** when adding a UI surface that displays a previously-unsurfaced player attribute, audit the upstream extraction. Defaults that "looked reasonable" tend to hide silent fallthroughs.
+
 ### Scoring periods
 `Confidence: 10/10 · Last assessed: April 10, 2026`
 
@@ -349,6 +356,15 @@ https://baseballsavant.mlb.com/leaderboard/pitch-arsenal-stats?type=pitcher&pitc
 | EV50 | Statcast | Avg exit velocity of softest 50% of batted balls | Measures weak contact generation — lower = better |
 | Whiff % | Arsenal | Swinging strike rate per pitch type | Stuff quality — higher = better |
 | CSW % | Arsenal | Called strikes + whiffs rate | Overall pitch deception — higher = better |
+
+### Endpoint usage in The Skipper
+`Confidence: 10/10 · Last assessed: April 27, 2026`
+
+| Endpoint | Helper | Cache key | Status |
+|---|---|---|---|
+| Expected Statistics | `fetch_expected_stats` | `cache:savant:{year}` | Fetched on every page load (24hr TTL). Drives `xera`, `xwoba`, `woba_diff` columns + the projection model's Savant adjustment. |
+| Statcast Leaderboard | `fetch_statcast_stats` | `cache:savant-statcast:{year}` | Fetched on every page load (24hr TTL, added in session 28 PR #118). Drives `barrelPct` column. Isolated cache key from `cache:savant:{year}` so a Statcast outage can't poison projections. |
+| Pitch Arsenal Stats | `fetch_pitch_arsenal` | not yet wired | **Not currently fetched.** Whiff% column on the Stats tab is empty for everyone because of this gap. Wiring it requires the standard `load_cached_data` parallel fetch + caching pattern, plus a per-pitcher aggregation step that weighted-averages per-pitch `whiff_pct` by `usage_pct` to produce a single team-style number per pitcher. Filed under the Stats-tab follow-ups in BACKLOG. |
 
 ### Limitations
 
@@ -758,6 +774,34 @@ PR #113 (session 27) is gating infrastructure for #114 — when the lag-fix bran
 
 **Connection to the post-hoc adjustment decision above.** All four enforcements are post-hoc adjustments rather than data-flow reorders. The choice was made independently each time but the rationale is the same: the consumer (`get_projected_fpts` for #111/#114, the `info["player_fpts"]` lookup for #81/#115) emits per-item detail that lets us recompute aggregates without re-running the consumer. When that property holds, post-hoc beats reorder.
 
+### New surfaces expose old assumptions
+`Confidence: 9/10 · Last assessed: April 27, 2026`
+
+A recurring shape across recent sessions: code that's been silently wrong for a while because nothing was reading the value. The bug only surfaces when a new UI surface starts displaying the field, or a new code path starts depending on it.
+
+Three concrete instances:
+1. **Session 25 — partial `actual-all:` writes (PR #108).** `fetch_game_logs` could return `{}` silently when the MLB Stats API returned HTTP 200 with empty splits. The cron then NX-wrote a 2-pitcher blob and locked it permanently. Invisible until someone looked at the Accuracy dashboard for a specific date.
+2. **Session 27 — `today_has_started` UTC-vs-ET drift (PR #114).** The lag-fix branch silently skipped during evening usage in CT/PT because UTC had already crossed midnight while ESPN's scoring-period boundary (which tracks ET) had not. Invisible until a user added a pitcher in the evening.
+3. **Session 28 — rostered `percentOwned` defaulting to 100 (PR #117).** `pool_entry.get("percentOwned", 100)` from the `mRoster` response. The field doesn't exist there, every pitcher fell through to 100, and no UI displayed the value until the Stats tab's Own% column.
+
+**Checklist for the next time this pattern shows up:** When adding a new UI surface that displays a previously-unsurfaced field, audit the upstream extraction once. The audit is two questions: (1) does the source the code is reading from actually carry this field? (2) does the default-value fallback look "reasonable" but mask a real silent failure? Defaults like `100`, `0`, `{}`, or `[]` are particularly risky — they often hide the gap.
+
+**Why we keep tripping into it:** silent-falsy defaults are convenient at write time and impossible to detect at read time without explicit instrumentation. The countermeasure is upstream: pick aggressive defaults that fail loud (e.g. raise on missing key) for fields whose absence is a bug, not a normal state.
+
+### Config-driven column system (StatsTable)
+`Confidence: 9/10 · Last assessed: April 27, 2026`
+
+`components/StatsTable.tsx` exposes a `PITCHER_COLUMNS` array where each entry specifies its label, sort key, render function, optional `preferredDir` and `tooltip`, and optional alignment / minimum width. The table component itself is renderer-only — it iterates the array, calls each column's `render` with the pitcher row, and delegates sort comparison to the column's `sortValue` (numeric) or `stringValue` (string).
+
+The pattern was specified in the session-25 design notes primarily to keep a future hitter expansion cheap, but it pays off within a single feature too: session 28's PR #118 added 9 columns without touching the table renderer at all, just appending to the array. New optional fields (`preferredDir`, `tooltip`) added themselves to the interface and propagated to every column without per-column code edits.
+
+**Conventions established:**
+- **Numeric sortValue returning NaN** = "this pitcher doesn't have data for this column." The comparator sinks NaNs to the bottom regardless of direction. Mirrors IL-sinks-to-bottom; both are direction-independent.
+- **`preferredDir: 'asc'`** for "lower is better" stats (ERA, BB/9, xERA, xwOBA, Brl%) so a single click puts the best pitchers at the top. First-click default is desc for numeric / asc for string when `preferredDir` is unset; subsequent clicks of the same column flip direction.
+- **`tooltip` rendered via the native HTML `title` attribute** on `<th>`. Reserved for glossary-style help text. Cells that need rich content (per-start breakdown, etc.) use the existing portal-rendered `<ProjectionTooltip>` component instead.
+
+**When NOT to extend this pattern:** the column system is right when the rendering is uniform (one row per pitcher, one column per stat). Layouts with merged cells, conditional rows, or nested expansion don't fit cleanly — those want bespoke rendering.
+
 ### File architecture (refactored session 18)
 `Confidence: 10/10 · Last assessed: April 25, 2026`
 
@@ -827,10 +871,14 @@ vercel dev   # frontend only — Python routes require production
 ### Deploy sequence
 
 ```
-file save → git add → git commit → vercel --prod
+file save → git add → git commit → git push → vercel --prod
 ```
 
 Then test at `https://the-skipper-iota.vercel.app`
+
+**Important:** `vercel --prod` deploys from the **local working tree**, not from any git ref. It does not require a `git push`, does not require a feature branch, does not require a clean working tree. This is convenient for fast verification, but it creates a footgun: production code can be running ahead of your git history with no record that it ever did.
+
+Session 28 hit this trap. PR 2's code was deployed via `vercel --prod` for verification before any commit existed in git; PR 3's tooltip work then layered onto the same uncommitted working tree; recovery was bundling PR 2 + PR 3 into a single PR. Rule going forward: **always `git push` the branch before running `vercel --prod`**, or treat `--prod` deploys without a corresponding commit as ephemeral (re-run after the push lands so the deployed bundle matches a real ref). If you need a quick-iterate-without-pushing flow, use `vercel` (preview deploy) — that has the same speed but a different URL, so it can't be confused with production.
 
 ### Git workflow
 
