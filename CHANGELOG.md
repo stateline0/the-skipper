@@ -2,6 +2,69 @@
 
 ---
 
+## Session 29 — June 5, 2026
+
+A project-review session. Swept the whole codebase for outstanding work and
+found that the docs were a reliable source of truth with one important
+exception: **PR #115's fix had never actually landed in `main`, despite both
+`BACKLOG.md` and the session-27 changelog marking it complete.** PR #115 ("prune
+dropped player Act FPTS to rostered window") was still OPEN on GitHub, there was
+no #115 merge commit in `git log` (the history jumps #114 → #116), and the live
+code at `api/espn.py` still carried the old, unfixed `roster_actual_fpts[name] =
+info["player_fpts"]` assignment. The session re-landed the fix, corrected the
+docs, and closed the two stale open PRs (#115 and the long-superseded #42).
+
+### Key learnings this session
+
+- **"Marked done" is not "merged."** The rostered-window invariant looked closed
+  on paper — four enforcement PRs, a KNOWLEDGE.md section, a checked BACKLOG item.
+  But one of the four (PR #115) was written, documented as merged, and then lost.
+  The tell was cross-checking three independent signals: GitHub PR state, the
+  `git log` merge-commit sequence, and the actual line of code. Any one of them
+  alone would have been ambiguous; together they were conclusive. When a doc
+  claims a fix shipped, the cheapest verification is to read the line it claims to
+  have changed.
+- **A stale PR branch is usually not the place to re-land a lost fix.** PR #115's
+  branch was based on `0f6caa5` (pre-#117/#118), and the dropped-player loop it
+  patched was substantially rewritten by the Stats-tab PRs that landed after it
+  (the `seasonStats` / `savantExpected` attach blocks). Reviving the old branch
+  would have meant resolving conflicts against a loop that no longer looked the
+  same. Re-applying the small, well-understood diff fresh against current `main`
+  was cleaner than a merge-conflict archaeology dive.
+
+### Re-landed: dropped-player Act FPTS pruning (was PR #115)
+
+`api/espn.py`, in the "Build the dropped player dicts" loop: `info["player_fpts"]`
+is now intersected with `days_on_team_set` before being stored into
+`roster_actual_fpts`, mirroring the `startDates` intersection already done a few
+lines up. Without this, a dropped pitcher who accrued FPTS *after* the drop date
+but inside the same matchup window (e.g. a relief appearance ESPN attributes via
+the FA actual-fpts path) silently inflated that row's Act FPTS total in the My
+Team grid. A `[espn.py] Dropped Act FPTS pruning: ...` log line fires only when
+pruning actually occurs. JSON shape unchanged; the frontend reads the same
+`actualFpts` map, now correctly scoped. This is the symmetric closure of the
+rostered-window invariant that the session-27 changelog already (prematurely)
+described.
+
+### Reconciled stale PRs
+
+- **PR #115 closed** as superseded — its fix re-landed fresh on the review branch.
+- **PR #42** ("locked projections via Upstash KV", April 10) **closed** — long
+  superseded by the v2 projection-locking work in sessions 14+.
+
+### Outstanding work confirmed (deferred, not done this session)
+
+The review verified these BACKLOG items are still genuinely open: Whiff% data
+plumbing (`fetch_statcast_stats()` has no `whiff_pct`; it lives on
+`fetch_pitch_arsenal()`, which isn't fetched), Dylan Cease Brl% name-match, Free
+Agents Stats tab, luck badge, projected-pace column, relievers Stats tab, weather
+Phase 3, ProjectionTooltip wOBA split, the two pre-acquisition follow-ups, and the
+known bugs (suspended players, FA actual-FPTS limitation). Structural gap also
+noted: zero automated tests, no CI, and lint/TS checks disabled in
+`next.config.js`.
+
+---
+
 ## Session 28 — April 27, 2026
 
 A two-PR session that finally landed the Stats view tab — the top-priority backlog item that had been queued since session 25's design pass. PR #117 shipped the scaffolding and accidentally surfaced a latent rostered-`percentOwned` backend bug that was silently defaulting to 100 for every player; the fix was folded into the same PR. PR #118 added the nine BACKLOG-spec columns (season real stats + Savant expecteds) and column header tooltips in a single combined PR — the two were intentionally split as PR 2 and PR 3 in design but ended up combined because the tooltip changes overlapped in the same file as the column additions, and splitting would have required `git add -p` interactive staging. Mid-session a workflow trap fired (PR 2's code reached production via `vercel --prod` but was never `git push`-ed to a feature branch, so PR 3 work piled onto an unpushed working tree); recovery was bundling.

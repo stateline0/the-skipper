@@ -1,6 +1,6 @@
 # The Skipper — Backlog
 
-Last updated: April 27, 2026 (session 28)
+Last updated: June 5, 2026 (session 29)
 
 ---
 
@@ -30,7 +30,7 @@ The big-picture feature still on the roadmap but not next-up:
 PR #111 fixed the user-visible aggregates for mid-week pickups but deliberately punted on three downstream concerns. Two remain; the third closed as PR #115 in session 27. None are user-blocking; all forward-only.
 - [ ] **`projection.py` lock-skip for pre-acquisition starts.** PR #111 tags `preAcquisition` post-hoc in `espn.py` after `get_projected_fpts` has already run, so per-start `proj2:` locks may be written for starts the user never benefited from. Forward-fix requires moving the actuals fetch above projection (so tagging precedes locking) — a substantial reorder of `get_league_data`. Practical impact today is low because most pre-acq starts already have `proj2:` locks from the cron all-MLB path or from prior owners' roster fetches.
 - [ ] **Accuracy dashboard "My Roster" scope filter for pre-acq starts.** Even after the lock-skip above, legacy `proj2:` locks from before pre-acq tagging existed will still match the current owner's roster slug and surface in the accuracy view. Symmetric fix to PR #104's FA-leak filter: drop matched starts where the matched date falls outside the rostered window (use the same `my_team_by_date` index already in scope).
-- [x] ~~**Dropped player post-drop `actualFpts` pruning.**~~ (Resolved in session 27 PR #115 — `info["player_fpts"]` now intersected with `days_on_team_set` in the dropped-player branch of `api/espn.py`. Symmetric closure of the rostered-window invariant — see KNOWLEDGE.md.)
+- [x] ~~**Dropped player post-drop `actualFpts` pruning.**~~ (`info["player_fpts"]` now intersected with `days_on_team_set` in the dropped-player branch of `api/espn.py`. Symmetric closure of the rostered-window invariant — see KNOWLEDGE.md. **Note:** session 27's PR #115 was written but never merged — the fix was absent from `main` until re-landed in session 29 after a project review caught the discrepancy. The original PR #115 has since been closed as superseded.)
 
 ### Dropped-player per-start projection display
 - [ ] Schedule grid reads `projectionDetails?.[pitcher.name]` from a global map populated only from `roster_sps`. Dropped players' per-start details live on `pitcher.projDetails` (set on the player object directly at `api/espn.py` line 622), which is never reached by the cell rendering logic. Net effect: any dropped pitcher with future or live-day starts displays a confirmed indicator without a `+X.X` projection underneath. Surfaced during PR #114 verification when the pre-fix Montero case landed in `droppedPlayers`. Two fix options: (1) merge dropped players' `projDetails` into `proj_details_roster` in `api/espn.py` before returning so the global map covers them, or (2) update `ScheduleGrid.tsx` cell paths to fall back to `pitcher.projDetails` when the global lookup misses. Option (1) is cleaner because it doesn't fork the frontend's data source. Low urgency — most dropped pitchers' starts are in the past where the cell shows actual FPTS instead.
