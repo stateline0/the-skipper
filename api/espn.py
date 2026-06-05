@@ -722,8 +722,20 @@ def get_league_data(team_id: int, week: int) -> dict:
             "seasonStats":    dp_season_stats,
             "savantExpected": dp_savant_expected,
         })
-        if name not in roster_actual_fpts and info["player_fpts"]:
-            roster_actual_fpts[name] = info["player_fpts"]
+        # Rostered-window invariant: prune dropped-player Act FPTS to dates the
+        # player was actually on our roster (mirror of the startDates
+        # intersection above). Without this, post-drop FPTS — e.g. a relief
+        # appearance within the same matchup window — silently inflate the
+        # row total in the My Team grid.
+        days_on_team_set = set(info["days_on_team"])
+        raw_fpts = info["player_fpts"]
+        filtered_fpts = {d: f for d, f in raw_fpts.items() if d in days_on_team_set}
+        pruned = [d for d in raw_fpts if d not in days_on_team_set]
+        if pruned:
+            print(f"[espn.py] Dropped Act FPTS pruning: {name} — "
+                  f"pruned {len(pruned)} post-drop entr(ies) ({pruned})")
+        if name not in roster_actual_fpts and filtered_fpts:
+            roster_actual_fpts[name] = filtered_fpts
 
     return {
         "ok":                True,
