@@ -1,19 +1,13 @@
 # The Skipper — Backlog
 
-Last updated: June 5, 2026 (session 29)
+Last updated: June 6, 2026 (session 30)
 
 ---
 
 ## 🔜 Next session priorities
 
 ### Stats view tab — follow-ups
-Scaffolding + season + Savant columns + header tooltips shipped in session 28 (PR #117 and the combined season+Savant+tooltips PR). Remaining work:
-- [ ] **Whiff% data plumbing.** Whiff% column currently displays an em-dash for everyone because `fetch_statcast_stats()` doesn't include `whiff_pct` — that field lives on `fetch_pitch_arsenal()`, which we don't currently call. Wire pitch arsenal into `load_cached_data` (parallel to the existing Savant/Statcast block, new `cache:savant-arsenal:{year}` 24hr-TTL key), then aggregate per-pitcher with weighted average by `usage_pct` to produce a single Whiff% per pitcher. Tooltip already references this so no frontend wording change needed.
-- [ ] **Dylan Cease Brl% missing — Savant name-match issue.** Every other rostered SP has a Brl% value; Cease's row shows em-dash. Almost certainly a `_strip_accents` / `_to_slug` mismatch between Savant CSV and our lookup. Worth printing the unmatched names from `fetch_statcast_stats` once during diagnosis.
-- [ ] **Free Agents page Stats tab.** Replicate the My Team scaffolding pattern — tab toggle on the FA page, render `<StatsTable>` with the FA pitcher list. Backend already attaches `seasonStats` / `savantExpected` to `freeAgentSPs` (done in session 28).
-- [ ] **Luck indicator badge.** 3-state: Trending up / On pace / Trending down. Computed from `fpts_per_start_actual` vs `fpts_per_start_expected` delta. The wOBAΔ column already surfaces the numeric input — the badge is a more user-friendly visualization with the underlying deltas in a tooltip.
-- [ ] **Projected season pace FPTS.** New column: `actual_fpts_to_date + expected_fpts_per_start × estimated_remaining_starts`. Pace is a comparator, not a prediction.
-- [ ] **Relievers section Stats tab.** Smaller grid below the SPs — currently no tab toggle. Same `<StatsTable>` component + columns work, just needs the toggle wiring.
+✅ **All six shipped in session 30** (PRs #121–#123) — Whiff% plumbing, Cease Brl% (self-resolved), Free Agents Stats tab, Luck indicator (rendered as a colored trend line), full-season Pace column, and the relievers Stats tab. Also added a Form sparkline, mobile tap popovers, and the FPTS/G → Proj/G rename. See **Completed (session 30)** below for details.
 
 ### Weekly planner / decision automation MVP
 The big-picture feature still on the roadmap but not next-up:
@@ -24,7 +18,9 @@ The big-picture feature still on the roadmap but not next-up:
 
 ### Model Improvements
 - [ ] Weather impact — Phase 3: wind direction model (add `PARK_OUTFIELD_BEARING` per park, compute out-to-outfield wind component, combine with temp into single weather multiplier)
-- [ ] ProjectionTooltip: split opponent wOBA display into season + last-14-day components (currently shows only the blended factor; show `seasonFactor`, `recentFactor`, and `blendedFactor` with weights)
+- [ ] ProjectionTooltip: split opponent wOBA display into season + last-14-day components (currently shows only the blended factor; show `seasonFactor`, `recentFactor`, and `blendedFactor` with weights). Note: the tooltip was otherwise rebuilt to reconcile in session 30 (PR #125).
+- [ ] **Accuracy `factorAnalysis` reconstruction is approximate** (surfaced reviewing PR #125). `api/accuracy.py` rebuilds counterfactuals from `adjustedBase × woba × park`, but the real per-start projection is `(base_no_wl + W/L) × woba × park × weather` — different base, and it ignores W/L + weather. Direction is now correct (PR #125 stores pitcher multipliers) but the MAE-impact numbers are rough. Rebuild from the same formula `projection.py` uses, or store the per-start `base_no_wl` in the locked breakdown so the counterfactuals can be exact.
+- [ ] **v1 locked value stores Proj/G, not the per-start projection.** `set_locked_projection` (the v1 float read by `ScheduleGrid` for locked past-start cells) stores `fpts_per_game` (≈ Proj/G), while live future cells show the factor-adjusted per-start `proj`. So a locked past start and a future start render on different bases. Low impact (past cells usually show actual FPTS), but lock the per-start `start_proj` instead for consistency.
 
 ### Pre-acquisition follow-ups (deferred from session 26 PR #111)
 PR #111 fixed the user-visible aggregates for mid-week pickups but deliberately punted on three downstream concerns. Two remain; the third closed as PR #115 in session 27. None are user-blocking; all forward-only.
@@ -82,6 +78,18 @@ PR #111 fixed the user-visible aggregates for mid-week pickups but deliberately 
 - [ ] `vercel dev` does not serve Python API routes locally (Vercel CLI v50+ known issue)
 
 ---
+
+## ✅ Completed (session 30 — June 6, 2026)
+- [x] **Stats-tab follow-ups — all six shipped.** Whiff% plumbing (PR #121 — `aggregate_whiff_pct()` + `cache:savant-arsenal:{year}` 24hr key; `whiffPct` sourced from the pitch-arsenal endpoint, which actually carries it). Cease Brl% (no code fix — he was temporarily under the statcast leaderboard's min-BBE threshold and now populates; a one-shot miss diagnostic stays in `espn.py`). Free Agents Stats tab (PR #122 — Schedule/Stats toggle mirroring My Team). Luck indicator (PR #123 — a colored trend line from wOBAΔ; direction verified against ERA-vs-xERA: green-up = unlucky / due-to-improve). Full-season Pace column (PR #123 — backend `seasonFptsToDate` from season totals via the league scoring; pace = season-to-date + Proj/G × est. remaining starts, blank for non-starters). Relievers Stats tab (PR #123).
+- [x] **Form sparkline (PR #123).** New column plotting actual FPTS over each pitcher's last ~10 starts (backend `_build_fpts_history()` from game logs). Colored by last-5-start average vs the actual season FPTS/start (`seasonFptsToDate ÷ gs`): green hotter / red colder / grey within a ±1.0-FPTS dead-band (`FORM_DEADBAND`).
+- [x] **Mobile tap popovers (PR #123).** Native hover `title` / SVG `<title>` tooltips never fire on touch, so the Form sparkline, Luck line, and Pace value are now tappable to show the same detail (dismiss by tapping elsewhere). `StatsTableContext` gained an optional `openInfo(content, event)`.
+- [x] **`FPTS/G` → `Proj/G` rename (PR #124).** The column is the model's projected per-start, not a season average; renamed + a tap/hover note saying so. The internal `fptsPerStart` field name is unchanged.
+- [x] **Projection model correctness fix (PR #125).** Three issues found reviewing the Start-breakdown tooltip:
+  1. **Run-environment factors were applied backwards.** Opponent wOBA, park, and weather are run-environment factors (>1.0 = more offense = worse for the pitcher), but the engine multiplied the net projection by them directly, so tough conditions *raised* it. `get_park_factor`'s own docstring said Coors should make a pitcher score "~15% worse" while the code (×1.075) made it better. New `env_to_pitcher_mult()` (`2 − factor`) converts each to a pitcher multiplier (>1.0 helps); applied in the live + locked per-start paths and stored in `per_start_details` / the v2 breakdown.
+  2. **Recent form didn't feed SP per-start projections** — only Proj/G and relievers used the 60/40 blend. Now the per-start skill base is scaled by the recent-vs-season ratio (live + lock), so the per-start total lines up with Proj/G.
+  3. **The Start-breakdown tooltip didn't reconcile** — showed `adjustedBase` as the base while the math used `base_no_wl`, and W/L as an end add-on when it's inside the product. Rebuilt to: skill base → W/L (win prob) → adjusted base → ×lineup ×park ×weather = projected. `FactorLabel` colors pitcher multipliers (>1 green / <1 red); dead `inverse` flag removed.
+  - Added a `MaeTimelineChart` milestone marker (2026-06-06) for the projection-output shift. **Forward-only** for locked values — existing locks keep their old numbers until they cycle out of the rolling window, so the MAE timeline has a discontinuity.
+- [x] **Lost PR #115 re-land + stale-PR cleanup (PR #120, session 29).** A project review found PR #115's dropped-player Act-FPTS pruning was marked merged but never landed; re-landed fresh and closed stale PRs #115 + #42. (See the dropped-player pruning item above.)
 
 ## ✅ Completed (session 28 — April 27, 2026)
 - [x] **PR #117 — Stats tab scaffolding on My Team + latent `percentOwned` backend bug fix.** Tab toggle (Schedule / Stats) on the My Team SP card. New `<StatsTable>` component with config-driven `PITCHER_COLUMNS` array — table is renderer-only, all data shaping in column defs. v1 columns from data already on the API response: Pitcher, Team, Slot, Own%, Starts, FPTS/G, Proj FPTS, Act FPTS. Sortable by any column, IL pitchers always sink to the bottom. Act FPTS total excludes pre-acquisition dates (rostered-window invariant). The new Own% column surfaced a latent backend bug: `pool_entry.get("percentOwned", 100)` was reading from `mRoster` (which doesn't carry ownership data) and silently defaulting to 100 for every rostered player. Fix folded into the same PR — extended the existing `kona_player_info` parsing loop to capture `player.ownership.percentOwned` per player_id (no extra HTTP call, same path the FA loop reads from), then sourced rostered ownership from that dict. Single PR, single verify cycle, no broken-UI window.

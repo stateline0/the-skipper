@@ -2,6 +2,98 @@
 
 ---
 
+## Session 30 — June 6, 2026
+
+A long build session that cleared the entire "Stats view tab — follow-ups"
+backlog and then turned into a projection-model audit. Shipped five PRs
+(#121–#125). The first four finished the Stats tab; the fifth corrected two
+genuine model bugs that surfaced while reviewing the projection tooltip — the
+kind of "pieced together over time" rot that only shows up when you make the
+math reconcile on screen.
+
+### Key learnings this session
+
+- **A tooltip that doesn't reconcile is a bug report.** The Start-breakdown
+  tooltip showed `base 6.7 → projected 9.9`, which is impossible from the rows
+  displayed. Chasing *why the numbers didn't add up* surfaced two real
+  calculation bugs (inverted run-environment factors; recent form not feeding
+  per-start) plus a display that showed a different base than the engine used.
+  Making a breakdown literally multiply out on screen is a cheap, powerful
+  correctness check — if you can't reconstruct the total from the parts shown,
+  either the display or the math is wrong.
+- **A function's own docstring can be the smoking gun.** `get_park_factor` said
+  in plain English that Coors should make a pitcher "score ~15% worse," while
+  the code returned 1.075 and multiplied by it (→ *better*). The intent was
+  documented; only the implementation was backwards. Read the docstring against
+  the behavior.
+- **Verify direction against a ground-truth proxy, don't theorize.** I twice
+  talked myself into a wrong sign from first principles (the Luck/wOBAΔ
+  direction, and almost the woba factor). The fix both times was a concrete
+  anchor: for Luck, "find a pitcher with ERA ≫ xERA (classic unlucky) — is his
+  line green-up?"; for the factors, the screenshot's weak-KC start. Live data
+  settled in seconds what reasoning kept getting backwards.
+- **"Marked done" is not "shipped" — and "shows a value" is not "computed
+  right."** Session 29's lost PR #115 and this session's inverted factors are
+  the same shape: code that looked fine because nobody reconstructed it from
+  source. The remedy is the same — read the actual line, reconcile the actual
+  number.
+- **Native `title` tooltips are invisible on touch.** The whole Stats tab's
+  hover detail (sparkline values, Luck/Pace explanations) was unreachable on
+  the phone the owner actually uses. Tap-to-show popovers were the fix; the
+  lesson is to check the primary device, not just the desktop dev view.
+- **Forward-only is the default for anything that writes locked KV.** The
+  projection fix changes every projection, but locked values are immutable, so
+  old locks keep old numbers until they cycle out. Logged a `MaeTimelineChart`
+  milestone marker so the MAE discontinuity is explained on the chart rather
+  than looking like a regression.
+
+### PR #121 — Whiff% plumbing + Brl% diagnostic
+`whiff_pct` lives on the pitch-arsenal endpoint, not the statcast leaderboard
+the Stats tab was reading, so the column was always an em-dash. Added
+`aggregate_whiff_pct()` (usage-weighted), a `cache:savant-arsenal:{year}` 24hr
+cache in `fetcher.py`, and threaded `savant_whiff_current` into `espn.py` to
+source `whiffPct`. Added a one-shot Brl% miss diagnostic for the Dylan Cease
+case — which turned out to need no fix (he was under the statcast min-BBE
+threshold and now populates).
+
+### PR #122 — Free Agents Stats tab
+Schedule/Stats toggle on the FA page mirroring My Team; renders the shared
+`<StatsTable>`. Backend already attached the data, so frontend-only.
+
+### PR #123 — Luck indicator, Pace, relievers tab, Form sparkline, mobile popovers
+The combined Stats-tab enhancement PR (iterated live with the owner):
+- **Luck** column — a colored trend line from wOBAΔ (slope = magnitude); green-up
+  = unlucky/due-to-improve, verified against ERA-vs-xERA. (Started as a text
+  badge, switched to the line on request.)
+- **Pace** column — projected full-season FPTS = season-to-date actual +
+  Proj/G × est. remaining starts (~32-start season); backend computes
+  `seasonFptsToDate` from season totals via the league scoring. Blank for
+  non-starters.
+- **Relievers Stats tab** — same Schedule/Stats toggle on the relievers card.
+- **Form sparkline** — actual FPTS over the last ~10 starts (backend
+  `_build_fpts_history()` from game logs), colored by last-5 average vs the
+  season FPTS/start with a ±1.0 dead-band.
+- **Mobile tap popovers** — the sparkline, Luck line, and Pace value are
+  tappable so their hover detail is reachable on touch.
+
+### PR #124 — `FPTS/G` → `Proj/G`
+The column is the model's projected per-start, not a season average; renamed
+with a tap/hover note. Surfaced while wiring the Form sparkline (whose color
+compares against the *actual* season average — a genuinely different number).
+
+### PR #125 — Projection model correctness fix
+Two calculation bugs + a tooltip rebuild (full detail in BACKLOG → Completed
+session 30): inverted run-environment factors now go through
+`env_to_pitcher_mult()` (`2 − factor`) so adverse conditions lower the
+projection; recent form now scales the per-start skill base; and the
+Start-breakdown tooltip was rebuilt to reconcile (skill base → W/L → adjusted
+base → ×lineup ×park ×weather = projected) with `FactorLabel` coloring pitcher
+multipliers. Added the 2026-06-06 accuracy-chart milestone marker. Out-of-scope
+follow-ups logged: accuracy.py's `factorAnalysis` reconstruction is approximate,
+and the v1 locked value stores Proj/G rather than the per-start projection.
+
+---
+
 ## Session 29 — June 5, 2026
 
 A project-review session. Swept the whole codebase for outstanding work and
