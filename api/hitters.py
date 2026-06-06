@@ -502,6 +502,35 @@ def savant_debug(team_id: int, week: int) -> dict:
     }
 
 
+def platoon_debug(team_id: int, week: int) -> dict:
+    """Diagnostic for the Phase-6 platoon layer: handedness-map coverage, a few
+    sample hand entries, split coverage, and per-day opp-starter/hand/factor for
+    a few rostered hitters. Hit /api/hitters?debug=platoon."""
+    year_int = int(os.environ.get("ESPN_SEASON", "2026"))
+    hands = load_player_hands(year_int)
+    payload = get_hitter_data(team_id, week)            # cached
+    roster = payload.get("rosterHitters", [])
+    keys = [strip_accents(h["name"]) for h in roster]
+    hit = load_hitter_stats(year_int)
+    splits = load_hitter_splits(year_int, hit["hitting_current"], keys)
+    days = []
+    for h in roster[:6]:
+        for d in (h.get("days") or [])[:3]:
+            days.append({
+                "hitter": h["name"], "date": d["date"],
+                "oppStarter": d.get("oppStarter"), "oppHand": d.get("oppHand"),
+                "factors": d.get("factors"),
+            })
+    return {
+        "ok": True,
+        "handsCount": len(hands),
+        "sampleHands": dict(list(hands.items())[:6]),
+        "splitsCovered": f"{len(splits)}/{len(keys)}",
+        "sampleSplits": dict(list(splits.items())[:3]),
+        "sampleDays": days,
+    }
+
+
 def scoring_debug(team_id: int) -> dict:
     """Diagnostic: fetch the league mSettings and return the raw hitting/relevant
     scoringItems alongside what the parser derives and the hardcoded fallback.
@@ -542,9 +571,11 @@ class handler(BaseHTTPRequestHandler):
         fresh   = qs.get("fresh", ["0"])[0] in ("1", "true")
         debug   = qs.get("debug", [""])[0]
 
-        if debug in ("scoring", "savant"):
+        if debug in ("scoring", "savant", "platoon"):
             try:
-                payload = scoring_debug(team_id) if debug == "scoring" else savant_debug(team_id, week)
+                payload = (scoring_debug(team_id) if debug == "scoring"
+                           else savant_debug(team_id, week) if debug == "savant"
+                           else platoon_debug(team_id, week))
             except Exception as e:
                 payload = {"ok": False, "error": str(e)}
             body = json.dumps(payload).encode()
