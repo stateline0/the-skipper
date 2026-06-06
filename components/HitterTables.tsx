@@ -130,9 +130,10 @@ function useSortedHitters(hitters: UIHitter[], weeks: Weeks) {
   return { sorted, key, dir, onSort }
 }
 
-function SortTh({ label, col, sortKey, sortDir, onSort, align = 'center', minWidth, title }: {
+function SortTh({ label, col, sortKey, sortDir, onSort, align = 'center', minWidth, title, sub }: {
   label: string; col: string; sortKey: string | null; sortDir: SortDir
-  onSort: (k: string) => void; align?: 'left' | 'center'; minWidth?: number; title?: string
+  onSort: (k: string) => void; align?: 'left' | 'center'; minWidth?: number
+  title?: string; sub?: string
 }) {
   const active = sortKey === col
   return (
@@ -148,6 +149,11 @@ function SortTh({ label, col, sortKey, sortDir, onSort, align = 'center', minWid
       }}
     >
       {label}{active ? (sortDir === 'desc' ? ' ↓' : ' ↑') : ''}
+      {sub && (
+        <div style={{ fontSize: 8, fontWeight: 400, color: 'var(--ink-3)', marginTop: 1, letterSpacing: 0, textTransform: 'none' }}>
+          lg {sub}
+        </div>
+      )}
     </th>
   )
 }
@@ -278,16 +284,20 @@ function HitterDayCell({ g }: { g: DayGame }) {
 
 // ─── Stats table (with advanced Savant columns) ───────────────────────────────
 
-export function HitterStatsTable({ hitters, weeks, showOwn }: {
-  hitters: UIHitter[]; weeks: Weeks; showOwn?: boolean
+export function HitterStatsTable({ hitters, weeks, showOwn, leagueAvg }: {
+  hitters: UIHitter[]; weeks: Weeks; showOwn?: boolean; leagueAvg?: HitterAdvanced
 }) {
   const { sorted, key, dir, onSort } = useSortedHitters(hitters, weeks)
   const cellStyle: React.CSSProperties = {
     padding: '10px', borderBottom: '1px solid var(--border)', verticalAlign: 'middle', whiteSpace: 'nowrap',
   }
   const num = (extra?: React.CSSProperties): React.CSSProperties => ({ ...cellStyle, textAlign: 'center', fontFamily: 'var(--mono)', ...extra })
-  const th = (label: string, col: string, align: 'left' | 'center' = 'center', title?: string) =>
-    <SortTh label={label} col={col} sortKey={key} sortDir={dir} onSort={onSort} align={align} title={title} />
+  const th = (label: string, col: string, align: 'left' | 'center' = 'center', title?: string, sub?: string) =>
+    <SortTh label={label} col={col} sortKey={key} sortDir={dir} onSort={onSort} align={align} title={title} sub={sub} />
+  const la = leagueAvg || {}
+  const subRate = (n?: number) => (n === undefined ? undefined : n.toFixed(3).replace(/^0/, ''))
+  const subPct  = (n?: number) => (n === undefined ? undefined : `${n.toFixed(1)}%`)
+  const subNum  = (n?: number) => (n === undefined ? undefined : n.toFixed(1))
   return (
     <div style={{ overflowX: 'auto' }}>
       <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
@@ -300,11 +310,11 @@ export function HitterStatsTable({ hitters, weeks, showOwn }: {
             {th('R', 'r')}
             {th('RBI', 'rbi')}
             {th('SB', 'sb')}
-            {th('xBA', 'xba')}
-            {th('xSLG', 'xslg')}
-            {th('xwOBA', 'xwoba')}
-            {th('Brl%', 'barrel')}
-            {th('EV', 'ev')}
+            {th('xBA', 'xba', 'center', undefined, subRate(la.xba))}
+            {th('xSLG', 'xslg', 'center', undefined, subRate(la.xslg))}
+            {th('xwOBA', 'xwoba', 'center', undefined, subRate(la.xwoba))}
+            {th('Brl%', 'barrel', 'center', undefined, subPct(la.barrelPct))}
+            {th('EV', 'ev', 'center', undefined, subNum(la.evAvg))}
             {th('Proj/G', 'projG')}
             {th('Proj wk', 'projWk')}
             {showOwn && th('Own%', 'own')}

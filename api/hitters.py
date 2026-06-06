@@ -89,6 +89,27 @@ def _date_range(start: str, end: str) -> list:
     return out
 
 
+def _league_avg(savant_expected: dict, savant_statcast: dict) -> dict:
+    """League-average reference values for the advanced columns, averaged over
+    all qualified batters in the Savant datasets (min-PA/BBE filtered upstream)."""
+    def mean(vals):
+        vals = [v for v in vals if v]
+        return sum(vals) / len(vals) if vals else None
+
+    xba   = mean([v.get("xba", 0)   for v in savant_expected.values()])
+    xslg  = mean([v.get("xslg", 0)  for v in savant_expected.values()])
+    xwoba = mean([v.get("xwoba", 0) for v in savant_expected.values()])
+    brl   = mean([v.get("brl_pct", 0) for v in savant_statcast.values()])
+    ev    = mean([v.get("avg_ev", 0)  for v in savant_statcast.values()])
+    return {
+        "xba":       round(xba, 3) if xba else None,
+        "xslg":      round(xslg, 3) if xslg else None,
+        "xwoba":     round(xwoba, 3) if xwoba else None,
+        "barrelPct": round(brl, 1) if brl else None,
+        "evAvg":     round(ev, 1) if ev else None,
+    }
+
+
 def _advanced_line(name: str, savant_expected: dict, savant_statcast: dict) -> dict | None:
     """Advanced (Savant) display block for the Stats tab: xBA/xSLG/xwOBA + a
     luck signal (est_woba − woba; positive = unlucky/due) and Barrel%/Whiff%.
@@ -298,6 +319,7 @@ def get_hitter_data(team_id: int, week: int) -> dict:
         "schedule":      schedule,
         "rosterHitters": roster_hitters,
         "freeAgentHitters": free_agent_hitters,
+        "leagueAvg":     _league_avg(savant_current, savant_statcast),
         "scoringStats":  sorted(scoring.keys()),
         "computedAt":    datetime.now(timezone.utc).isoformat(),
     }
@@ -389,7 +411,8 @@ HITTER_CACHE_TTL = 1800  # 30 min
 #   v6: add freeAgentHitters to the payload.
 #   v7: add advanced (Savant xBA/xSLG/xwOBA, Barrel%/Whiff%) block.
 #   v8: advanced uses HardHit% (ev95percent) + EV instead of Whiff%.
-HITTER_CACHE_VERSION = 8
+#   v9: drop HardHit%; add leagueAvg block for advanced-column headers.
+HITTER_CACHE_VERSION = 9
 
 
 def _cache_key(team_id: int, week: int) -> str:
