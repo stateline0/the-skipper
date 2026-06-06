@@ -31,24 +31,52 @@ from fetcher import get_headers_and_cookies, get_pro_team_map, load_hitter_stats
 from kv import cache_get, cache_set
 from projection_hitter import (
     parse_hitter_scoring, get_projected_hitter_fpts, strip_accents,
+    DEFAULT_HITTER_SCORING,
 )
 
 # ESPN baseball lineup/eligible slot IDs. Hitters occupy 0–12; pitchers 13–15.
 HITTER_SLOTS = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12}
 
+# Label + display order keyed by the player's current lineupSlotId, to match
+# ESPN's roster ordering exactly: C, 1B, 2B, 3B, SS, MI(2B/SS), CI(1B/3B), OF,
+# UTIL, then bench, then IL.
+LINEUP_LABEL = {
+    0: "C", 1: "1B", 2: "2B", 3: "3B", 4: "SS", 5: "OF",
+    6: "2B/SS", 7: "1B/3B", 8: "OF", 9: "OF", 10: "OF",
+    11: "DH", 12: "UTIL", 16: "BN", 17: "IL",
+}
+LINEUP_RANK = {
+    0: 0, 1: 1, 2: 2, 3: 3, 4: 4, 6: 5, 7: 6, 5: 7,
+    8: 8, 9: 9, 10: 10, 11: 11, 12: 12, 16: 90, 17: 99,
+}
 
-def hitter_slot_label(eligible: set, injured: bool) -> str:
-    """Primary position label from eligibleSlots (most-specific first)."""
-    if injured:
-        return "IL"
+
+def _eligible_label(eligible: set) -> str:
+    """Most-specific position from eligibleSlots (for bench/unknown lineup slots)."""
     for sid, label in ((0, "C"), (1, "1B"), (2, "2B"), (3, "3B"), (4, "SS")):
         if sid in eligible:
             return label
-    if eligible & {5, 8, 9, 10}:   # OF / LF / CF / RF
+    if eligible & {5, 8, 9, 10}:
         return "OF"
-    if 11 in eligible:             # DH
+    if 11 in eligible:
         return "DH"
     return "UTIL"
+
+
+def hitter_slot(slot_id: int, eligible: set, injured: bool):
+    """Return (label, sort_rank) for a hitter from their lineupSlotId.
+
+    IL sinks to the bottom; bench hitters sort after starters but keep their
+    eligible position as the label (ESPN shows the position, not "BN", there).
+    """
+    if injured or slot_id == 17:
+        return "IL", 99
+    if slot_id == 16:                       # bench
+        return _eligible_label(eligible), 90
+    label = LINEUP_LABEL.get(slot_id)
+    if label:
+        return label, LINEUP_RANK.get(slot_id, 80)
+    return _eligible_label(eligible), 80
 
 
 def _date_range(start: str, end: str) -> list:
@@ -131,11 +159,24 @@ def get_hitter_data(team_id: int, week: int) -> dict:
     teams        = data.get("teams", [])
     my_team      = next((t for t in teams if t.get("id") == team_id), teams[0] if teams else {})
     team_name    = my_team.get("name", "").strip()
-    scoring      = parse_hitter_scoring(data)
     roster_entries = my_team.get("roster", {}).get("entries", [])
 
+    # Scoring is hardcoded (DEFAULT_HITTER_SCORING), verified from the league
+    # settings — same approach as the pitcher SCORING in projection.py. We also
+    # log what the mSettings parser *would* produce, to repair the auto-parser's
+    # stat-ID map in a later pass without depending on it now.
+    scoring = dict(DEFAULT_HITTER_SCORING)
+    try:
+        parsed = parse_hitter_scoring(data)
+        print(f"[hitters.py] mSettings-parsed scoring (diagnostic, not used): {parsed}")
+        items = data.get("settings", {}).get("scoringSettings", {}).get("scoringItems", [])
+        print(f"[hitters.py] raw scoringItems statId→points: "
+              f"{[(it.get('statId'), it.get('points')) for it in (items or [])]}")
+    except Exception as e:
+        print(f"[hitters.py] scoring diagnostic failed: {e}")
+
     # ── Identify hitters on the roster ────────────────────────────────
-    hitters_meta = []   # {name, team, pos, bats, eligible}
+    hitters_meta = []   # {name, team, pos, rank, bats, eligible}
     team_map = {}
     for entry in roster_entries:
         player = entry.get("playerPoolEntry", {}).get("player", {})
@@ -146,11 +187,13 @@ def get_hitter_data(team_id: int, week: int) -> dict:
         if not (eligible & HITTER_SLOTS):
             continue   # pitcher (or unknown) — skip
         injured = player.get("injured", False)
+        slot_id = entry.get("lineupSlotId", 16)
+        pos, rank = hitter_slot(slot_id, eligible, injured)
         team_abbrev = PRO_TEAM_MAP.get(player.get("proTeamId", 0), "")
         bats = (player.get("batSide") or {}).get("code", "") if isinstance(player.get("batSide"), dict) else ""
         hitters_meta.append({
             "name": name, "team": team_abbrev,
-            "pos": hitter_slot_label(eligible, injured), "bats": bats,
+            "pos": pos, "rank": rank, "bats": bats,
         })
         if team_abbrev:
             team_map[name] = team_abbrev
@@ -200,6 +243,7 @@ def get_hitter_data(team_id: int, week: int) -> dict:
             "name":        name,
             "team":        h["team"],
             "pos":         h["pos"],
+            "rank":        h["rank"],
             "bats":        h["bats"],
             "projFpts":    p.get("projFpts", 0.0),
             "projPerGame": round(per_game, 1),
@@ -209,8 +253,8 @@ def get_hitter_data(team_id: int, week: int) -> dict:
             "days":        days,
         })
 
-    # IL to the bottom, then by weekly projection.
-    roster_hitters.sort(key=lambda x: (x["pos"] == "IL", -x["projFpts"]))
+    # Match ESPN's roster order: by lineup-slot rank, ties broken by projection.
+    roster_hitters.sort(key=lambda x: (x["rank"], -x["projFpts"]))
 
     return {
         "ok":            True,

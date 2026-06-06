@@ -40,6 +40,13 @@ def test_per_game_vector_singles_and_division():
     print("✓ per_game_vector: singles derivation + per-game division")
 
 
+def test_total_bases():
+    v = per_game_vector(SEASON_2026, 150)
+    # TB = 1B + 2*2B + 3*3B + 4*HR = 109 + 64 + 9 + 120 = 302
+    assert approx(v["tb"], 302 / 150), v["tb"]
+    print("✓ per_game_vector: total bases = 1B + 2·2B + 3·3B + 4·HR")
+
+
 def test_per_game_vector_min_games():
     assert per_game_vector(SEASON_2026, 5) is None  # below MIN_GAMES
     print("✓ per_game_vector: returns None below MIN_GAMES")
@@ -48,18 +55,21 @@ def test_per_game_vector_min_games():
 def test_apply_formula_dot_product():
     v = per_game_vector(SEASON_2026, 150)
     fpts = apply_hitter_formula(v, DEFAULT_HITTER_SCORING)
-    # Hand-compute with the default scoring:
+    # Hand-compute with the verified league scoring (TB/BB/R/RBI/SB/HBP/-K):
+    # TB = 302
     expected = (
-        (109 * 1) + (32 * 2) + (3 * 3) + (30 * 4)   # 1b,2b,3b,hr
-        + (95 * 1) + (92 * 1)                        # r, rbi
-        + (60 * 1) + (6 * 1)                         # bb, hbp
-        + (12 * 1) + (4 * -1)                        # sb, cs
-        + (120 * -1)                                 # so
+        (302 * 1)                  # total bases
+        + (60 * 1) + (6 * 1)       # bb, hbp
+        + (95 * 1) + (92 * 1)      # r, rbi
+        + (12 * 1)                 # sb
+        + (120 * -1)               # so
     ) / 150
     assert approx(fpts, expected), (fpts, expected)
-    # "h" is in the vector but NOT in default scoring → no double count
-    assert "h" not in DEFAULT_HITTER_SCORING
-    print(f"✓ apply_hitter_formula: {fpts:.3f} pts/game matches hand calc")
+    # Hit types live in the vector but are NOT scored — TB carries that value,
+    # so scoring them too would double count. CS isn't scored in this league.
+    for k in ("1b", "2b", "3b", "hr", "h", "cs"):
+        assert k not in DEFAULT_HITTER_SCORING
+    print(f"✓ apply_hitter_formula: {fpts:.3f} pts/game matches hand calc (TB-based)")
 
 
 def test_scoring_does_not_double_count_with_h():
