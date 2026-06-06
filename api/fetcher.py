@@ -167,6 +167,90 @@ def fetch_season_stats(yr: int) -> dict:
         return {}
 
 
+def fetch_season_stats_hitting(yr: int) -> dict:
+    """Fetch season HITTING stats from MLB Stats API.
+
+    Mirror of fetch_season_stats() but with group=hitting, for the hitter
+    projection model (api/projection_hitter.py). Returns
+    { fullname_lower: stat_dict } where each stat_dict carries the MLB Stats
+    API personId under "_mlbId" (parity with the pitching fetch, so a future
+    hitter game-log fetch can iterate /people/{id}/stats).
+    """
+    try:
+        r = requests.get(
+            "https://statsapi.mlb.com/api/v1/stats",
+            params={
+                "stats": "season", "playerPool": "all",
+                "group": "hitting", "season": str(yr),
+                "gameType": "R", "limit": 2000,
+            },
+            headers={"User-Agent": "Mozilla/5.0"},
+            timeout=15,
+        )
+        if r.status_code != 200:
+            return {}
+        splits = r.json().get("stats", [{}])[0].get("splits", [])
+        result = {}
+        for s in splits:
+            player = s.get("player", {})
+            full_name = player.get("fullName", "")
+            if not full_name:
+                continue
+            stat = dict(s.get("stat", {}))  # shallow copy so we don't mutate upstream
+            stat["_mlbId"] = player.get("id")
+            result[strip_accents(full_name)] = stat
+        return result
+    except Exception as e:
+        print(f"[fetcher.py] Failed to fetch {yr} MLB hitting stats: {e}")
+        return {}
+
+
+def load_hitter_stats(year_int: int) -> dict:
+    """Load current + previous season hitting stats for the hitter model,
+    cached in KV under cache:mlb-stats-hitting:{year} (24hr TTL on current).
+
+    Standalone from load_cached_data() so the hitter endpoint doesn't pull the
+    full pitcher external-data bundle (Savant/game-logs/wOBA/win-data) it
+    doesn't need yet. Returns {hitting_current, hitting_previous}.
+    """
+    cur = {}
+    prev = {}
+    try:
+        prev = cache_get(f"cache:mlb-stats-hitting:{year_int - 1}") or {}
+        cur  = cache_get(f"cache:mlb-stats-hitting:{year_int}") or {}
+    except Exception:
+        pass
+
+    if not cur or not prev:
+        try:
+            with ThreadPoolExecutor(max_workers=2) as ex:
+                futures = {}
+                if not prev:
+                    futures[ex.submit(fetch_season_stats_hitting, year_int - 1)] = "prev"
+                if not cur:
+                    futures[ex.submit(fetch_season_stats_hitting, year_int)] = "cur"
+                for fut in as_completed(futures):
+                    label = futures[fut]
+                    res = fut.result() or {}
+                    if label == "prev":
+                        prev = res
+                        try:
+                            cache_set(f"cache:mlb-stats-hitting:{year_int - 1}", res)
+                        except Exception:
+                            pass
+                    else:
+                        cur = res
+                        try:
+                            cache_set(f"cache:mlb-stats-hitting:{year_int}", res, ttl_seconds=86400)
+                        except Exception:
+                            pass
+        except Exception as e:
+            print(f"[fetcher.py] Hitting stats fetch failed: {e}")
+
+    print(f"[fetcher.py] MLB hitting stats: {len(cur)} current, {len(prev)} previous")
+    return {"hitting_current": cur, "hitting_previous": prev}
+
+
 def get_actual_fpts(past_dates: list, player_names: set, headers: dict,
                     cookies: dict, team_id: int = 0) -> tuple:
     """

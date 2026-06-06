@@ -39,8 +39,9 @@ hitter) — the opposite of the pitcher model's `env_to_pitcher_mult()` inversio
 
 | Phase | Adds | Status |
 |---|---|---|
-| 0 | Scoring detection from ESPN `mSettings`; keep hitter roster entries; hitter stat/log fetchers; verify Savant `?type=batter`; pitcher handedness | **partial — scoring parser done** |
-| 1 | Baseline per-game stat vector from season-rate stats, year-blended by PA | **done (`projection_hitter.py`)** |
+| 0 | Scoring detection from ESPN `mSettings`; keep hitter roster entries; hitter season-stats fetcher; pitcher handedness | **done** (scoring parser, `fetch_season_stats_hitting`, hitter roster parse; handedness + Savant batter mode deferred to their phases) |
+| 1 | Baseline per-game stat vector from season-rate stats, year-blended by PA | **done** (`projection_hitter.py`) |
+| **Wire-in** | `/api/hitters` endpoint + Hitters page consuming real roster/schedule/projections (falls back to mock) | **done** |
 | 2 | Savant expected-stat de-luck (xBA/xSLG/xwOBA) | planned |
 | 3 | Recent form (weighted last ~12–15 games, 60/40) | planned |
 | 4 | Park factor (direct, per-game) | planned |
@@ -69,10 +70,20 @@ hitter) — the opposite of the pitcher model's `env_to_pitcher_mult()` inversio
   singles derivation, the scoring dot product (incl. no double-count with "h"),
   the PA ramp, year blend, factor application, and end-to-end projection.
 
-Not yet wired into `api/espn.py` or the frontend — that lands with the data
-fetchers in a follow-up, since it touches the live pitcher path and needs the
-Phase-0 data spikes (Savant batter mode, MLB hitting splits) verified against
-live data first.
+**Wire-in (this PR):**
+- `api/fetcher.py` — `fetch_season_stats_hitting()` (`group=hitting`) +
+  `load_hitter_stats()` caching `cache:mlb-stats-hitting:{year}`.
+- `api/hitters.py` — new endpoint: parses hitter roster entries from the ESPN
+  response (slots 0–12), reads scoring from `mSettings`, derives each hitter's
+  game days from the shared schedule, runs the baseline model, returns
+  `rosterHitters` with per-day cells + a season line. Cached like `/api/espn`.
+- `pages/hitters.tsx` — fetches `/api/hitters`; renders real roster/schedule/
+  projections in the Schedule/Stats tabs, falling back to the mock wireframe
+  when no hitters are returned (banner shows which mode is active).
+
+Phase 1 projections are flat per game (no matchup context yet), so the grid
+shows real opponents with the same per-game value each day. Live verification
+runs on the Vercel preview, since this sandbox can't reach ESPN/MLB.
 
 ## Accuracy (separate from pitchers)
 

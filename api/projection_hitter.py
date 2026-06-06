@@ -31,26 +31,25 @@ import unicodedata
 # "any hit" and one that scores hit types separately are both expressible
 # without double counting — the scoring dict only references the keys it uses.
 STAT_KEYS = (
-    "pa", "ab", "h", "1b", "2b", "3b", "hr",
+    "pa", "ab", "h", "1b", "2b", "3b", "hr", "tb",
     "r", "rbi", "bb", "hbp", "sb", "cs", "so",
 )
 
 
-# ── League scoring formula (fallback) ─────────────────────────────────
-# Used when ESPN mSettings can't be parsed. A common points-league hitting
-# config that scores hit types separately (so it never also scores "h").
-# parse_hitter_scoring() overrides this with the league's actual weights.
+# ── League scoring formula ────────────────────────────────────────────
+# Hardcoded to the league's actual hitter scoring, verified from the league
+# settings (Total Bases +1, BB +1, R +1, RBI +1, SB +1, K −1, HBP +1; CS not
+# scored). This mirrors how api/projection.py hardcodes its pitcher SCORING
+# rather than trusting a parsed mSettings stat-ID map. The "tb" (total bases)
+# key carries the offensive value, so hit types (1b/2b/3b/hr) are NOT scored
+# separately — that would double-count.
 DEFAULT_HITTER_SCORING = {
-    "1b":  1,
-    "2b":  2,
-    "3b":  3,
-    "hr":  4,
+    "tb":  1,
+    "bb":  1,
     "r":   1,
     "rbi": 1,
-    "bb":  1,
-    "hbp": 1,
     "sb":  1,
-    "cs": -1,
+    "hbp": 1,
     "so": -1,
 }
 
@@ -69,6 +68,7 @@ ESPN_HITTING_STAT_IDS = {
     4:  "3b",    # triples
     5:  "hr",    # home runs
     7:  "1b",    # singles
+    8:  "tb",    # total bases
     9:  "bb",    # walks
     11: "hbp",   # hit by pitch
     17: "r",     # runs
@@ -177,6 +177,8 @@ def per_game_vector(stat: dict, games: int) -> dict:
     tpl = g("triples")
     hr  = g("homeRuns")
     singles = max(0.0, h - dbl - tpl - hr)
+    # Total bases = 1B + 2·2B + 3·3B + 4·HR (the league's primary offensive stat).
+    tb = singles + 2 * dbl + 3 * tpl + 4 * hr
 
     raw = {
         "pa":  g("plateAppearances"),
@@ -186,6 +188,7 @@ def per_game_vector(stat: dict, games: int) -> dict:
         "2b":  dbl,
         "3b":  tpl,
         "hr":  hr,
+        "tb":  tb,
         "r":   g("runs"),
         "rbi": g("rbi"),
         "bb":  g("baseOnBalls"),
