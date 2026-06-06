@@ -467,7 +467,8 @@ HITTER_CACHE_TTL = 1800  # 30 min
 #   v10: Phase 3 — recent-form blend (game-log weighted) in projPerGame.
 #   v11: Phase 6 — per-day platoon factor + per-day factors[] for the popover.
 #   v12: TEMP — embedded _diag block (remove before merge).
-HITTER_CACHE_VERSION = 12
+#   v13: handedness hydrated by person ID (/people?personIds) — /sports/1/players was empty.
+HITTER_CACHE_VERSION = 13
 
 
 def _cache_key(team_id: int, week: int) -> str:

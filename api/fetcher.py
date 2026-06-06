@@ -317,7 +317,9 @@ def load_hitter_stats(year_int: int) -> dict:
 
 
 def load_player_hands(year_int: int) -> dict:
-    """Handedness map {name_key: {bats, throws}}, cached 24hr."""
+    """Handedness map {name_key: {bats, throws}}, cached 24hr. Hydrates by MLB
+    person ID via /people?personIds using the IDs already in the cached pitching
+    and hitting season stats — covers every opposing starter + batter."""
     from mlb import fetch_player_hands
     key = f"cache:player-hands:{year_int}"
     try:
@@ -326,7 +328,21 @@ def load_player_hands(year_int: int) -> dict:
         cached = {}
     if cached:
         return cached
-    hands = fetch_player_hands(year_int) or {}
+    pitching, hitting = {}, {}
+    try:
+        pitching = cache_get(f"cache:mlb-stats:{year_int}") or {}
+    except Exception:
+        pass
+    try:
+        hitting = cache_get(f"cache:mlb-stats-hitting:{year_int}") or {}
+    except Exception:
+        pass
+    ids = [
+        s.get("_mlbId")
+        for s in list(pitching.values()) + list(hitting.values())
+        if isinstance(s, dict) and s.get("_mlbId")
+    ]
+    hands = fetch_player_hands(ids) if ids else {}
     if hands:
         try:
             cache_set(key, hands, ttl_seconds=86400)
