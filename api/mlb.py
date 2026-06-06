@@ -990,45 +990,45 @@ def fetch_game_logs(season: int, mlb_stats: dict = None) -> tuple:
 
 def fetch_player_hands(person_ids) -> dict:
     """Handedness map { name_key: {"bats", "throws"} } for the given MLB person
-    IDs, via /api/v1/people?personIds (chunked + parallel).
+    IDs, via the per-player /api/v1/people/{id} endpoint (parallel).
 
-    The /sports/1/players bulk list returns no handedness in this environment,
-    so we hydrate by ID instead — pitcher IDs (for opposing-starter throwing
-    hand) come from the cached pitching stats, batter IDs from hitting stats.
-    """
+    Both bulk variants (/sports/1/players and /people?personIds) return nothing
+    in this environment, but the per-player endpoints do (splits/game-logs use
+    them), so we fetch one ID at a time. Callers pass a bounded set (opposing
+    starters this period + rostered hitters)."""
     from concurrent.futures import ThreadPoolExecutor
-    ids = [str(i) for i in dict.fromkeys(person_ids) if i]
+    ids = [int(i) for i in dict.fromkeys(person_ids) if i]
     if not ids:
         return {}
 
-    def _chunk(cids):
+    def _one(pid):
         try:
             r = requests.get(
-                "https://statsapi.mlb.com/api/v1/people",
-                params={"personIds": ",".join(cids)},
-                headers={"User-Agent": "Mozilla/5.0"}, timeout=15,
+                f"https://statsapi.mlb.com/api/v1/people/{pid}",
+                headers={"User-Agent": "Mozilla/5.0"}, timeout=10,
             )
             if r.status_code != 200:
-                return {}
-            o = {}
-            for p in r.json().get("people", []):
-                name = p.get("fullName", "")
-                if not name:
-                    continue
-                o[strip_accents(name)] = {
-                    "bats":   (p.get("batSide") or {}).get("code", ""),
-                    "throws": (p.get("pitchHand") or {}).get("code", ""),
-                }
-            return o
+                return None
+            ppl = r.json().get("people", [])
+            if not ppl:
+                return None
+            p = ppl[0]
+            name = p.get("fullName", "")
+            if not name:
+                return None
+            return (strip_accents(name), {
+                "bats":   (p.get("batSide") or {}).get("code", ""),
+                "throws": (p.get("pitchHand") or {}).get("code", ""),
+            })
         except Exception:
-            return {}
+            return None
 
-    batches = [ids[i:i + 200] for i in range(0, len(ids), 200)]
     out = {}
     try:
-        with ThreadPoolExecutor(max_workers=4) as ex:
-            for res in ex.map(_chunk, batches):
-                out.update(res)
+        with ThreadPoolExecutor(max_workers=10) as ex:
+            for res in ex.map(_one, ids):
+                if res:
+                    out[res[0]] = res[1]
     except Exception as e:
         print(f"[mlb.py] fetch_player_hands failed: {e}")
     print(f"[mlb.py] player hands: {len(out)} from {len(ids)} ids")

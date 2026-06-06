@@ -295,8 +295,26 @@ def get_hitter_data(team_id: int, week: int) -> dict:
     # ── Projection (+ Phase-3 recent form from game logs) ─────────────
     roster_keys = [strip_accents(h["name"]) for h in hitters_meta]
     roster_logs = load_hitter_game_logs(year_int, hitting_current, roster_keys)
-    hands  = load_player_hands(year_int)                                   # Phase 6
     splits = load_hitter_splits(year_int, hitting_current, roster_keys)    # Phase 6
+
+    # Phase 6 handedness: opposing-starter IDs (mapped from the schedule's
+    # opp_starter names via the cached pitching stats) + rostered hitter IDs.
+    pitching = {}
+    try:
+        pitching = cache_get(f"cache:mlb-stats:{year_int}") or {}
+    except Exception:
+        pass
+    opp_ids = set()
+    for d in period_dates:
+        for tm in schedule.get(d, {}).values():
+            nm = (tm.get("opp_starter") or "").strip()
+            pid = (pitching.get(strip_accents(nm)) or {}).get("_mlbId") if nm else None
+            if pid:
+                opp_ids.add(pid)
+    hitter_ids = [(hitting_current.get(nk) or {}).get("_mlbId") for nk in roster_keys]
+    hands = load_player_hands(year_int, list(opp_ids) + [i for i in hitter_ids if i])
+    _pitching_n = len(pitching)
+    _ids_n = len(opp_ids) + len([i for i in hitter_ids if i])
     proj, _details = get_projected_hitter_fpts(
         [{"name": h["name"], "team": h["team"], "gameDates": h["gameDates"]} for h in hitters_meta],
         scoring=scoring,
@@ -351,6 +369,8 @@ def get_hitter_data(team_id: int, week: int) -> dict:
         "ok":            True,
         "_diag":         {  # TEMP platoon diagnostic — remove before merge
             "handsCount": len(hands),
+            "pitchingCacheSize": _pitching_n,
+            "idsRequested": _ids_n,
             "sampleHands": dict(list(hands.items())[:4]),
             "splitsCovered": f"{len(splits)}/{len(roster_keys)}",
             "sampleSplits": dict(list(splits.items())[:2]),
@@ -468,7 +488,8 @@ HITTER_CACHE_TTL = 1800  # 30 min
 #   v11: Phase 6 — per-day platoon factor + per-day factors[] for the popover.
 #   v12: TEMP — embedded _diag block (remove before merge).
 #   v13: handedness hydrated by person ID (/people?personIds) — /sports/1/players was empty.
-HITTER_CACHE_VERSION = 13
+#   v14: handedness via per-player /people/{id}; opp-starter IDs from pitching cache.
+HITTER_CACHE_VERSION = 14
 
 
 def _cache_key(team_id: int, week: int) -> str:
@@ -520,7 +541,7 @@ def platoon_debug(team_id: int, week: int) -> dict:
     sample hand entries, split coverage, and per-day opp-starter/hand/factor for
     a few rostered hitters. Hit /api/hitters?debug=platoon."""
     year_int = int(os.environ.get("ESPN_SEASON", "2026"))
-    hands = load_player_hands(year_int)
+    hands = load_player_hands(year_int, [])             # read whatever's cached
     payload = get_hitter_data(team_id, week)            # cached
     roster = payload.get("rosterHitters", [])
     keys = [strip_accents(h["name"]) for h in roster]

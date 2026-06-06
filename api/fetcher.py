@@ -316,39 +316,31 @@ def load_hitter_stats(year_int: int) -> dict:
     }
 
 
-def load_player_hands(year_int: int) -> dict:
-    """Handedness map {name_key: {bats, throws}}, cached 24hr. Hydrates by MLB
-    person ID via /people?personIds using the IDs already in the cached pitching
-    and hitting season stats — covers every opposing starter + batter."""
+def load_player_hands(year_int: int, person_ids) -> dict:
+    """Handedness map {name_key: {bats, throws}} for the given MLB person IDs
+    (opposing starters this period + rostered hitters). Incrementally merge-
+    cached in cache:player-hands:{year} (24hr): only IDs not already fetched are
+    looked up, so coverage grows as new periods/opponents are viewed."""
     from mlb import fetch_player_hands
     key = f"cache:player-hands:{year_int}"
+    idkey = f"cache:player-hands-ids:{year_int}"
     try:
         cached = cache_get(key) or {}
+        fetched = set(cache_get(idkey) or [])
     except Exception:
-        cached = {}
-    if cached:
-        return cached
-    pitching, hitting = {}, {}
-    try:
-        pitching = cache_get(f"cache:mlb-stats:{year_int}") or {}
-    except Exception:
-        pass
-    try:
-        hitting = cache_get(f"cache:mlb-stats-hitting:{year_int}") or {}
-    except Exception:
-        pass
-    ids = [
-        s.get("_mlbId")
-        for s in list(pitching.values()) + list(hitting.values())
-        if isinstance(s, dict) and s.get("_mlbId")
-    ]
-    hands = fetch_player_hands(ids) if ids else {}
-    if hands:
+        cached, fetched = {}, set()
+    need = [i for i in dict.fromkeys(person_ids) if i and str(i) not in fetched]
+    if need:
+        fresh = fetch_player_hands(need) or {}
+        if fresh:
+            cached.update(fresh)
+        fetched.update(str(i) for i in need)
         try:
-            cache_set(key, hands, ttl_seconds=86400)
+            cache_set(key, cached, ttl_seconds=86400)
+            cache_set(idkey, list(fetched), ttl_seconds=86400)
         except Exception:
             pass
-    return hands
+    return cached
 
 
 def load_hitter_splits(year_int: int, mlb_stats_hitting: dict, name_keys) -> dict:
