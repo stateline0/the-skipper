@@ -521,7 +521,8 @@ HITTER_CACHE_TTL = 1800  # 30 min
 #   v14: handedness via per-player /people/{id}; opp-starter IDs from pitching cache.
 #   v15: TEMP handProbe in _diag to inspect raw /people/{id} bio response.
 #   v16: cache handedness BY ID, resolved-only (poisoned id-set caused 0 hands).
-HITTER_CACHE_VERSION = 16
+#   v17: fix NameError in fetch_player_hands (_strip_accents_mlb) — the real root cause.
+HITTER_CACHE_VERSION = 17
 
 
 def _cache_key(team_id: int, week: int) -> str:

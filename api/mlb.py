@@ -1015,7 +1015,7 @@ def fetch_player_hands(person_ids) -> dict:
             if not name:
                 return None
             return (str(pid), {
-                "name":   strip_accents(name),
+                "name":   _strip_accents_mlb(name),
                 "bats":   (p.get("batSide") or {}).get("code", ""),
                 "throws": (p.get("pitchHand") or {}).get("code", ""),
             })
