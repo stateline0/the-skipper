@@ -11,7 +11,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from projection_hitter import (
     DEFAULT_HITTER_SCORING, ESPN_HITTING_STAT_IDS,
     parse_hitter_scoring, apply_hitter_formula, per_game_vector,
-    blend_vectors, pa_blend_weight, apply_factors,
+    blend_vectors, pa_blend_weight, apply_factors, scoring_is_sane,
     get_projected_hitter_fpts,
 )
 
@@ -128,6 +128,25 @@ def test_parse_scoring_fallback():
     assert parse_hitter_scoring({}) == DEFAULT_HITTER_SCORING
     assert parse_hitter_scoring({"settings": {}}) == DEFAULT_HITTER_SCORING
     print("✓ parse_hitter_scoring: falls back to default when empty")
+
+
+def test_scoring_is_sane():
+    assert scoring_is_sane(DEFAULT_HITTER_SCORING)
+    assert scoring_is_sane({"tb": 1, "r": 1, "so": -1})
+    assert not scoring_is_sane({})                      # empty
+    assert not scoring_is_sane({"so": -1})              # no positive offense
+    assert not scoring_is_sane({"sb": 1, "so": -5})     # nets negative for a regular
+    print("✓ scoring_is_sane: accepts real configs, rejects broken ones")
+
+
+def test_parse_scoring_sanity_fallback():
+    # Mimics the wire-in bug: only strikeouts mapped (all-negative). The parser
+    # must reject it and fall back to the verified default.
+    msettings = {"settings": {"scoringSettings": {"scoringItems": [
+        {"statId": 27, "points": -1},   # K only
+    ]}}}
+    assert parse_hitter_scoring(msettings) == DEFAULT_HITTER_SCORING
+    print("✓ parse_hitter_scoring: rejects all-negative parse, uses default")
 
 
 def test_end_to_end_projection():

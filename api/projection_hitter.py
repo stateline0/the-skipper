@@ -96,16 +96,51 @@ def strip_accents(s: str) -> str:
 
 # ── Phase 0: scoring detection ─────────────────────────────────────────
 
+# A league-average everyday-hitter per-game vector, used only to sanity-check
+# a parsed scoring dict (does it score a normal regular positively?).
+_REFERENCE_VECTOR = {
+    "pa": 4.3, "ab": 3.8, "h": 1.00, "1b": 0.62, "2b": 0.20, "3b": 0.02,
+    "hr": 0.16, "tb": 1.72, "r": 0.55, "rbi": 0.52, "bb": 0.38, "hbp": 0.04,
+    "sb": 0.08, "cs": 0.03, "so": 1.05,
+}
+# Keys that represent positive offensive production — a sane points-league
+# scoring must reward at least one of them.
+_POSITIVE_OFFENSE_KEYS = {"tb", "h", "1b", "2b", "3b", "hr", "r", "rbi"}
+
+
+def scoring_is_sane(scoring: dict) -> bool:
+    """True if a parsed scoring dict looks like a real points-league config:
+    it rewards at least one positive offensive stat AND scores a league-average
+    hitter positively. Guards against a wrong statId map silently producing the
+    all-negative projections we hit in the wire-in."""
+    if not scoring:
+        return False
+    if not any(scoring.get(k, 0) > 0 for k in _POSITIVE_OFFENSE_KEYS):
+        return False
+    return apply_hitter_formula(_REFERENCE_VECTOR, scoring) > 0
+
+
+def _resolve_points(item: dict):
+    """Read a scoringItem's points. ESPN stores the value in `points`, but some
+    leagues carry it (or a per-period override) in `pointsOverrides`. Prefer a
+    non-zero override when `points` is missing or zero."""
+    pts = item.get("points")
+    overrides = item.get("pointsOverrides") or {}
+    if overrides:
+        ov_val = next((v for v in overrides.values() if v is not None), None)
+        if ov_val is not None and (pts in (None, 0)):
+            pts = ov_val
+    return pts
+
+
 def parse_hitter_scoring(msettings: dict) -> dict:
     """Build a hitter SCORING dict from an ESPN league's mSettings payload.
 
-    Looks at scoringSettings.scoringItems[], maps each hitting statId via
-    ESPN_HITTING_STAT_IDS, and reads its points value (preferring an explicit
-    pointsOverrides entry, falling back to `points`). Returns DEFAULT_HITTER_
-    SCORING if nothing usable is found, so the caller always gets a workable dict.
-
-    Unmapped statIds (e.g. pitching stats, or IDs we don't model) are skipped;
-    a one-line summary of unmapped hitting-range IDs is printed for visibility.
+    Maps each hitting statId in scoringSettings.scoringItems[] via
+    ESPN_HITTING_STAT_IDS and reads its points value. Falls back to the verified
+    DEFAULT_HITTER_SCORING when the parse yields nothing OR fails scoring_is_sane
+    (a wrong statId map / unexpected config) — so the caller always gets a dict
+    that projects hitters positively, never the all-negative regression.
     """
     try:
         items = (
@@ -126,10 +161,8 @@ def parse_hitter_scoring(msettings: dict) -> dict:
             if isinstance(stat_id, int) and 0 <= stat_id <= 35:
                 unmapped.append(stat_id)
             continue
-        # pointsOverrides is keyed by scoring-period type; take any value.
-        overrides = item.get("pointsOverrides") or {}
-        pts = next(iter(overrides.values()), None) if overrides else item.get("points")
-        if pts is None:
+        pts = _resolve_points(item)
+        if pts is None or pts == 0:
             continue
         scoring[key] = pts
 
@@ -137,11 +170,12 @@ def parse_hitter_scoring(msettings: dict) -> dict:
         print(f"[projection_hitter.py] Unmapped hitting statIds in mSettings: "
               f"{sorted(set(unmapped))} — verify ESPN_HITTING_STAT_IDS")
 
-    if not scoring:
-        print("[projection_hitter.py] No hitter scoring parsed from mSettings; "
-              "using DEFAULT_HITTER_SCORING")
+    if not scoring_is_sane(scoring):
+        print(f"[projection_hitter.py] Parsed scoring failed sanity check "
+              f"(parsed={scoring}); falling back to DEFAULT_HITTER_SCORING")
         return dict(DEFAULT_HITTER_SCORING)
 
+    print(f"[projection_hitter.py] Using mSettings-derived hitter scoring: {scoring}")
     return scoring
 
 
