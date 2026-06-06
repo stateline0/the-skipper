@@ -29,6 +29,7 @@ export interface SeasonStats {
   bb9: number
   ip: number
   gs: number
+  seasonFptsToDate?: number  // season-to-date FPTS from season totals (backend)
 }
 
 // Combined Savant payload — expected stats + statcast. Each field is
@@ -137,6 +138,59 @@ function NumOrDash({ value, render }: {
     return <span style={{ color: 'var(--ink-3)' }}>—</span>
   }
   return <>{render(value)}</>
+}
+
+// Luck lens over the wOBA-diff signal. wOBAΔ = expected wOBA − wOBA allowed:
+// positive means a pitcher's contact results have been unluckier than the
+// quality of contact warrants (results should improve), negative means they've
+// been riding good luck (regression risk). Collapse that into a 3-state badge;
+// the numeric delta and interpretation live in the cell tooltip. Threshold is
+// 10 points of wOBA — below that, treat actual and expected as in line.
+const LUCK_THRESHOLD = 0.010
+
+function LuckBadge({ wobaDiff }: { wobaDiff: number | undefined }) {
+  if (wobaDiff === undefined || !Number.isFinite(wobaDiff)) {
+    return <span style={{ color: 'var(--ink-3)' }}>—</span>
+  }
+  let label: string, arrow: string, style: React.CSSProperties, tip: string
+  if (wobaDiff > LUCK_THRESHOLD) {
+    label = 'Trending up'; arrow = '↗'
+    style = { background: 'var(--green-light)', color: 'var(--green)' }
+    tip = `wOBAΔ ${fmtWobaDiff(wobaDiff)} — contact allowed has been unluckier than expected; results due to improve`
+  } else if (wobaDiff < -LUCK_THRESHOLD) {
+    label = 'Trending down'; arrow = '↘'
+    style = { background: 'var(--red-light)', color: 'var(--red)' }
+    tip = `wOBAΔ ${fmtWobaDiff(wobaDiff)} — contact allowed has been luckier than expected; regression risk`
+  } else {
+    label = 'On pace'; arrow = '→'
+    style = { background: 'var(--paper-2)', color: 'var(--ink-3)' }
+    tip = `wOBAΔ ${fmtWobaDiff(wobaDiff)} — actual and expected results are in line`
+  }
+  return (
+    <span title={tip} style={{
+      display: 'inline-block', fontSize: 11, fontWeight: 600,
+      fontFamily: 'var(--mono)', padding: '2px 8px', borderRadius: 99,
+      whiteSpace: 'nowrap', ...style,
+    }}>{arrow} {label}</span>
+  )
+}
+
+// Projected full-season FPTS: season-to-date actual + model FPTS/start ×
+// estimated remaining starts. A rough comparator (not a prediction) — remaining
+// starts assume a healthy ~32-start season. Only meaningful for pitchers who've
+// actually started (gs > 0); relievers and unstarted arms return undefined so
+// the cell shows an em-dash rather than a fictional season total.
+const FULL_SEASON_STARTS = 32
+
+function projectedPace(p: Pitcher, ctx: StatsTableContext): number | undefined {
+  const s = p.seasonStats
+  if (!s || !s.gs || s.gs <= 0 || !Number.isFinite(s.seasonFptsToDate as number)) {
+    return undefined
+  }
+  const perStart = ctx.fptsPerStart[p.name]
+  if (perStart === undefined) return undefined
+  const remaining = Math.max(0, FULL_SEASON_STARTS - s.gs)
+  return (s.seasonFptsToDate as number) + perStart * remaining
 }
 
 // ─── Column definitions ──────────────────────────────────────────────────────
@@ -269,6 +323,13 @@ export const PITCHER_COLUMNS: PitcherColumn[] = [
     ),
   },
   {
+    // 3-state luck badge derived from the wOBAΔ signal next to it. Sort by the
+    // raw delta so a desc click surfaces the most due-to-improve pitchers first.
+    key: 'luck', label: 'Luck', minWidth: 100,
+    sortValue: (p) => p.savantExpected?.wobaDiff ?? NaN,
+    render: (p) => <LuckBadge wobaDiff={p.savantExpected?.wobaDiff} />,
+  },
+  {
     key: 'barrelPct', label: 'Brl%', minWidth: 56, preferredDir: 'asc',
     sortValue: (p) => p.savantExpected?.barrelPct ?? NaN,
     render: (p) => (
@@ -335,6 +396,22 @@ export const PITCHER_COLUMNS: PitcherColumn[] = [
         </span>
       )
     },
+  },
+  {
+    // Projected full-season FPTS pace — a comparator, not a prediction.
+    // Blank (em-dash) for non-starters, where it would be meaningless.
+    key: 'pace', label: 'Pace', minWidth: 72,
+    sortValue: (p, ctx) => projectedPace(p, ctx) ?? NaN,
+    render: (p, ctx) => (
+      <NumOrDash value={projectedPace(p, ctx)} render={(v) => (
+        <span
+          title="Projected full-season FPTS: season-to-date actual + model FPTS/start × estimated remaining starts (~32-start season). A rough comparator, not a prediction."
+          style={{ fontFamily: 'var(--mono)', fontWeight: 600, color: 'var(--ink-2)' }}
+        >
+          {v.toFixed(0)}
+        </span>
+      )} />
+    ),
   },
 ]
 

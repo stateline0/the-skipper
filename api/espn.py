@@ -55,14 +55,30 @@ def _build_season_stats(stat_dict: dict) -> dict | None:
         return None
     so = int(stat_dict.get("strikeOuts", 0))
     bb = int(stat_dict.get("baseOnBalls", 0))
+    w  = int(stat_dict.get("wins",   0))
+    l  = int(stat_dict.get("losses", 0))
+    # Season-to-date fantasy points from season totals, using the league's
+    # pitching scoring (IP×3, K×1, H/BB/HBP×-1, ER×-2, SV×5, W×5, L×-5) —
+    # the same weights projection.py applies per start. Feeds the Stats-tab
+    # full-season pace column. (HBP is "hitBatsmen" in the MLB Stats API
+    # pitching group, with "hitByPitch" as an older fallback.)
+    hits = _safe_float(stat_dict.get("hits", 0))
+    er   = _safe_float(stat_dict.get("earnedRuns", 0))
+    hbp  = _safe_float(stat_dict.get("hitBatsmen", stat_dict.get("hitByPitch", 0)))
+    sv   = _safe_float(stat_dict.get("saves", 0))
+    season_fpts = (
+        ip * 3 + so * 1 + hits * -1 + bb * -1
+        + er * -2 + hbp * -1 + sv * 5 + w * 5 + l * -5
+    )
     return {
-        "w":   int(stat_dict.get("wins",   0)),
-        "l":   int(stat_dict.get("losses", 0)),
+        "w":   w,
+        "l":   l,
         "era": _safe_float(stat_dict.get("era", 0)),
         "k9":  round(so / ip * 9, 2),
         "bb9": round(bb / ip * 9, 2),
         "ip":  round(ip, 1),
         "gs":  int(stat_dict.get("gamesStarted", 0)),
+        "seasonFptsToDate": round(season_fpts, 1),
     }
 
 
