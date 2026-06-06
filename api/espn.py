@@ -21,7 +21,7 @@ from datetime import datetime, timedelta, timezone
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__)))
 from mlb import get_starts_for_players, MATCHUP_PERIODS
-from kv import get_all_locked_projections
+from kv import get_all_locked_projections, cache_get, cache_set
 from fetcher import (
     get_headers_and_cookies, get_pro_team_map, period_has_started,
     get_actual_fpts, load_cached_data,
@@ -844,17 +844,57 @@ def get_league_data(team_id: int, week: int) -> dict:
     }
 
 
+# ── Warm-cache serving ────────────────────────────────────────────────
+# The full league-data payload is expensive to assemble (~5-10s). A periodic
+# warm-cache cron (api/warm.py) precomputes it into KV so the handler can serve
+# it instantly even on a cold first load; `?fresh=1` forces a live recompute
+# (Refresh button / live-game freshness). One blob serves both the My Team and
+# Free Agents pages.
+LEAGUE_CACHE_TTL = 1800  # 30 min — comfortably longer than the warm-cron cadence
+
+
+def _league_cache_key(team_id: int, week: int) -> str:
+    year = os.environ.get("ESPN_SEASON", "2026")
+    return f"cache:leaguedata:{year}:{team_id}:{week}"
+
+
+def build_and_cache_league_data(team_id: int, week: int) -> dict:
+    """Assemble the full league-data payload and write it to KV. Shared by the
+    live `?fresh=1` handler path and the warm-cache cron."""
+    payload = get_league_data(team_id, week)
+    payload["teamId"]       = team_id
+    payload["defaultLimit"] = int(os.environ.get("ESPN_STARTS_LIMIT", "12"))
+    payload["computedAt"]   = datetime.now(timezone.utc).isoformat()
+    try:
+        cache_set(_league_cache_key(team_id, week), payload, ttl_seconds=LEAGUE_CACHE_TTL)
+    except Exception:
+        pass
+    return payload
+
+
 class handler(BaseHTTPRequestHandler):
     def do_GET(self):
         qs      = parse_qs(urlparse(self.path).query)
         env_tid = os.environ.get("ESPN_TEAM_ID", "")
         team_id = int(env_tid) if env_tid else int(qs.get("teamId", ["1"])[0])
         week    = int(qs.get("week", ["1"])[0])
+        fresh   = qs.get("fresh", ["0"])[0] in ("1", "true")
 
         try:
-            payload = get_league_data(team_id, week)
-            payload["teamId"]       = team_id
-            payload["defaultLimit"] = int(os.environ.get("ESPN_STARTS_LIMIT", "12"))
+            payload = None
+            if not fresh:
+                # Serve the warm-cache blob if present — instant, kept fresh by
+                # the api/warm cron. Falls through to a live compute on a miss.
+                try:
+                    cached = cache_get(_league_cache_key(team_id, week))
+                    if cached and cached.get("ok"):
+                        cached["servedFrom"] = "cache"
+                        payload = cached
+                except Exception:
+                    pass
+            if payload is None:
+                payload = build_and_cache_league_data(team_id, week)
+                payload["servedFrom"] = "live"
         except Exception as e:
             payload = {"ok": False, "error": str(e)}
 
