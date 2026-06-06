@@ -15,6 +15,7 @@ Vegas W/L and Pythagorean model added session 18.
 """
 
 import unicodedata
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from mlb import compute_recent_form_fpts, get_park_factor, compute_matchup_win_prob
 from kv import get_locked_projection, set_locked_projection, set_locked_projection_v2
@@ -165,6 +166,32 @@ def get_projected_fpts(player_starts: list, team_woba_factors: dict = None,
     fpts_per_start = {}
     proj_details   = {}
 
+    # Pre-warm weather in parallel. The per-start loops below read from this
+    # map; the FA list alone can need 100+ (park, date) lookups and fetching
+    # them serially (each a KV read + possible Open-Meteo call) dominated load
+    # time. get_weather_factor is idempotent + KV-cached, so a parallel pass
+    # builds an in-memory map the loop reads instantly.
+    weather_by_pd: dict = {}
+    _wx_pairs = set()
+    for _info in player_starts:
+        if _info.get("is_rp"):
+            continue
+        _team = _info.get("team", "")
+        for _sd in _info.get("startDates", []):
+            _park = _sd.get("opponent", "") if not _sd.get("is_home", True) else _team
+            _date = _sd.get("date", "")
+            if _park and _date:
+                _wx_pairs.add((_park, _date))
+    if _wx_pairs:
+        with ThreadPoolExecutor(max_workers=12) as _wx_ex:
+            _wx_futs = {_wx_ex.submit(get_weather_factor, _p, _d): (_p, _d)
+                        for _p, _d in _wx_pairs}
+            for _fut in as_completed(_wx_futs):
+                try:
+                    weather_by_pd[_wx_futs[_fut]] = _fut.result()
+                except Exception:
+                    pass
+
     for name_lower, player_info in starts_by_name.items():
         full_name        = player_info["name"]
         projected_starts = player_info["starts"]
@@ -299,7 +326,8 @@ def get_projected_fpts(player_starts: list, team_woba_factors: dict = None,
                 # failures fall back to 1.0 so the caller never breaks.
                 start_date_str = sd.get("date", "")
                 if park_team and start_date_str:
-                    weather_data = get_weather_factor(park_team, start_date_str)
+                    weather_data = (weather_by_pd.get((park_team, start_date_str))
+                                    or get_weather_factor(park_team, start_date_str))
                 else:
                     weather_data = {"factor": 1.0, "temp_f": None, "source": "default"}
                 weather_factor = weather_data.get("factor", 1.0)
@@ -403,7 +431,8 @@ def get_projected_fpts(player_starts: list, team_woba_factors: dict = None,
                         park_f    = get_park_factor(park_tm) if park_tm else 1.0
                         # Weather factor — same rules as live projection above
                         if park_tm and date:
-                            lock_weather = get_weather_factor(park_tm, date)
+                            lock_weather = (weather_by_pd.get((park_tm, date))
+                                            or get_weather_factor(park_tm, date))
                         else:
                             lock_weather = {"factor": 1.0, "temp_f": None, "source": "default"}
                         weather_f      = lock_weather.get("factor", 1.0)
