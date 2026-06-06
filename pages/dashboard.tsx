@@ -139,7 +139,7 @@ export default function Dashboard() {
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 16 }}>
             {[
               ['⚡', 'Connect',     'Env vars authenticate with ESPN — no cookies in your browser'],
-              ['⚾', 'My Team',     'Pulls your live SP roster and scheduled starts for the week'],
+              ['⚾', 'Pitchers',    'Pulls your live SP roster and scheduled starts for the week'],
               ['🔍', 'Free Agents', 'Fetches available SPs sorted by ownership %'],
               ['🤖', 'Recommend',   'Claude analyzes projections and outputs a Mon–Sun action plan'],
             ].map(([icon, title, desc]) => (

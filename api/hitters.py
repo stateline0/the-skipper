@@ -202,10 +202,12 @@ def get_hitter_data(team_id: int, week: int) -> dict:
         [h["name"] for h in hitters_meta], week, team_map=team_map
     )
 
-    # ── Season hitting stats (cached) ─────────────────────────────────
+    # ── Season hitting stats + Savant batter expecteds (cached) ───────
     hit = load_hitter_stats(year_int)
     hitting_current  = hit["hitting_current"]
     hitting_previous = hit["hitting_previous"]
+    savant_current   = hit["savant_batter_current"]
+    savant_previous  = hit["savant_batter_previous"]
 
     # ── Game days per hitter (days their team plays in the period) ────
     for h in hitters_meta:
@@ -218,6 +220,8 @@ def get_hitter_data(team_id: int, week: int) -> dict:
         scoring=scoring,
         stat_current=hitting_current,
         stat_previous=hitting_previous,
+        savant_current=savant_current,
+        savant_previous=savant_previous,
         season=year_int, period=week,
     )
 
@@ -247,6 +251,7 @@ def get_hitter_data(team_id: int, week: int) -> dict:
             "projFpts":    p.get("projFpts", 0.0),
             "projPerGame": round(per_game, 1),
             "blendWeight": p.get("blendWeight", 0.0),
+            "modelType":   p.get("modelType", "stats"),
             "games":       p.get("games", len(h["gameDates"])),
             "seasonStats": _season_line(hitting_current.get(strip_accents(name), {})),
             "days":        days,
@@ -274,7 +279,8 @@ HITTER_CACHE_TTL = 1800  # 30 min
 # abandons stale cached blobs instead of serving them for up to TTL.
 #   v2: TB scoring + ESPN lineup ordering. v3: scoring read from mSettings.
 #   v4: corrected ESPN_HITTING_STAT_IDS map (now parses, no longer falls back).
-HITTER_CACHE_VERSION = 4
+#   v5: Phase 2 — Savant xBA/xSLG de-luck.
+HITTER_CACHE_VERSION = 5
 
 
 def _cache_key(team_id: int, week: int) -> str:

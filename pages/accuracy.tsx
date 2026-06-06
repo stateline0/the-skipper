@@ -187,7 +187,7 @@ export default function AccuracyPage() {
                 cursor: 'pointer', color: 'var(--ink-2)',
               }}
             >
-              ← My Team
+              ← Pitchers
             </button>
           </div>
         </div>

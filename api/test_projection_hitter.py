@@ -12,7 +12,7 @@ from projection_hitter import (
     DEFAULT_HITTER_SCORING, ESPN_HITTING_STAT_IDS,
     parse_hitter_scoring, apply_hitter_formula, per_game_vector,
     blend_vectors, pa_blend_weight, apply_factors, scoring_is_sane,
-    get_projected_hitter_fpts,
+    apply_savant_hitter, get_projected_hitter_fpts,
 )
 
 
@@ -168,6 +168,34 @@ def test_parse_scoring_sanity_fallback():
     ]}}}
     assert parse_hitter_scoring(msettings) == DEFAULT_HITTER_SCORING
     print("✓ parse_hitter_scoring: rejects all-negative parse, uses default")
+
+
+def test_apply_savant_hitter():
+    v = {"ab": 4.0, "h": 1.0, "1b": 0.6, "2b": 0.2, "3b": 0.0, "hr": 0.2, "tb": 2.0}
+    out = apply_savant_hitter(v, {"xba": 0.300, "xslg": 0.550})
+    assert approx(out["h"], 0.300 * 4.0)         # 1.2 expected hits
+    assert approx(out["tb"], 0.550 * 4.0)        # 2.2 expected total bases
+    # hit types scaled by the TB ratio (2.2 / 2.0 = 1.1)
+    assert approx(out["hr"], 0.2 * 1.1)
+    # no-op when AB is zero or Savant fields missing
+    assert apply_savant_hitter({"ab": 0.0, "tb": 2.0}, {"xba": .3, "xslg": .5})["tb"] == 2.0
+    assert apply_savant_hitter(v, {})["tb"] == 2.0
+    print("✓ apply_savant_hitter: de-lucks H/TB via xBA/xSLG, scales hit types, safe no-ops")
+
+
+def test_savant_changes_projection_and_labels():
+    hitters = [{"name": "Lucky Guy", "team": "BAL", "gameDates": ["2026-06-01"]}]
+    # A hitter whose actual SLG (302 TB / 580 AB = .521) is luckier than xSLG.
+    savant = {"lucky guy": {"xba": 0.250, "xslg": 0.400}}
+    base, _ = get_projected_hitter_fpts(hitters, stat_current={"lucky guy": SEASON_2026})
+    deluck, det = get_projected_hitter_fpts(
+        hitters, stat_current={"lucky guy": SEASON_2026}, savant_current=savant,
+    )
+    assert base["Lucky Guy"]["modelType"] == "stats"
+    assert deluck["Lucky Guy"]["modelType"] == "savant"
+    # xSLG (.400) < actual SLG → de-lucked projection should be lower.
+    assert deluck["Lucky Guy"]["projPerGame"] < base["Lucky Guy"]["projPerGame"]
+    print("✓ get_projected_hitter_fpts: Savant de-luck shifts projection + sets modelType")
 
 
 def test_end_to_end_projection():
