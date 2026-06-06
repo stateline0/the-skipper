@@ -49,6 +49,19 @@ STARTER_WIN_SHARE = 0.57
 DEFAULT_WIN_PROB = 0.5
 
 
+def env_to_pitcher_mult(env_factor: float) -> float:
+    """Convert a run-environment factor — where >1.0 means MORE offense and is
+    therefore WORSE for the pitcher (opponent wOBA, hitter-friendly park, warm
+    weather) — into a pitcher FPTS multiplier where >1.0 HELPS the pitcher.
+
+    Reflects around 1.0 so the magnitude is preserved and the direction
+    flipped: a park inflating offense 7.5% (1.075) becomes a 0.925 multiplier,
+    and a weak opponent (0.958) becomes a 1.042 boost. Without this the model
+    multiplied the net projection directly by the run-environment factor, which
+    made tough conditions raise the projection — backwards."""
+    return round(2.0 - env_factor, 4)
+
+
 def strip_accents(s: str) -> str:
     """Normalize accented characters for name matching across data sources."""
     return ''.join(
@@ -218,6 +231,7 @@ def get_projected_fpts(player_starts: list, team_woba_factors: dict = None,
 
         # ── Layer 2: Recent form weighting ─────────────────────────────
         recent_form_fpts = None
+        recent_ratio = 1.0  # how the 60/40 blend scales the per-start skill base
         if not is_rp and game_logs:
             pitcher_games = game_logs.get(name_lower, [])
             if pitcher_games:
@@ -226,6 +240,10 @@ def get_projected_fpts(player_starts: list, team_woba_factors: dict = None,
         if recent_form_fpts is not None:
             season_fpts = fpts_per_game
             fpts_per_game = season_fpts * 0.6 + recent_form_fpts * 0.4
+            # Carry the same blend into the per-start skill base (below) so the
+            # per-start projections — and their total — reflect recent form and
+            # line up with Proj/G, instead of silently using season stats only.
+            recent_ratio = fpts_per_game / season_fpts if season_fpts else 1.0
             print(f"[projection.py]   ↳ {full_name} recent form: {recent_form_fpts:.1f} | "
                   f"season: {season_fpts:.1f} → blended: {fpts_per_game:.1f}")
 
@@ -248,7 +266,8 @@ def get_projected_fpts(player_starts: list, team_woba_factors: dict = None,
         start_dates = player_info.get("startDates", [])
         per_start_details = []
         if not is_rp and start_dates:
-            # Base FPTS excluding W/L (those are applied per-start)
+            # Base FPTS excluding W/L (those are applied per-start), scaled by
+            # the recent-form ratio so recent performance feeds the per start.
             base_no_wl = (
                 blended["ip"] *  3 +
                 blended["so"] *  1 +
@@ -257,7 +276,7 @@ def get_projected_fpts(player_starts: list, team_woba_factors: dict = None,
                 blended["er"] * -2 +
                 blended["hb"] * -1 +
                 blended["sv"] *  5
-            )
+            ) * recent_ratio
             raw_w = blended["w"]
             raw_l = blended["l"]
 
@@ -312,20 +331,28 @@ def get_projected_fpts(player_starts: list, team_woba_factors: dict = None,
                     win_prob = DEFAULT_WIN_PROB
                     wp_source = "default"
 
+                # Convert run-environment factors to pitcher multipliers
+                # (>1.0 = helps the pitcher) so adverse conditions lower the
+                # projection. base × these reconciles to the stored proj.
+                woba_mult    = env_to_pitcher_mult(woba_factor)
+                park_mult    = env_to_pitcher_mult(park_factor)
+                weather_mult = env_to_pitcher_mult(weather_factor)
+
                 # W/L contribution for this specific start
                 w_contrib = raw_w * win_prob * STARTER_WIN_SHARE * 5
                 l_contrib = raw_l * (1 - win_prob) * STARTER_WIN_SHARE * (-5)
                 start_base = base_no_wl + w_contrib + l_contrib
-                start_proj = start_base * woba_factor * park_factor * weather_factor
+                start_proj = start_base * woba_mult * park_mult * weather_mult
                 adjusted_total += start_proj
                 location = "vs" if is_home else "@"
                 per_start_details.append({
                     "label":    f"{location} {opp}",
                     "date":     start_date_str,
-                    "woba":     round(woba_factor, 3),
-                    "park":     round(park_factor, 3),
+                    "baseNoWl": round(base_no_wl, 1),
+                    "woba":     woba_mult,
+                    "park":     park_mult,
                     "parkTeam": park_team,
-                    "weather":       round(weather_factor, 3),
+                    "weather":       weather_mult,
                     "tempF":         temp_f,
                     "weatherSource": weather_source,
                     "winProb":  round(win_prob, 3),
@@ -394,13 +421,18 @@ def get_projected_fpts(player_starts: list, team_woba_factors: dict = None,
                             lock_wp = DEFAULT_WIN_PROB
                         w_adj = blended["w"] * lock_wp * STARTER_WIN_SHARE
                         l_adj = blended["l"] * (1 - lock_wp) * STARTER_WIN_SHARE
+                        # Mirror the live calc: recent-form-scaled skill base and
+                        # run-environment factors converted to pitcher multipliers.
                         lock_base = (
                             blended["ip"] * 3 + blended["so"] * 1 +
                             blended["h"] * -1 + blended["bb"] * -1 +
                             blended["er"] * -2 + blended["hb"] * -1 +
                             blended["sv"] * 5
-                        )
-                        start_proj = (lock_base + w_adj * 5 + l_adj * (-5)) * woba_f * park_f * weather_f
+                        ) * recent_ratio
+                        woba_m    = env_to_pitcher_mult(woba_f)
+                        park_m    = env_to_pitcher_mult(park_f)
+                        weather_m = env_to_pitcher_mult(weather_f)
+                        start_proj = (lock_base + w_adj * 5 + l_adj * (-5)) * woba_m * park_m * weather_m
                         breakdown = {
                             "fpts": round(start_proj, 1),
                             "stats": {
@@ -416,14 +448,14 @@ def get_projected_fpts(player_starts: list, team_woba_factors: dict = None,
                             },
                             "matchup": {
                                 "opponent": opp,
-                                "woba":     round(woba_f, 3),
-                                "park":     round(park_f, 3),
+                                "woba":     woba_m,
+                                "park":     park_m,
                                 "parkTeam": park_tm,
                                 "isHome":   is_home,
                                 "winProb":  round(lock_wp, 3),
                             },
                             "weather": {
-                                "factor": round(weather_f, 3),
+                                "factor": weather_m,
                                 "tempF":  lock_temp_f,
                                 "source": lock_wx_source,
                             },

@@ -1080,24 +1080,22 @@ PARK_FACTORS = {
 
 def get_park_factor(team_abbrev: str) -> float:
     """
-    Returns the park factor as a multiplier for a specific team's home park.
-    100 in the table = 1.0 (neutral). 115 (Coors) = 1.15 (bad for pitchers).
+    Returns a RUN-ENVIRONMENT factor for a team's home park: >1.0 = more
+    offense (worse for the pitcher), <1.0 = pitcher-friendly. 100 in the table
+    = 1.0 (neutral). 115 (Coors) = 1.15.
 
-    For fantasy pitching projections, a higher park factor means FEWER
-    fantasy points (more runs, hits allowed), so we INVERT it:
-      - Coors (115) → 1.15 → pitcher scores ~15% worse
-      - Oracle Park (92) → 0.92 → pitcher scores ~8% better
+    NOTE: this returns the run-environment factor, NOT a pitcher multiplier.
+    The caller (projection.py) converts it via env_to_pitcher_mult() so that a
+    hitter-friendly park lowers the projection. (Earlier this docstring claimed
+    to "invert" the factor here, but it never did — the value stayed >1.0 for
+    Coors and the projection multiplied by it directly, which made pitchers
+    score BETTER in Coors. The inversion now lives in projection.py.)
 
-    But wait — park factors measure RUNS, not fantasy points directly.
-    Fantasy scoring has a mix of positive (IP, K) and negative (H, ER, BB) stats.
-    Only the negative stats (H, ER) are park-dependent. K rate and IP are
-    mostly park-independent.
-
-    So we dampen the park factor effect by 50%:
-      - Coors: 1.0 + (1.15 - 1.0) * 0.5 = 1.075 (7.5% worse, not 15%)
-      - Oracle: 1.0 + (0.92 - 1.0) * 0.5 = 0.96 (4% better, not 8%)
-
-    This reflects that roughly half of FPTS come from park-independent stats.
+    Park factors measure RUNS, not fantasy points directly, and only the
+    negative FPTS stats (H, ER) are park-dependent (K rate and IP are mostly
+    not). So we dampen the effect by 50% toward neutral:
+      - Coors:  1.0 + (1.15 - 1.0) * 0.5 = 1.075
+      - Oracle: 1.0 + (0.92 - 1.0) * 0.5 = 0.96
     """
     raw = PARK_FACTORS.get(team_abbrev, 100)
     raw_factor = raw / 100.0

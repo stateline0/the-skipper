@@ -4,7 +4,7 @@ import { useRouter } from 'next/router'
 import ScheduleGrid from '../components/ScheduleGrid'
 import StatsTable, { SeasonStats, SavantExpected } from '../components/StatsTable'
 
-const CACHE_VERSION = 6 // bump this whenever the API response shape changes
+const CACHE_VERSION = 7 // bump this whenever the API response shape changes
 
 interface FreeSP {
   name: string; team: string; slot: string; injuryStatus: string
