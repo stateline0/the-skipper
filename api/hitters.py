@@ -271,11 +271,15 @@ def get_hitter_data(team_id: int, week: int) -> dict:
 
 # ── Caching (mirrors the espn.py warm-serve pattern, lighter) ──────────
 HITTER_CACHE_TTL = 1800  # 30 min
+# Bump whenever the payload shape, scoring, or ordering changes so a deploy
+# abandons stale cached blobs instead of serving them for up to TTL. (v1 cached
+# the pre-fix all-negative, proj-sorted payload.)
+HITTER_CACHE_VERSION = 2
 
 
 def _cache_key(team_id: int, week: int) -> str:
     year = os.environ.get("ESPN_SEASON", "2026")
-    return f"cache:hitterdata:{year}:{team_id}:{week}"
+    return f"cache:hitterdata:v{HITTER_CACHE_VERSION}:{year}:{team_id}:{week}"
 
 
 class handler(BaseHTTPRequestHandler):
