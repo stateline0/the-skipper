@@ -18,6 +18,16 @@ interface MatchupPeriod {
   period: number; label: string; start: string; end: string; limit: number
 }
 
+// Human "Updated 4m ago" from the payload's computedAt ISO timestamp.
+function relativeTime(iso: string | null): string {
+  if (!iso) return ''
+  const secs = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 1000))
+  if (secs < 45) return 'just now'
+  if (secs < 3600) return `${Math.round(secs / 60)}m ago`
+  if (secs < 86400) return `${Math.round(secs / 3600)}h ago`
+  return `${Math.round(secs / 86400)}d ago`
+}
+
 export default function FreeAgents() {
   const router = useRouter()
   const [loading, setLoading] = useState(false)
@@ -31,6 +41,7 @@ export default function FreeAgents() {
   const [fptsPerStart, setFptsPerStart] = useState<Record<string, number>>({})
   const [projectionDetails, setProjectionDetails] = useState<Record<string, any>>({})
   const [liveStats, setLiveStats]       = useState<Record<string, any>>({})
+  const [computedAt, setComputedAt]     = useState<string | null>(null)
   const [sortCol, setSortCol]           = useState<string>('percentOwned')
   const [sortDir, setSortDir]           = useState<'asc' | 'desc'>('desc')
   const [activeTab, setActiveTab]       = useState<'schedule' | 'stats'>('schedule')
@@ -58,6 +69,7 @@ export default function FreeAgents() {
       setFptsPerStart(data.fptsPerStart || {})
       setProjectionDetails(data.projectionDetails || {})
       setLiveStats(data.liveStats || {})
+      setComputedAt(data.computedAt || null)
     }
   }, [])
 
@@ -68,7 +80,7 @@ export default function FreeAgents() {
     fetchFreeAgents()
   }, [selectedPeriod])
 
-  const fetchFreeAgents = useCallback(async () => {
+  const fetchFreeAgents = useCallback(async (fresh = false) => {
     setLoading(true)
     setError('')
     try {
@@ -77,7 +89,7 @@ export default function FreeAgents() {
       const teamId = config.teamId || '1'
 
       localStorage.setItem('skipper_selected_period', String(selectedPeriod))
-      const res = await fetch(`/api/espn?teamId=${teamId}&week=${selectedPeriod}`)
+      const res = await fetch(`/api/espn?teamId=${teamId}&week=${selectedPeriod}${fresh ? '&fresh=1' : ''}`)
       const data = await res.json()
       if (!data.ok) throw new Error(data.error || 'Failed to load ESPN data')
 
@@ -100,6 +112,7 @@ export default function FreeAgents() {
         fptsPerStart: data.faFptsPerStart || {},
         projectionDetails: data.faProjectionDetails || {},
         liveStats: data.liveStats || {},
+        computedAt: data.computedAt || null,
       }
       localStorage.setItem('skipper_free_agents', JSON.stringify(toCache))
       setFreeSPs(fas)
@@ -109,6 +122,7 @@ export default function FreeAgents() {
       setFptsPerStart(data.faFptsPerStart || {})
       setProjectionDetails(data.faProjectionDetails || {})
       setLiveStats(data.liveStats || {})
+      setComputedAt(data.computedAt || null)
     } catch (e: any) {
       setError(e.message || 'Failed to load free agents')
     } finally {
@@ -194,6 +208,11 @@ function handleSort(col: string) {
             <h1 style={{ fontSize: 22, fontWeight: 700, letterSpacing: '-0.03em', margin: 0, marginBottom: 6 }}>Free Agents</h1>
             <p style={{ fontSize: 13, color: 'var(--ink-3)', margin: 0 }}>
               Available SPs — check the ones to include in your analysis
+              {computedAt && (
+                <span style={{ opacity: 0.7 }}>
+                  {' · '}Updated {relativeTime(computedAt)}{loading ? ' · refreshing…' : ''}
+                </span>
+              )}
             </p>
           </div>
           <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
@@ -221,7 +240,7 @@ function handleSort(col: string) {
                 })}
               </select>
             )}
-            <button onClick={fetchFreeAgents} disabled={loading} style={{
+            <button onClick={() => fetchFreeAgents(true)} disabled={loading} style={{
               fontFamily: 'var(--sans)', fontSize: 13, fontWeight: 600,
               padding: '9px 18px', borderRadius: 'var(--radius)',
               cursor: loading ? 'not-allowed' : 'pointer',
@@ -253,7 +272,7 @@ function handleSort(col: string) {
             <div style={{ fontSize: 13, color: 'var(--ink-3)', marginBottom: 20 }}>
               Click Refresh to load available pitchers.
             </div>
-            <button onClick={fetchFreeAgents} style={{
+            <button onClick={() => fetchFreeAgents()} style={{
               fontFamily: 'var(--sans)', fontSize: 13, fontWeight: 600,
               padding: '9px 18px', borderRadius: 'var(--radius)',
               cursor: 'pointer', border: 'none', background: '#E2E4E8', color: '#0F1114',
