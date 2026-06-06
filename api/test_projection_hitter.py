@@ -12,7 +12,7 @@ from projection_hitter import (
     DEFAULT_HITTER_SCORING, ESPN_HITTING_STAT_IDS,
     parse_hitter_scoring, apply_hitter_formula, per_game_vector,
     blend_vectors, pa_blend_weight, apply_factors, scoring_is_sane,
-    apply_savant_hitter, get_projected_hitter_fpts,
+    apply_savant_hitter, compute_recent_form_hitter, get_projected_hitter_fpts,
 )
 
 
@@ -196,6 +196,38 @@ def test_savant_changes_projection_and_labels():
     # xSLG (.400) < actual SLG → de-lucked projection should be lower.
     assert deluck["Lucky Guy"]["projPerGame"] < base["Lucky Guy"]["projPerGame"]
     print("✓ get_projected_hitter_fpts: Savant de-luck shifts projection + sets modelType")
+
+
+def test_recent_form_hitter():
+    # 6 games; a hot tail. With TB-based default scoring, recency-weighted avg
+    # should land between the cold and hot games and be a finite number.
+    def game(hr, h, bb, r, rbi, sb, so, ab):
+        return {"h": h, "2b": 0, "3b": 0, "hr": hr, "r": r, "rbi": rbi,
+                "bb": bb, "hbp": 0, "sb": sb, "cs": 0, "so": so, "ab": ab, "pa": ab + bb}
+    cold = game(0, 0, 0, 0, 0, 0, 3, 4)   # 0-for-4, 3K → negative
+    hot  = game(1, 2, 1, 2, 3, 0, 0, 4)   # HR, 2H, etc → strongly positive
+    games = [cold, cold, cold, hot, hot, hot]
+    rf = compute_recent_form_hitter(games, DEFAULT_HITTER_SCORING)
+    assert rf is not None
+    # recency weighting (hot games newest) → above the simple midpoint
+    cold_fpts = apply_hitter_formula({"tb": 0, "bb": 0, "r": 0, "rbi": 0, "sb": 0, "hbp": 0, "so": 3}, DEFAULT_HITTER_SCORING)
+    hot_fpts  = apply_hitter_formula({"tb": 5, "bb": 1, "r": 2, "rbi": 3, "sb": 0, "hbp": 0, "so": 0}, DEFAULT_HITTER_SCORING)
+    assert cold_fpts < rf < hot_fpts
+    # below min_games → None
+    assert compute_recent_form_hitter([hot, hot], DEFAULT_HITTER_SCORING, min_games=5) is None
+    print(f"✓ compute_recent_form_hitter: {rf} between cold {cold_fpts} and hot {hot_fpts}")
+
+
+def test_recent_form_shifts_projection():
+    hitters = [{"name": "Hot Bat", "team": "BAL", "gameDates": ["2026-06-01"]}]
+    base, _ = get_projected_hitter_fpts(hitters, stat_current={"hot bat": SEASON_2026})
+    # 8 strong recent games → recent form well above the season rate → projection up
+    strong = {"h": 3, "2b": 1, "3b": 0, "hr": 1, "r": 2, "rbi": 2, "bb": 1, "hbp": 0, "sb": 1, "cs": 0, "so": 0, "ab": 4, "pa": 5}
+    logs = {"hot bat": [strong] * 8}
+    blended, _ = get_projected_hitter_fpts(hitters, stat_current={"hot bat": SEASON_2026}, game_logs=logs)
+    assert blended["Hot Bat"]["recentForm"] is not None
+    assert blended["Hot Bat"]["projPerGame"] > base["Hot Bat"]["projPerGame"]
+    print(f"✓ recent form shifts projection: {base['Hot Bat']['projPerGame']} → {blended['Hot Bat']['projPerGame']}")
 
 
 def test_end_to_end_projection():

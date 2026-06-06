@@ -316,6 +316,37 @@ def load_hitter_stats(year_int: int) -> dict:
     }
 
 
+def load_hitter_game_logs(year_int: int, mlb_stats_hitting: dict, name_keys) -> dict:
+    """Per-game hitting logs for the given accent-stripped name keys (rostered +
+    FA hitters), for the Phase-3 recent-form blend. Caches the merged dict in
+    cache:game-logs-hitting:{year} (24hr) and only fetches name keys not already
+    cached, so repeated calls stay cheap. Returns {name_key: [game, ...]}."""
+    from mlb import fetch_game_logs_hitting
+    key = f"cache:game-logs-hitting:{year_int}"
+    cached = {}
+    try:
+        cached = cache_get(key) or {}
+    except Exception:
+        pass
+    need = [
+        nk for nk in set(name_keys)
+        if nk not in cached and (mlb_stats_hitting.get(nk) or {}).get("_mlbId")
+    ]
+    if need:
+        subset = {nk: mlb_stats_hitting[nk] for nk in need}
+        try:
+            fetched = fetch_game_logs_hitting(year_int, subset) or {}
+            if fetched:
+                cached.update(fetched)
+                try:
+                    cache_set(key, cached, ttl_seconds=86400)
+                except Exception:
+                    pass
+        except Exception as e:
+            print(f"[fetcher.py] Hitter game-log fetch failed: {e}")
+    return {nk: cached[nk] for nk in name_keys if nk in cached}
+
+
 def get_actual_fpts(past_dates: list, player_names: set, headers: dict,
                     cookies: dict, team_id: int = 0) -> tuple:
     """

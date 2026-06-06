@@ -988,6 +988,78 @@ def fetch_game_logs(season: int, mlb_stats: dict = None) -> tuple:
     return result, stats
 
 
+def fetch_game_logs_hitting(season: int, mlb_stats: dict = None) -> dict:
+    """Per-game HITTING logs for the players in `mlb_stats` (keyed by accent-
+    stripped name, each carrying "_mlbId"). Mirror of fetch_game_logs but
+    group=hitting and parsing batting counting stats. Returns
+    { name_key: [ {date, ab, pa, h, '2b','3b','hr', r, rbi, bb, hbp, sb, cs, so}, ... ] }
+    sorted oldest→newest. Intended to be called with a SUBSET (rostered + FA
+    hitters) so it stays cheap — not all of MLB."""
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    if not mlb_stats:
+        return {}
+    id_pairs = [
+        (name_key, int(stat["_mlbId"]))
+        for name_key, stat in mlb_stats.items()
+        if stat.get("_mlbId")
+    ]
+    if not id_pairs:
+        return {}
+
+    def _fetch_one(name_key: str, player_id: int):
+        try:
+            r = requests.get(
+                f"https://statsapi.mlb.com/api/v1/people/{player_id}/stats",
+                params={"stats": "gameLog", "group": "hitting",
+                        "season": str(season), "gameType": "R"},
+                headers={"User-Agent": "Mozilla/5.0"}, timeout=10,
+            )
+            if r.status_code != 200:
+                return (name_key, [])
+            splits = r.json().get("stats", [{}])[0].get("splits", [])
+        except Exception:
+            return (name_key, [])
+        games = []
+        for split in splits:
+            s = split.get("stat", {})
+            d = split.get("date", "")
+            if not d:
+                continue
+
+            def gi(k):
+                try:
+                    return int(s.get(k, 0) or 0)
+                except (TypeError, ValueError):
+                    return 0
+            games.append({
+                "date": d, "ab": gi("atBats"), "pa": gi("plateAppearances"),
+                "h": gi("hits"), "2b": gi("doubles"), "3b": gi("triples"),
+                "hr": gi("homeRuns"), "r": gi("runs"), "rbi": gi("rbi"),
+                "bb": gi("baseOnBalls"), "hbp": gi("hitByPitch"),
+                "sb": gi("stolenBases"), "cs": gi("caughtStealing"),
+                "so": gi("strikeOuts"),
+            })
+        games.sort(key=lambda g: g["date"])
+        return (name_key, games)
+
+    result = {}
+    try:
+        with ThreadPoolExecutor(max_workers=10) as ex:
+            futures = [ex.submit(_fetch_one, nk, pid) for nk, pid in id_pairs]
+            for fut in as_completed(futures):
+                try:
+                    name_key, games = fut.result()
+                except Exception:
+                    continue
+                if games:
+                    result[name_key] = games
+    except Exception as e:
+        print(f"[mlb.py] fetch_game_logs_hitting thread pool failed: {e}")
+        return {}
+    print(f"[mlb.py] Hitting game logs: {len(result)}/{len(id_pairs)} hitters with entries")
+    return result
+
+
 def compute_recent_form_fpts(games: list, n_starts: int = 4) -> float:
     """
     Compute a weighted-average FPTS from a pitcher's last N starts.

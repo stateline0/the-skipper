@@ -27,7 +27,10 @@ from datetime import datetime, timedelta, timezone
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__)))
 from mlb import get_starts_for_players, MATCHUP_PERIODS
-from fetcher import get_headers_and_cookies, get_pro_team_map, load_hitter_stats
+from fetcher import (
+    get_headers_and_cookies, get_pro_team_map, load_hitter_stats,
+    load_hitter_game_logs,
+)
 from kv import cache_get, cache_set
 from projection_hitter import (
     parse_hitter_scoring, get_projected_hitter_fpts, strip_accents,
@@ -256,7 +259,10 @@ def get_hitter_data(team_id: int, week: int) -> dict:
         team = h["team"]
         h["gameDates"] = [d for d in period_dates if team and team in schedule.get(d, {})]
 
-    # ── Baseline projection ───────────────────────────────────────────
+    # ── Projection (+ Phase-3 recent form from game logs) ─────────────
+    roster_logs = load_hitter_game_logs(
+        year_int, hitting_current, [strip_accents(h["name"]) for h in hitters_meta]
+    )
     proj, _details = get_projected_hitter_fpts(
         [{"name": h["name"], "team": h["team"], "gameDates": h["gameDates"]} for h in hitters_meta],
         scoring=scoring,
@@ -264,6 +270,7 @@ def get_hitter_data(team_id: int, week: int) -> dict:
         stat_previous=hitting_previous,
         savant_current=savant_current,
         savant_previous=savant_previous,
+        game_logs=roster_logs,
         season=year_int, period=week,
     )
 
@@ -294,6 +301,7 @@ def get_hitter_data(team_id: int, week: int) -> dict:
             "projPerGame": round(per_game, 1),
             "blendWeight": p.get("blendWeight", 0.0),
             "modelType":   p.get("modelType", "stats"),
+            "recentForm":  p.get("recentForm"),
             "games":       p.get("games", len(h["gameDates"])),
             "seasonStats": _season_line(hitting_current.get(strip_accents(name), {})),
             "advanced":    _advanced_line(name, savant_current, savant_statcast),
@@ -368,10 +376,14 @@ def _fetch_fa_hitters(base, headers, cookies, PRO_TEAM_MAP, current_week,
                 "gameDates": [d for d in period_dates if team_abbrev and team_abbrev in schedule.get(d, {})],
             })
 
+        fa_logs = load_hitter_game_logs(
+            year_int, hitting_current, [strip_accents(h["name"]) for h in meta]
+        )
         proj, _ = get_projected_hitter_fpts(
             [{"name": h["name"], "team": h["team"], "gameDates": h["gameDates"]} for h in meta],
             scoring=scoring, stat_current=hitting_current, stat_previous=hitting_previous,
             savant_current=savant_current, savant_previous=savant_previous,
+            game_logs=fa_logs,
             season=year_int, period=week,
         )
 
@@ -390,6 +402,7 @@ def _fetch_fa_hitters(base, headers, cookies, PRO_TEAM_MAP, current_week,
                 "projFpts": p.get("projFpts", 0.0), "projPerGame": round(per_game, 1),
                 "games": p.get("games", len(h["gameDates"])),
                 "modelType": p.get("modelType", "stats"),
+                "recentForm": p.get("recentForm"),
                 "seasonStats": _season_line(hitting_current.get(strip_accents(h["name"]), {})),
                 "advanced": _advanced_line(h["name"], savant_current, savant_statcast),
                 "days": days,
@@ -412,7 +425,8 @@ HITTER_CACHE_TTL = 1800  # 30 min
 #   v7: add advanced (Savant xBA/xSLG/xwOBA, Barrel%/Whiff%) block.
 #   v8: advanced uses HardHit% (ev95percent) + EV instead of Whiff%.
 #   v9: drop HardHit%; add leagueAvg block for advanced-column headers.
-HITTER_CACHE_VERSION = 9
+#   v10: Phase 3 — recent-form blend (game-log weighted) in projPerGame.
+HITTER_CACHE_VERSION = 10
 
 
 def _cache_key(team_id: int, week: int) -> str:

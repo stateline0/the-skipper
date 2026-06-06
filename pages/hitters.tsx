@@ -151,7 +151,7 @@ export default function Hitters() {
         ) : (
           <>
             <div style={{ background: 'var(--green-light)', border: '1px solid rgba(46,196,160,0.35)', borderRadius: 'var(--radius)', padding: '10px 14px', fontSize: 13, color: 'var(--green)', marginBottom: 20 }}>
-              ● <strong>Phase 2 baseline.</strong> Season-rate projections, Savant-de-lucked (xBA/xSLG). Per-game values are flat for now; matchup, park, weather &amp; recent-form layers come next.
+              ● <strong>Phase 3.</strong> Season-rate projections, Savant-de-lucked (xBA/xSLG) and blended with recency-weighted recent form. Matchup, park &amp; weather layers come next.
             </div>
 
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 12, marginBottom: 20 }}>
