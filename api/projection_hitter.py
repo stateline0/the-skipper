@@ -293,6 +293,45 @@ def apply_savant_hitter(vector: dict, savant_row: dict) -> dict:
     return adjusted
 
 
+def compute_recent_form_hitter(games: list, scoring: dict,
+                               n_games: int = 15, min_games: int = 5) -> float:
+    """Recency-weighted FPTS/game from a hitter's last ~N games (Phase 3).
+
+    Each game's counting line is scored with the league scoring dict (same TB
+    logic as the season vector), then averaged with linear recency weights
+    (newest heaviest). Returns None when there aren't at least `min_games` —
+    the caller then falls back to the pure season rate.
+    """
+    if not games:
+        return None
+    recent = games[-n_games:]
+    if len(recent) < min_games:
+        return None
+    n = len(recent)
+    weights = [i + 1 for i in range(n)]          # oldest→newest, linear ramp
+    wsum = sum(weights)
+    total = 0.0
+    for i, g in enumerate(recent):
+        h   = g.get("h", 0)
+        dbl = g.get("2b", 0)
+        tpl = g.get("3b", 0)
+        hr  = g.get("hr", 0)
+        singles = max(0, h - dbl - tpl - hr)
+        vec = {
+            "h": h, "1b": singles, "2b": dbl, "3b": tpl, "hr": hr,
+            "tb": singles + 2 * dbl + 3 * tpl + 4 * hr,
+            "r": g.get("r", 0), "rbi": g.get("rbi", 0), "bb": g.get("bb", 0),
+            "hbp": g.get("hbp", 0), "sb": g.get("sb", 0), "cs": g.get("cs", 0),
+            "so": g.get("so", 0), "ab": g.get("ab", 0), "pa": g.get("pa", 0),
+        }
+        total += apply_hitter_formula(vec, scoring) * weights[i]
+    return round(total / wsum, 2)
+
+
+# Blend weight: season rate vs. recent form (mirrors the pitcher model's 60/40).
+RECENT_FORM_WEIGHT = 0.4
+
+
 def get_projected_hitter_fpts(
     hitters: list,
     scoring: dict = None,
@@ -300,6 +339,7 @@ def get_projected_hitter_fpts(
     stat_previous: dict = None,
     savant_current: dict = None,
     savant_previous: dict = None,
+    game_logs: dict = None,
     season: int = 2026,
     period: int = 1,
 ) -> tuple:
@@ -330,6 +370,7 @@ def get_projected_hitter_fpts(
     stat_previous = stat_previous or {}
     savant_current = savant_current or {}
     savant_previous = savant_previous or {}
+    game_logs = game_logs or {}
 
     projections = {}
     details = {}
@@ -360,8 +401,12 @@ def get_projected_hitter_fpts(
         base_vector = blend_vectors(v_cur, v_prev, w_cur)
         season_base = apply_hitter_formula(base_vector, scoring)
 
-        # Phases 1–2: no matchup context — every game uses the season-rate vector.
-        per_game = season_base
+        # Phase 3: blend the season rate with recency-weighted recent form.
+        recent_form = compute_recent_form_hitter(game_logs.get(name_key), scoring)
+        if recent_form is not None:
+            per_game = season_base * (1 - RECENT_FORM_WEIGHT) + recent_form * RECENT_FORM_WEIGHT
+        else:
+            per_game = season_base
         total = round(per_game * n_games, 1)
 
         projections[name] = {
@@ -370,11 +415,13 @@ def get_projected_hitter_fpts(
             "blendWeight": round(w_cur, 2),
             "games":       n_games,
             "modelType":   model_type,
+            "recentForm":  recent_form,
         }
         details[name] = {
             "seasonBase":  round(season_base, 2),
             "modelType":   model_type,
             "blendWeight": round(w_cur, 2),
+            "recentForm":  recent_form,
             "perGame":     round(per_game, 2),
             "games":       n_games,
             "total":       total,
