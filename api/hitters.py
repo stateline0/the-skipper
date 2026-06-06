@@ -104,8 +104,8 @@ def _advanced_line(name: str, savant_expected: dict, savant_statcast: dict) -> d
         if "woba_diff" in exp: out["wobaDiff"] = round(exp["woba_diff"], 3)
     if sc:
         if sc.get("brl_pct"):      out["barrelPct"]  = round(sc["brl_pct"], 1)
-        if sc.get("whiff_pct"):    out["whiffPct"]   = round(sc["whiff_pct"], 1)
         if sc.get("hard_hit_pct"): out["hardHitPct"] = round(sc["hard_hit_pct"], 1)
+        if sc.get("avg_ev"):       out["evAvg"]      = round(sc["avg_ev"], 1)
     return out or None
 
 
@@ -388,7 +388,8 @@ HITTER_CACHE_TTL = 1800  # 30 min
 #   v5: Phase 2 — Savant xBA/xSLG de-luck.
 #   v6: add freeAgentHitters to the payload.
 #   v7: add advanced (Savant xBA/xSLG/xwOBA, Barrel%/Whiff%) block.
-HITTER_CACHE_VERSION = 7
+#   v8: advanced uses HardHit% (ev95percent) + EV instead of Whiff%.
+HITTER_CACHE_VERSION = 8
 
 
 def _cache_key(team_id: int, week: int) -> str:

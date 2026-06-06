@@ -202,11 +202,12 @@ def fetch_statcast_stats_batter(year: int, min_bbe: int = 25) -> dict:
             name = _parse_savant_name(row)
             if not name:
                 continue
+            # Hard-Hit% on the statcast leaderboard is the "ev95percent" column
+            # (% of batted balls ≥95 mph); "hard_hit_percent" isn't present.
             result[name] = {
                 "avg_ev":       _safe_float(row.get("avg_hit_speed", 0)),
                 "brl_pct":      _safe_float(row.get("brl_percent", 0)),
-                "hard_hit_pct": _safe_float(row.get("hard_hit_percent", 0)),
-                "whiff_pct":    _safe_float(row.get("whiff_percent", 0)),
+                "hard_hit_pct": _safe_float(row.get("ev95percent") or row.get("hard_hit_percent") or 0),
             }
         print(f"[savant.py] Fetched batter statcast for {len(result)} hitters ({year})")
         return result
