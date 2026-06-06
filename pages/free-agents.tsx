@@ -1,6 +1,5 @@
 import Head from 'next/head'
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
-import { useRouter } from 'next/router'
 import ScheduleGrid from '../components/ScheduleGrid'
 import StatsTable, { SeasonStats, SavantExpected } from '../components/StatsTable'
 import {
@@ -33,7 +32,6 @@ function relativeTime(iso: string | null): string {
 }
 
 export default function FreeAgents() {
-  const router = useRouter()
   const [loading, setLoading] = useState(false)
   const [matchupPeriods, setMatchupPeriods] = useState<MatchupPeriod[]>([])
   const [selectedPeriod, setSelectedPeriod] = useState<number | null>(null)
@@ -187,17 +185,6 @@ function handleSort(col: string) {
     return sorted
   }, [freeSPs, sortCol, sortDir, fptsPerStart, actualFpts, projectionDetails])
 
-  function toggleCheck(index: number) {
-    // index refers to sortedFreeSPs position — look up by name to find position in freeSPs
-    const name = sortedFreeSPs[index]?.name
-    const updated = freeSPs.map(p => p.name === name ? { ...p, checked: !p.checked } : p)
-    setFreeSPs(updated)
-    const cached = JSON.parse(localStorage.getItem('skipper_free_agents') || '{}')
-    localStorage.setItem('skipper_free_agents', JSON.stringify({ ...cached, freeSPs: updated }))
-  }
-
-  const selectedCount = freeSPs.filter(p => p.checked).length
-
   return (
     <>
       <Head><title>Free Agents · The Skipper</title></Head>
@@ -312,7 +299,7 @@ function handleSort(col: string) {
               borderRadius: 'var(--radius)', padding: '10px 14px',
               fontSize: 13, color: 'var(--blue)', marginBottom: 16,
             }}>
-              Top available SPs by ownership %. Check the ones you want Claude to consider for adds.
+              Top available SPs by ownership %.
             </div>
 
             <div style={{
@@ -371,7 +358,6 @@ function handleSort(col: string) {
                 sortCol={sortCol}
                 sortDir={sortDir}
                 onSortChange={handleSort}
-                prefixHeaders={<th style={{ padding: '8px 6px', fontSize: 10, fontFamily: 'var(--mono)', fontWeight: 500, color: 'var(--ink-3)', borderBottom: '1px solid var(--border)', minWidth: 32 }}></th>}
                 suffixHeaders={
                   <th
                     onClick={() => handleSort('percentOwned')}
@@ -386,19 +372,11 @@ function handleSort(col: string) {
                     Own%{sortCol === 'percentOwned' ? (sortDir === 'desc' ? ' ↓' : ' ↑') : ''}
                   </th>
                 }
-                renderPrefix={(pitcher, i) => (
-                  <td style={{ padding: '8px 6px', borderBottom: '1px solid var(--border)', verticalAlign: 'middle', textAlign: 'center' }}
-                    onClick={e => { e.stopPropagation(); toggleCheck(i) }}>
-                    <input type="checkbox" checked={(pitcher as FreeSP).checked || false}
-                      onChange={() => toggleCheck(i)} />
-                  </td>
-                )}
                 renderSuffix={(pitcher) => (
                   <td style={{ padding: '8px 6px', borderBottom: '1px solid var(--border)', verticalAlign: 'middle', textAlign: 'center', fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--ink-3)' }}>
                     {(pitcher as FreeSP).percentOwned ?? 0}%
                   </td>
                 )}
-                onRowClick={toggleCheck}
               />
               ) : (
                 <StatsTable
@@ -407,18 +385,6 @@ function handleSort(col: string) {
                   actualFpts={actualFpts}
                 />
               )}
-            </div>
-
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <span style={{ fontSize: 13, color: 'var(--ink-3)' }}>
-                {selectedCount} pitcher{selectedCount !== 1 ? 's' : ''} selected for analysis
-              </span>
-              <button onClick={() => router.push('/recommendations')} style={{
-                fontFamily: 'var(--sans)', fontSize: 13, fontWeight: 600,
-                padding: '9px 18px', borderRadius: 'var(--radius)',
-                cursor: 'pointer', border: 'none',
-                background: 'var(--green)', color: '#0F1114',
-              }}>Generate recommendations →</button>
             </div>
           </>
         )}
