@@ -390,10 +390,17 @@ def get_starts_for_players(player_names, matchup_period, team_map=None):
     if matchup_period not in MATCHUP_PERIODS:
         return {}, {}
 
-    mp       = MATCHUP_PERIODS[matchup_period]
-    mlb_data = fetch_mlb_probables(mp["start"], mp["end"])
+    from concurrent.futures import ThreadPoolExecutor
 
-    fp_data, schedule = fetch_espn_probables(mp["start"], mp["end"])
+    mp = MATCHUP_PERIODS[matchup_period]
+
+    # The two probable sources are independent (MLB Stats vs ESPN scoreboard) —
+    # fetch them concurrently instead of back-to-back to halve the wall time.
+    with ThreadPoolExecutor(max_workers=2) as ex:
+        mlb_future  = ex.submit(fetch_mlb_probables,  mp["start"], mp["end"])
+        espn_future = ex.submit(fetch_espn_probables, mp["start"], mp["end"])
+        mlb_data          = mlb_future.result()
+        fp_data, schedule = espn_future.result()
 
     pitcher_starts = build_pitcher_starts(mlb_data, fp_data, mp["start"], mp["end"])
 

@@ -14,6 +14,7 @@ import json
 import os
 import sys
 import requests
+from concurrent.futures import ThreadPoolExecutor
 from http.server import BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs
 from datetime import datetime, timedelta, timezone
@@ -167,16 +168,12 @@ def get_league_data(team_id: int, week: int) -> dict:
     )
 
     # ── Load cached external data (Savant, MLB Stats, game logs, team win) ─
-    cached = load_cached_data(year_int)
-    savant_current          = cached["savant_current"]
-    savant_previous         = cached["savant_previous"]
-    savant_statcast_current = cached["savant_statcast_current"]
-    savant_whiff_current    = cached["savant_whiff_current"]
-    mlb_stats_current       = cached["mlb_stats_current"]
-    mlb_stats_previous      = cached["mlb_stats_previous"]
-    game_logs_current       = cached["game_logs_current"]
-    team_win_data           = cached["team_win_data"]
-    team_woba_factors       = cached["team_woba_factors"]
+    # Kicked off concurrently with the ESPN roster + probables work below — none
+    # of it depends on the roster, so the two biggest independent fetch phases
+    # overlap instead of running back-to-back. Resolved just before the
+    # projection step (the first consumer).
+    _cache_executor = ThreadPoolExecutor(max_workers=1)
+    cached_future   = _cache_executor.submit(load_cached_data, year_int)
 
     # ── Matchup period metadata ──────────────────────────────────────
     mp            = MATCHUP_PERIODS.get(week, {})
@@ -366,6 +363,21 @@ def get_league_data(team_id: int, week: int) -> dict:
             "days_in_period": days_in_period,
             "team":           PRO_TEAM_MAP.get(pro_team_id, ""),
         })
+
+    # Resolve the concurrently-loaded external data now — the projection below
+    # is the first consumer. It has been fetching in the background since the
+    # top of this function, overlapping the roster fetch + probables.
+    cached = cached_future.result()
+    _cache_executor.shutdown(wait=False)
+    savant_current          = cached["savant_current"]
+    savant_previous         = cached["savant_previous"]
+    savant_statcast_current = cached["savant_statcast_current"]
+    savant_whiff_current    = cached["savant_whiff_current"]
+    mlb_stats_current       = cached["mlb_stats_current"]
+    mlb_stats_previous      = cached["mlb_stats_previous"]
+    game_logs_current       = cached["game_logs_current"]
+    team_win_data           = cached["team_win_data"]
+    team_woba_factors       = cached["team_woba_factors"]
 
     proj_fpts_by_name, proj_blend_by_name, fpts_per_start_roster, proj_details_roster = get_projected_fpts(
         projection_inputs, team_woba_factors,
