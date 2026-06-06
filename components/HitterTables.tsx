@@ -89,7 +89,7 @@ function sortVal(h: UIHitter, weeks: Weeks, key: string): number | null {
     case 'xslg':   return h.adv?.xslg ?? null
     case 'xwoba':  return h.adv?.xwoba ?? null
     case 'barrel': return h.adv?.barrelPct ?? null
-    case 'whiff':  return h.adv?.whiffPct ?? null
+    case 'hardhit': return h.adv?.hardHitPct ?? null
     default:
       // A date column (YYYY-MM-DD): that day's projection (off day → null).
       if (/^\d{4}-\d{2}-\d{2}$/.test(key)) {
@@ -130,14 +130,15 @@ function useSortedHitters(hitters: UIHitter[], weeks: Weeks) {
   return { sorted, key, dir, onSort }
 }
 
-function SortTh({ label, col, sortKey, sortDir, onSort, align = 'center', minWidth }: {
+function SortTh({ label, col, sortKey, sortDir, onSort, align = 'center', minWidth, title }: {
   label: string; col: string; sortKey: string | null; sortDir: SortDir
-  onSort: (k: string) => void; align?: 'left' | 'center'; minWidth?: number
+  onSort: (k: string) => void; align?: 'left' | 'center'; minWidth?: number; title?: string
 }) {
   const active = sortKey === col
   return (
     <th
       onClick={() => onSort(col)}
+      title={title}
       style={{
         padding: '8px 10px', fontSize: 10, fontFamily: 'var(--mono)', fontWeight: 500,
         letterSpacing: '0.04em', textTransform: 'uppercase',
@@ -285,8 +286,8 @@ export function HitterStatsTable({ hitters, weeks, showOwn }: {
     padding: '10px', borderBottom: '1px solid var(--border)', verticalAlign: 'middle', whiteSpace: 'nowrap',
   }
   const num = (extra?: React.CSSProperties): React.CSSProperties => ({ ...cellStyle, textAlign: 'center', fontFamily: 'var(--mono)', ...extra })
-  const th = (label: string, col: string, align: 'left' | 'center' = 'center') =>
-    <SortTh label={label} col={col} sortKey={key} sortDir={dir} onSort={onSort} align={align} />
+  const th = (label: string, col: string, align: 'left' | 'center' = 'center', title?: string) =>
+    <SortTh label={label} col={col} sortKey={key} sortDir={dir} onSort={onSort} align={align} title={title} />
   return (
     <div style={{ overflowX: 'auto' }}>
       <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
@@ -294,7 +295,7 @@ export function HitterStatsTable({ hitters, weeks, showOwn }: {
           <tr>
             <th style={{ padding: '8px 10px', fontSize: 10, fontFamily: 'var(--mono)', fontWeight: 500, letterSpacing: '0.04em', color: 'var(--ink-3)', textTransform: 'uppercase', borderBottom: '1px solid var(--border)' }}>Pos</th>
             {th('Hitter', 'name', 'left')}
-            {th('AVG / OBP / SLG', 'ops', 'left')}
+            {th('AVG / OBP / SLG', 'ops', 'left', 'Sorted by OPS (OBP + SLG)')}
             {th('HR', 'hr')}
             {th('R', 'r')}
             {th('RBI', 'rbi')}
@@ -303,7 +304,7 @@ export function HitterStatsTable({ hitters, weeks, showOwn }: {
             {th('xSLG', 'xslg')}
             {th('xwOBA', 'xwoba')}
             {th('Brl%', 'barrel')}
-            {th('Whiff%', 'whiff')}
+            {th('HardHit%', 'hardhit')}
             {th('Proj/G', 'projG')}
             {th('Proj wk', 'projWk')}
             {showOwn && th('Own%', 'own')}
@@ -334,7 +335,7 @@ export function HitterStatsTable({ hitters, weeks, showOwn }: {
                 <td style={num({ color: 'var(--ink-2)' })}>{rate(adv.xslg)}</td>
                 <td style={num({ color: 'var(--ink-2)' })}>{rate(adv.xwoba)}</td>
                 <td style={num({ color: 'var(--ink-2)' })}>{pct(adv.barrelPct)}</td>
-                <td style={num({ color: 'var(--ink-2)' })}>{pct(adv.whiffPct)}</td>
+                <td style={num({ color: 'var(--ink-2)' })}>{pct(adv.hardHitPct)}</td>
                 <td style={num({ fontWeight: 700 })}>{h.projG.toFixed(1)}</td>
                 <td style={num({ fontWeight: 700, color: 'var(--green)' })}>{projWk.toFixed(1)}</td>
                 {showOwn && <td style={num({ color: 'var(--ink-3)', fontSize: 12 })}>{h.percentOwned ?? 0}%</td>}
