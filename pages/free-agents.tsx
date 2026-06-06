@@ -40,13 +40,13 @@ export default function FreeAgents() {
       .then(r => r.json())
       .then(data => {
         if (data.matchupPeriods) setMatchupPeriods(data.matchupPeriods)
-        const saved = sessionStorage.getItem('skipper_selected_period')
+        const saved = localStorage.getItem('skipper_selected_period')
         const period = saved ? parseInt(saved) : (data.currentPeriod ?? 1)
         setSelectedPeriod(period)
       })
       .catch(() => {})
 
-    const cached = sessionStorage.getItem('skipper_free_agents')
+    const cached = localStorage.getItem('skipper_free_agents')
     if (cached) {
       const data = JSON.parse(cached)
       if (data.version !== CACHE_VERSION) return // outdated shape — let the fetch effect handle it
@@ -61,25 +61,12 @@ export default function FreeAgents() {
     }
   }, [])
 
-  const isFirstRender = useRef(true)
-
+  // Stale-while-revalidate: cached data (restored on mount from localStorage)
+  // renders immediately; refresh in the background whenever the period changes.
   useEffect(() => {
     if (selectedPeriod === null) return
-
-    if (isFirstRender.current) {
-      isFirstRender.current = false
-      const cached = sessionStorage.getItem('skipper_free_agents')
-      if (!cached) {
-        fetchFreeAgents()
-      } else {
-        const data = JSON.parse(cached)
-        if (!data.matchupDates || data.matchupDates.length === 0) fetchFreeAgents()
-      }
-      return
-    }
-
     fetchFreeAgents()
-  }, [selectedPeriod, matchupPeriods])
+  }, [selectedPeriod])
 
   const fetchFreeAgents = useCallback(async () => {
     setLoading(true)
@@ -89,7 +76,7 @@ export default function FreeAgents() {
       const config = await configRes.json()
       const teamId = config.teamId || '1'
 
-      sessionStorage.setItem('skipper_selected_period', String(selectedPeriod))
+      localStorage.setItem('skipper_selected_period', String(selectedPeriod))
       const res = await fetch(`/api/espn?teamId=${teamId}&week=${selectedPeriod}`)
       const data = await res.json()
       if (!data.ok) throw new Error(data.error || 'Failed to load ESPN data')
@@ -114,7 +101,7 @@ export default function FreeAgents() {
         projectionDetails: data.faProjectionDetails || {},
         liveStats: data.liveStats || {},
       }
-      sessionStorage.setItem('skipper_free_agents', JSON.stringify(toCache))
+      localStorage.setItem('skipper_free_agents', JSON.stringify(toCache))
       setFreeSPs(fas)
       setSchedule(data.schedule || {})
       setMatchupDates(data.matchupDates || [])
@@ -186,8 +173,8 @@ function handleSort(col: string) {
     const name = sortedFreeSPs[index]?.name
     const updated = freeSPs.map(p => p.name === name ? { ...p, checked: !p.checked } : p)
     setFreeSPs(updated)
-    const cached = JSON.parse(sessionStorage.getItem('skipper_free_agents') || '{}')
-    sessionStorage.setItem('skipper_free_agents', JSON.stringify({ ...cached, freeSPs: updated }))
+    const cached = JSON.parse(localStorage.getItem('skipper_free_agents') || '{}')
+    localStorage.setItem('skipper_free_agents', JSON.stringify({ ...cached, freeSPs: updated }))
   }
 
   const selectedCount = freeSPs.filter(p => p.checked).length
