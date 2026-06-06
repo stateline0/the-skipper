@@ -21,10 +21,11 @@ function usePortalTarget() {
 export interface StartDetail {
   label: string      // "vs COL" or "@ SF"
   date: string       // "2026-04-14"
-  woba: number       // 0.91
-  park: number       // 1.075
+  baseNoWl?: number  // 10.3 — recent-form-scaled skill base (excludes W/L)
+  woba: number       // pitcher multiplier (>1.0 helps): weak opponent → >1
+  park: number       // pitcher multiplier (>1.0 helps): pitcher park → >1
   parkTeam: string   // "BOS"
-  weather?: number        // 1.012 — temperature run-environment factor
+  weather?: number        // pitcher multiplier (>1.0 helps): cooler → >1
   tempF?: number | null   // 72.5 — forecast temperature, null for dome/default
   weatherSource?: string  // "forecast" | "dome" | "default"
   winProb?: number   // 0.636 — team win probability
@@ -73,8 +74,10 @@ const tooltipBase: React.CSSProperties = {
 
 // ─── Factor label helper ──────────────────────────────────────────────────────
 
-function FactorLabel({ value, inverse }: { value: number; inverse?: boolean }) {
-  const isGood = inverse ? value < 1.0 : value < 1.0
+// Factor values are pitcher multipliers: >1.0 helps the pitcher (green),
+// <1.0 hurts (red), ≈1.0 neutral (grey).
+function FactorLabel({ value }: { value: number }) {
+  const isGood = value > 1.0
   const color = Math.abs(value - 1.0) < 0.005
     ? 'rgba(255,255,255,0.5)'
     : isGood ? '#6ee7a0' : '#fca5a5'
@@ -212,38 +215,50 @@ export default function ProjectionTooltip({ children, breakdown, startDate }: Pr
               Start breakdown
             </div>
 
-            <Row label="Base rate" value={`${breakdown.adjustedBase.toFixed(1)}`} />
+            {/* Reconciling layout: (skill base + W/L) × lineup × park × weather = projected */}
+            {(() => {
+              const skill = startDetail.baseNoWl ?? breakdown.adjustedBase
+              const wl = startDetail.wlContrib ?? 0
+              const adjusted = skill + wl
+              return (
+                <>
+                  <Row label="Skill base /start" value={`${skill.toFixed(1)}`} />
 
-            <Row label={`Lineup (${startDetail.label})`}>
-              <FactorLabel value={startDetail.woba} inverse />
-            </Row>
+                  {startDetail.winProb != null && (
+                    <Row label="Win prob">
+                      <WinProbLabel prob={startDetail.winProb} source={startDetail.wpSource} />
+                    </Row>
+                  )}
 
-            <Row label={`Park (${startDetail.parkTeam})`}>
-              <FactorLabel value={startDetail.park} />
-            </Row>
+                  {startDetail.wlContrib != null && (
+                    <Row label="W/L impact">
+                      <span style={{
+                        fontFamily: 'var(--mono)', fontSize: 10, fontWeight: 600,
+                        color: startDetail.wlContrib >= 0 ? '#6ee7a0' : '#fca5a5',
+                      }}>
+                        {startDetail.wlContrib >= 0 ? '+' : ''}{startDetail.wlContrib.toFixed(1)} pts
+                      </span>
+                    </Row>
+                  )}
 
-            {startDetail.weather != null && startDetail.weatherSource === 'forecast' && (
-              <Row label={`Weather${startDetail.tempF != null ? ` (${Math.round(startDetail.tempF)}°F)` : ''}`}>
-                <FactorLabel value={startDetail.weather} />
-              </Row>
-            )}
+                  <Row label="Adjusted base" value={`${adjusted.toFixed(1)}`} dim />
 
-            {startDetail.winProb != null && (
-              <Row label={`Win prob`}>
-                <WinProbLabel prob={startDetail.winProb} source={startDetail.wpSource} />
-              </Row>
-            )}
+                  <Row label={`Lineup (${startDetail.label})`}>
+                    <FactorLabel value={startDetail.woba} />
+                  </Row>
 
-            {startDetail.wlContrib != null && (
-              <Row label="W/L impact">
-                <span style={{
-                  fontFamily: 'var(--mono)', fontSize: 10, fontWeight: 600,
-                  color: startDetail.wlContrib >= 0 ? '#6ee7a0' : '#fca5a5',
-                }}>
-                  {startDetail.wlContrib >= 0 ? '+' : ''}{startDetail.wlContrib.toFixed(1)} pts
-                </span>
-              </Row>
-            )}
+                  <Row label={`Park (${startDetail.parkTeam})`}>
+                    <FactorLabel value={startDetail.park} />
+                  </Row>
+
+                  {startDetail.weather != null && startDetail.weatherSource === 'forecast' && (
+                    <Row label={`Weather${startDetail.tempF != null ? ` (${Math.round(startDetail.tempF)}°F)` : ''}`}>
+                      <FactorLabel value={startDetail.weather} />
+                    </Row>
+                  )}
+                </>
+              )
+            })()}
 
             <Divider />
 
@@ -315,7 +330,7 @@ export default function ProjectionTooltip({ children, breakdown, startDate }: Pr
                 }}>
                   <span style={{ color: 'rgba(255,255,255,0.7)' }}>{s.label}</span>
                   <span style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-                    <FactorLabel value={s.woba} inverse />
+                    <FactorLabel value={s.woba} />
                     <FactorLabel value={s.park} />
                     {s.weather != null && s.weatherSource === 'forecast' && (
                       <FactorLabel value={s.weather} />
