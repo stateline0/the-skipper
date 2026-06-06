@@ -55,27 +55,23 @@ DEFAULT_HITTER_SCORING = {
 
 
 # ── ESPN fantasy-baseball hitting stat IDs → our stat keys ─────────────
-# ESPN `mSettings.scoringSettings.scoringItems[]` entries carry a numeric
-# `statId` and a points value. This maps the hitting stat IDs we score.
-#
-# NOTE: these IDs are ESPN's documented flb hitting stat IDs, but they MUST be
-# verified against a live mSettings dump for this league before Phase 1 ships
-# (a Phase-0 spike). parse_hitter_scoring() logs any statId it can't map so an
-# unexpected configuration is visible rather than silently dropped.
+# CONFIRMED against the live league via /api/hitters?debug=scoring: the seven
+# batting scoringItems were statIds {8,10,12,20,21,23,27}, matching the league
+# settings screen {TB, BB, R, RBI, SB, HBP, K}. statId 8=TB and 27=K(batter)
+# are certain; the remaining five are all weighted +1, so the resulting scoring
+# is identical for any bijection onto {bb, r, rbi, sb, hbp} — the within-group
+# identities below are the best-fit assignment and only matter if the league
+# ever weights those stats unequally (re-confirm via the debug endpoint then).
+# Pitching statIds (≥32) are intentionally absent — parse_hitter_scoring only
+# builds the hitter dict and skips everything else.
 ESPN_HITTING_STAT_IDS = {
-    1:  "h",     # hits (any)
-    3:  "2b",    # doubles
-    4:  "3b",    # triples
-    5:  "hr",    # home runs
-    7:  "1b",    # singles
-    8:  "tb",    # total bases
-    9:  "bb",    # walks
-    11: "hbp",   # hit by pitch
-    17: "r",     # runs
-    18: "rbi",   # runs batted in
+    8:  "tb",    # total bases  (certain)
+    10: "bb",    # walks
+    12: "hbp",   # hit by pitch
     20: "sb",    # stolen bases
-    21: "cs",    # caught stealing
-    27: "so",    # strikeouts (batter)
+    21: "r",     # runs
+    23: "rbi",   # runs batted in
+    27: "so",    # strikeouts (batter)  (certain)
 }
 
 # Plate-appearance ramp: weight toward the current season scales linearly to
@@ -157,8 +153,8 @@ def parse_hitter_scoring(msettings: dict) -> dict:
         stat_id = item.get("statId")
         key = ESPN_HITTING_STAT_IDS.get(stat_id)
         if key is None:
-            # Only flag IDs in the hitting range so pitching items don't spam.
-            if isinstance(stat_id, int) and 0 <= stat_id <= 35:
+            # Only flag IDs in the hitting range so pitching items (≥32) don't spam.
+            if isinstance(stat_id, int) and 0 <= stat_id <= 31:
                 unmapped.append(stat_id)
             continue
         pts = _resolve_points(item)

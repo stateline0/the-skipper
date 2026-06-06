@@ -273,7 +273,8 @@ HITTER_CACHE_TTL = 1800  # 30 min
 # Bump whenever the payload shape, scoring, or ordering changes so a deploy
 # abandons stale cached blobs instead of serving them for up to TTL.
 #   v2: TB scoring + ESPN lineup ordering. v3: scoring read from mSettings.
-HITTER_CACHE_VERSION = 3
+#   v4: corrected ESPN_HITTING_STAT_IDS map (now parses, no longer falls back).
+HITTER_CACHE_VERSION = 4
 
 
 def _cache_key(team_id: int, week: int) -> str:
