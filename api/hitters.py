@@ -89,6 +89,26 @@ def _date_range(start: str, end: str) -> list:
     return out
 
 
+def _advanced_line(name: str, savant_expected: dict, savant_statcast: dict) -> dict | None:
+    """Advanced (Savant) display block for the Stats tab: xBA/xSLG/xwOBA + a
+    luck signal (est_woba − woba; positive = unlucky/due) and Barrel%/Whiff%.
+    Returns None when the hitter has no Savant footprint."""
+    key = strip_accents(name)
+    exp = savant_expected.get(key, {})
+    sc = savant_statcast.get(key, {})
+    out = {}
+    if exp:
+        if exp.get("xba"):   out["xba"]   = round(exp["xba"], 3)
+        if exp.get("xslg"):  out["xslg"]  = round(exp["xslg"], 3)
+        if exp.get("xwoba"): out["xwoba"] = round(exp["xwoba"], 3)
+        if "woba_diff" in exp: out["wobaDiff"] = round(exp["woba_diff"], 3)
+    if sc:
+        if sc.get("brl_pct"):      out["barrelPct"]  = round(sc["brl_pct"], 1)
+        if sc.get("whiff_pct"):    out["whiffPct"]   = round(sc["whiff_pct"], 1)
+        if sc.get("hard_hit_pct"): out["hardHitPct"] = round(sc["hard_hit_pct"], 1)
+    return out or None
+
+
 def _season_line(stat: dict) -> dict | None:
     """Compact season slash + counting line for the Stats tab. None when the
     hitter has no games played (avoids empty rows / divide-by-zero)."""
@@ -208,6 +228,7 @@ def get_hitter_data(team_id: int, week: int) -> dict:
     hitting_previous = hit["hitting_previous"]
     savant_current   = hit["savant_batter_current"]
     savant_previous  = hit["savant_batter_previous"]
+    savant_statcast  = hit.get("savant_batter_statcast_current", {})
 
     # ── Game days per hitter (days their team plays in the period) ────
     for h in hitters_meta:
@@ -254,6 +275,7 @@ def get_hitter_data(team_id: int, week: int) -> dict:
             "modelType":   p.get("modelType", "stats"),
             "games":       p.get("games", len(h["gameDates"])),
             "seasonStats": _season_line(hitting_current.get(strip_accents(name), {})),
+            "advanced":    _advanced_line(name, savant_current, savant_statcast),
             "days":        days,
         })
 
@@ -264,7 +286,7 @@ def get_hitter_data(team_id: int, week: int) -> dict:
     free_agent_hitters = _fetch_fa_hitters(
         base, headers, cookies, PRO_TEAM_MAP, data.get("scoringPeriodId", week),
         schedule, period_dates, scoring, hitting_current, hitting_previous,
-        savant_current, savant_previous, year_int, week,
+        savant_current, savant_previous, savant_statcast, year_int, week,
     )
 
     return {
@@ -284,7 +306,7 @@ def get_hitter_data(team_id: int, week: int) -> dict:
 def _fetch_fa_hitters(base, headers, cookies, PRO_TEAM_MAP, current_week,
                       schedule, period_dates, scoring, hitting_current,
                       hitting_previous, savant_current, savant_previous,
-                      year_int, week):
+                      savant_statcast, year_int, week):
     """Top available free-agent hitters by ownership %, projected with the same
     model as the roster. Mirrors the SP free-agent fetch in espn.py, filtered to
     hitter slots. Returns [] on any failure (FA hitters are non-critical)."""
@@ -347,6 +369,7 @@ def _fetch_fa_hitters(base, headers, cookies, PRO_TEAM_MAP, current_week,
                 "games": p.get("games", len(h["gameDates"])),
                 "modelType": p.get("modelType", "stats"),
                 "seasonStats": _season_line(hitting_current.get(strip_accents(h["name"]), {})),
+                "advanced": _advanced_line(h["name"], savant_current, savant_statcast),
                 "days": days,
             })
         out.sort(key=lambda x: -x["percentOwned"])
@@ -364,7 +387,8 @@ HITTER_CACHE_TTL = 1800  # 30 min
 #   v4: corrected ESPN_HITTING_STAT_IDS map (now parses, no longer falls back).
 #   v5: Phase 2 — Savant xBA/xSLG de-luck.
 #   v6: add freeAgentHitters to the payload.
-HITTER_CACHE_VERSION = 6
+#   v7: add advanced (Savant xBA/xSLG/xwOBA, Barrel%/Whiff%) block.
+HITTER_CACHE_VERSION = 7
 
 
 def _cache_key(team_id: int, week: int) -> str:

@@ -1,12 +1,20 @@
 // components/HitterTables.tsx
 //
 // Shared hitter Schedule/Stats tables used by both the Hitters page (My
-// hitters) and the Free Agents page (FA hitters). Extracted from the original
-// pages/hitters.tsx so the FA Pitchers/Hitters toggle can reuse them.
+// hitters) and the Free Agents page (FA hitters). Each table manages its own
+// column sorting internally, so callers don't wire anything. The Stats table
+// includes an advanced (Savant) column group: xBA/xSLG/xwOBA + Barrel%/Whiff%.
 //
 // Pass `showOwn` to render an Own% column (Free Agents view).
 
+import { useMemo, useState } from 'react'
+
 // ─── Types ──────────────────────────────────────────────────────────────────
+
+export interface HitterAdvanced {
+  xba?: number; xslg?: number; xwoba?: number; wobaDiff?: number
+  barrelPct?: number; whiffPct?: number; hardHitPct?: number
+}
 
 export interface UIHitter {
   name: string
@@ -18,6 +26,7 @@ export interface UIHitter {
   avg: number; obp: number; slg: number
   hr: number; r: number; rbi: number; sb: number
   percentOwned?: number       // Free Agents view only
+  adv?: HitterAdvanced        // advanced Savant block (Stats tab)
 }
 
 export interface DayGame {
@@ -55,6 +64,92 @@ function slash(h: UIHitter) {
   const f = (n: number) => (n || 0).toFixed(3).replace(/^0/, '')
   return `${f(h.avg)}/${f(h.obp)}/${f(h.slg)}`
 }
+const rate = (n?: number) => (n === undefined ? '—' : n.toFixed(3).replace(/^0/, ''))
+const pct = (n?: number) => (n === undefined ? '—' : `${n.toFixed(1)}%`)
+
+// ─── Sorting ──────────────────────────────────────────────────────────────────
+
+type SortDir = 'asc' | 'desc'
+
+// Numeric sort value for a hitter under a given column key. Returns null for an
+// absent value (sinks to the bottom regardless of direction).
+function sortVal(h: UIHitter, weeks: Weeks, key: string): number | null {
+  const week = weeks[h.name] || []
+  switch (key) {
+    case 'g':      return week.filter(g => !g.off).length
+    case 'projWk': return week.reduce((a, g) => a + g.proj, 0)
+    case 'projG':  return h.projG
+    case 'own':    return h.percentOwned ?? null
+    case 'ops':    return (h.obp || 0) + (h.slg || 0)
+    case 'hr':     return h.hr
+    case 'r':      return h.r
+    case 'rbi':    return h.rbi
+    case 'sb':     return h.sb
+    case 'xba':    return h.adv?.xba ?? null
+    case 'xslg':   return h.adv?.xslg ?? null
+    case 'xwoba':  return h.adv?.xwoba ?? null
+    case 'barrel': return h.adv?.barrelPct ?? null
+    case 'whiff':  return h.adv?.whiffPct ?? null
+    default:
+      // A date column (YYYY-MM-DD): that day's projection (off day → null).
+      if (/^\d{4}-\d{2}-\d{2}$/.test(key)) {
+        const g = week.find(x => x.date === key)
+        return g && !g.off ? g.proj : null
+      }
+      return null
+  }
+}
+
+function useSortedHitters(hitters: UIHitter[], weeks: Weeks) {
+  const [key, setKey] = useState<string | null>(null)   // null → caller's order
+  const [dir, setDir] = useState<SortDir>('desc')
+
+  function onSort(k: string) {
+    if (k === key) setDir(d => (d === 'desc' ? 'asc' : 'desc'))
+    else { setKey(k); setDir('desc') }
+  }
+
+  const sorted = useMemo(() => {
+    if (!key) return hitters
+    const arr = [...hitters]
+    arr.sort((a, b) => {
+      if (key === 'name') {
+        const c = a.name.localeCompare(b.name)
+        return dir === 'asc' ? c : -c
+      }
+      const av = sortVal(a, weeks, key)
+      const bv = sortVal(b, weeks, key)
+      if (av === null && bv === null) return 0
+      if (av === null) return 1          // missing sinks
+      if (bv === null) return -1
+      return dir === 'desc' ? bv - av : av - bv
+    })
+    return arr
+  }, [hitters, weeks, key, dir])
+
+  return { sorted, key, dir, onSort }
+}
+
+function SortTh({ label, col, sortKey, sortDir, onSort, align = 'center', minWidth }: {
+  label: string; col: string; sortKey: string | null; sortDir: SortDir
+  onSort: (k: string) => void; align?: 'left' | 'center'; minWidth?: number
+}) {
+  const active = sortKey === col
+  return (
+    <th
+      onClick={() => onSort(col)}
+      style={{
+        padding: '8px 10px', fontSize: 10, fontFamily: 'var(--mono)', fontWeight: 500,
+        letterSpacing: '0.04em', textTransform: 'uppercase',
+        borderBottom: '1px solid var(--border)', whiteSpace: 'nowrap',
+        textAlign: align, cursor: 'pointer', userSelect: 'none',
+        color: active ? 'var(--ink)' : 'var(--ink-3)', minWidth,
+      }}
+    >
+      {label}{active ? (sortDir === 'desc' ? ' ↓' : ' ↑') : ''}
+    </th>
+  )
+}
 
 // ─── Badge ──────────────────────────────────────────────────────────────────
 
@@ -85,6 +180,7 @@ export function PosBadge({ pos }: { pos: string }) {
 export function HitterScheduleGrid({ hitters, weeks, weekDates, today, showOwn }: {
   hitters: UIHitter[]; weeks: Weeks; weekDates: string[]; today: string; showOwn?: boolean
 }) {
+  const { sorted, key, dir, onSort } = useSortedHitters(hitters, weeks)
   const headerStyle: React.CSSProperties = {
     padding: '8px 6px', fontSize: 10, fontFamily: 'var(--mono)', fontWeight: 500,
     color: 'var(--ink-3)', letterSpacing: '0.04em', borderBottom: '1px solid var(--border)',
@@ -94,38 +190,42 @@ export function HitterScheduleGrid({ hitters, weeks, weekDates, today, showOwn }
     padding: '8px 6px', fontSize: 13, borderBottom: '1px solid var(--border)',
     verticalAlign: 'middle', textAlign: 'center', whiteSpace: 'nowrap',
   }
+  const arrow = (col: string) => (key === col ? (dir === 'desc' ? ' ↓' : ' ↑') : '')
   return (
     <div style={{ overflowX: 'auto' }}>
       <table style={{ borderCollapse: 'collapse', width: '100%' }}>
         <thead>
           <tr>
             <th style={{ ...headerStyle, minWidth: 50 }}>Pos</th>
-            <th style={{ ...headerStyle, textAlign: 'left', paddingLeft: 10, minWidth: 150 }}>Hitter</th>
+            <th onClick={() => onSort('name')} style={{ ...headerStyle, textAlign: 'left', paddingLeft: 10, minWidth: 150, cursor: 'pointer', userSelect: 'none', color: key === 'name' ? 'var(--ink)' : 'var(--ink-3)' }}>
+              Hitter{arrow('name')}
+            </th>
             {weekDates.map(date => {
               const isToday = date === today
               const { wd, md } = fmtDay(date)
+              const active = key === date
               return (
-                <th key={date} style={{
-                  ...headerStyle, minWidth: 56,
+                <th key={date} onClick={() => onSort(date)} style={{
+                  ...headerStyle, minWidth: 56, cursor: 'pointer', userSelect: 'none',
                   fontWeight: isToday ? 700 : 500,
-                  color: isToday ? 'var(--ink)' : 'var(--ink-3)',
+                  color: (isToday || active) ? 'var(--ink)' : 'var(--ink-3)',
                   background: isToday ? 'var(--paper-2)' : 'transparent',
                   borderBottom: isToday ? '2px solid var(--green-mid)' : '1px solid var(--border)',
                 }}>
-                  {md}
+                  {md}{arrow(date)}
                   <div style={{ fontSize: 8, letterSpacing: '0.08em', marginTop: 1, color: isToday ? 'var(--green-mid)' : 'var(--ink-3)' }}>
                     {isToday ? 'TODAY' : wd.toUpperCase()}
                   </div>
                 </th>
               )
             })}
-            <th style={{ ...headerStyle, minWidth: 36 }}>G</th>
-            <th style={{ ...headerStyle, minWidth: 60 }}>Proj</th>
-            {showOwn && <th style={{ ...headerStyle, minWidth: 52 }}>Own%</th>}
+            <th onClick={() => onSort('g')} style={{ ...headerStyle, minWidth: 36, cursor: 'pointer', userSelect: 'none', color: key === 'g' ? 'var(--ink)' : 'var(--ink-3)' }}>G{arrow('g')}</th>
+            <th onClick={() => onSort('projWk')} style={{ ...headerStyle, minWidth: 60, cursor: 'pointer', userSelect: 'none', color: key === 'projWk' ? 'var(--ink)' : 'var(--ink-3)' }}>Proj{arrow('projWk')}</th>
+            {showOwn && <th onClick={() => onSort('own')} style={{ ...headerStyle, minWidth: 52, cursor: 'pointer', userSelect: 'none', color: key === 'own' ? 'var(--ink)' : 'var(--ink-3)' }}>Own%{arrow('own')}</th>}
           </tr>
         </thead>
         <tbody>
-          {hitters.map(h => {
+          {sorted.map(h => {
             const week = weeks[h.name] || []
             const isBench = h.pos === 'BN' || h.pos === 'IL'
             const games = week.filter(g => !g.off)
@@ -175,43 +275,47 @@ function HitterDayCell({ g }: { g: DayGame }) {
   )
 }
 
-// ─── Stats table ──────────────────────────────────────────────────────────────
+// ─── Stats table (with advanced Savant columns) ───────────────────────────────
 
 export function HitterStatsTable({ hitters, weeks, showOwn }: {
   hitters: UIHitter[]; weeks: Weeks; showOwn?: boolean
 }) {
-  const headerStyle: React.CSSProperties = {
-    padding: '8px 10px', fontSize: 10, fontFamily: 'var(--mono)', fontWeight: 500,
-    letterSpacing: '0.04em', color: 'var(--ink-3)', textTransform: 'uppercase',
-    borderBottom: '1px solid var(--border)', whiteSpace: 'nowrap',
-  }
+  const { sorted, key, dir, onSort } = useSortedHitters(hitters, weeks)
   const cellStyle: React.CSSProperties = {
     padding: '10px', borderBottom: '1px solid var(--border)', verticalAlign: 'middle', whiteSpace: 'nowrap',
   }
   const num = (extra?: React.CSSProperties): React.CSSProperties => ({ ...cellStyle, textAlign: 'center', fontFamily: 'var(--mono)', ...extra })
+  const th = (label: string, col: string, align: 'left' | 'center' = 'center') =>
+    <SortTh label={label} col={col} sortKey={key} sortDir={dir} onSort={onSort} align={align} />
   return (
     <div style={{ overflowX: 'auto' }}>
       <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
         <thead>
           <tr>
-            <th style={headerStyle}>Pos</th>
-            <th style={{ ...headerStyle, textAlign: 'left' }}>Hitter</th>
-            <th style={{ ...headerStyle, textAlign: 'left' }}>AVG / OBP / SLG</th>
-            <th style={{ ...headerStyle, textAlign: 'center' }}>HR</th>
-            <th style={{ ...headerStyle, textAlign: 'center' }}>R</th>
-            <th style={{ ...headerStyle, textAlign: 'center' }}>RBI</th>
-            <th style={{ ...headerStyle, textAlign: 'center' }}>SB</th>
-            <th style={{ ...headerStyle, textAlign: 'center' }}>Proj/G</th>
-            <th style={{ ...headerStyle, textAlign: 'center' }}>Proj wk</th>
-            {showOwn && <th style={{ ...headerStyle, textAlign: 'center' }}>Own%</th>}
+            <th style={{ padding: '8px 10px', fontSize: 10, fontFamily: 'var(--mono)', fontWeight: 500, letterSpacing: '0.04em', color: 'var(--ink-3)', textTransform: 'uppercase', borderBottom: '1px solid var(--border)' }}>Pos</th>
+            {th('Hitter', 'name', 'left')}
+            {th('AVG / OBP / SLG', 'ops', 'left')}
+            {th('HR', 'hr')}
+            {th('R', 'r')}
+            {th('RBI', 'rbi')}
+            {th('SB', 'sb')}
+            {th('xBA', 'xba')}
+            {th('xSLG', 'xslg')}
+            {th('xwOBA', 'xwoba')}
+            {th('Brl%', 'barrel')}
+            {th('Whiff%', 'whiff')}
+            {th('Proj/G', 'projG')}
+            {th('Proj wk', 'projWk')}
+            {showOwn && th('Own%', 'own')}
           </tr>
         </thead>
         <tbody>
-          {hitters.map(h => {
+          {sorted.map(h => {
             const week = weeks[h.name] || []
             const projWk = week.reduce((a, g) => a + g.proj, 0)
             const isBench = h.pos === 'BN' || h.pos === 'IL'
             const hasLine = h.avg || h.obp || h.slg || h.hr || h.r || h.rbi || h.sb
+            const adv = h.adv || {}
             return (
               <tr key={h.name} style={{ opacity: isBench ? 0.55 : 1 }}>
                 <td style={cellStyle}><PosBadge pos={h.pos} /></td>
@@ -226,6 +330,11 @@ export function HitterStatsTable({ hitters, weeks, showOwn }: {
                 <td style={num()}>{h.r || '—'}</td>
                 <td style={num()}>{h.rbi || '—'}</td>
                 <td style={num()}>{h.sb || '—'}</td>
+                <td style={num({ color: 'var(--ink-2)' })}>{rate(adv.xba)}</td>
+                <td style={num({ color: 'var(--ink-2)' })}>{rate(adv.xslg)}</td>
+                <td style={num({ color: 'var(--ink-2)' })}>{rate(adv.xwoba)}</td>
+                <td style={num({ color: 'var(--ink-2)' })}>{pct(adv.barrelPct)}</td>
+                <td style={num({ color: 'var(--ink-2)' })}>{pct(adv.whiffPct)}</td>
                 <td style={num({ fontWeight: 700 })}>{h.projG.toFixed(1)}</td>
                 <td style={num({ fontWeight: 700, color: 'var(--green)' })}>{projWk.toFixed(1)}</td>
                 {showOwn && <td style={num({ color: 'var(--ink-3)', fontSize: 12 })}>{h.percentOwned ?? 0}%</td>}
@@ -256,6 +365,7 @@ export function hitterFromPayload(h: any, dates: string[]): { hitter: UIHitter; 
       avg: s.avg || 0, obp: s.obp || 0, slg: s.slg || 0,
       hr: s.hr || 0, r: s.r || 0, rbi: s.rbi || 0, sb: s.sb || 0,
       percentOwned: h.percentOwned,
+      adv: h.advanced || undefined,
     },
     days,
   }
