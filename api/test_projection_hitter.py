@@ -11,7 +11,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from projection_hitter import (
     DEFAULT_HITTER_SCORING, ESPN_HITTING_STAT_IDS,
     parse_hitter_scoring, apply_hitter_formula, per_game_vector,
-    blend_vectors, pa_blend_weight, apply_factors,
+    blend_vectors, pa_blend_weight, apply_factors, scoring_is_sane,
     get_projected_hitter_fpts,
 )
 
@@ -112,22 +112,62 @@ def test_apply_factors_identity_and_scaling():
 
 def test_parse_scoring_from_msettings():
     msettings = {"settings": {"scoringSettings": {"scoringItems": [
-        {"statId": 5, "points": 4},      # HR
-        {"statId": 17, "points": 1},     # R
-        {"statId": 27, "points": -0.5},  # SO
+        {"statId": 8, "points": 1},      # TB
+        {"statId": 21, "points": 1},     # R
+        {"statId": 27, "points": -0.5},  # K (batter)
         {"statId": 999, "points": 7},    # unknown → skipped
-        {"statId": 34, "pointsOverrides": {"16": 2}},  # mapped via overrides? id 34 unknown
+        {"statId": 34, "points": 1},     # pitching (outs) → skipped
     ]}}}
     scoring = parse_hitter_scoring(msettings)
-    assert scoring["hr"] == 4 and scoring["r"] == 1 and scoring["so"] == -0.5
-    assert 999 not in scoring.values()
-    print("✓ parse_hitter_scoring: maps known statIds, skips unknown")
+    assert scoring == {"tb": 1, "r": 1, "so": -0.5}, scoring
+    print("✓ parse_hitter_scoring: maps known statIds, skips unknown/pitching")
 
 
 def test_parse_scoring_fallback():
     assert parse_hitter_scoring({}) == DEFAULT_HITTER_SCORING
     assert parse_hitter_scoring({"settings": {}}) == DEFAULT_HITTER_SCORING
     print("✓ parse_hitter_scoring: falls back to default when empty")
+
+
+def test_scoring_is_sane():
+    assert scoring_is_sane(DEFAULT_HITTER_SCORING)
+    assert scoring_is_sane({"tb": 1, "r": 1, "so": -1})
+    assert not scoring_is_sane({})                      # empty
+    assert not scoring_is_sane({"so": -1})              # no positive offense
+    assert not scoring_is_sane({"sb": 1, "so": -5})     # nets negative for a regular
+    print("✓ scoring_is_sane: accepts real configs, rejects broken ones")
+
+
+def test_parse_scoring_real_league():
+    # The actual scoringItems pulled from the live league via ?debug=scoring
+    # (hitting + pitching mixed — pitching IDs must be ignored). Hitting:
+    # 8=TB, 10=BB, 12=HBP, 20=SB, 21=R, 23=RBI (+1), 27=K (-1).
+    items = [
+        {"statId": 37, "points": -1.0}, {"statId": 39, "points": -1.0},
+        {"statId": 8, "points": 1.0},   {"statId": 10, "points": 1.0},
+        {"statId": 42, "points": -1.0}, {"statId": 12, "points": 1.0},
+        {"statId": 57, "points": 5.0},  {"statId": 48, "points": 1.0},
+        {"statId": 53, "points": 5.0},  {"statId": 54, "points": -5.0},
+        {"statId": 20, "points": 1.0},  {"statId": 21, "points": 1.0},
+        {"statId": 23, "points": 1.0},  {"statId": 27, "points": -1.0},
+        {"statId": 45, "points": -2.0}, {"statId": 34, "points": 1.0},
+    ]
+    scoring = parse_hitter_scoring({"settings": {"scoringSettings": {"scoringItems": items}}})
+    assert scoring == {"tb": 1.0, "bb": 1.0, "hbp": 1.0, "sb": 1.0, "r": 1.0, "rbi": 1.0, "so": -1.0}, scoring
+    # And it produces the same FPTS as the verified hardcoded default.
+    v = per_game_vector(SEASON_2026, 150)
+    assert approx(apply_hitter_formula(v, scoring), apply_hitter_formula(v, DEFAULT_HITTER_SCORING))
+    print("✓ parse_hitter_scoring: live-league scoringItems → correct TB-based dict")
+
+
+def test_parse_scoring_sanity_fallback():
+    # Mimics the wire-in bug: only strikeouts mapped (all-negative). The parser
+    # must reject it and fall back to the verified default.
+    msettings = {"settings": {"scoringSettings": {"scoringItems": [
+        {"statId": 27, "points": -1},   # K only
+    ]}}}
+    assert parse_hitter_scoring(msettings) == DEFAULT_HITTER_SCORING
+    print("✓ parse_hitter_scoring: rejects all-negative parse, uses default")
 
 
 def test_end_to_end_projection():

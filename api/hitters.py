@@ -31,7 +31,7 @@ from fetcher import get_headers_and_cookies, get_pro_team_map, load_hitter_stats
 from kv import cache_get, cache_set
 from projection_hitter import (
     parse_hitter_scoring, get_projected_hitter_fpts, strip_accents,
-    DEFAULT_HITTER_SCORING,
+    DEFAULT_HITTER_SCORING, _resolve_points,
 )
 
 # ESPN baseball lineup/eligible slot IDs. Hitters occupy 0–12; pitchers 13–15.
@@ -161,17 +161,16 @@ def get_hitter_data(team_id: int, week: int) -> dict:
     team_name    = my_team.get("name", "").strip()
     roster_entries = my_team.get("roster", {}).get("entries", [])
 
-    # Scoring is hardcoded (DEFAULT_HITTER_SCORING), verified from the league
-    # settings — same approach as the pitcher SCORING in projection.py. We also
-    # log what the mSettings parser *would* produce, to repair the auto-parser's
-    # stat-ID map in a later pass without depending on it now.
-    scoring = dict(DEFAULT_HITTER_SCORING)
+    # Scoring is read dynamically from the league's mSettings; parse_hitter_scoring
+    # validates the result and falls back to the verified DEFAULT_HITTER_SCORING
+    # if the parse looks wrong (wrong statId map / odd config), so we never
+    # regress to the all-negative projections. The raw items are logged so the
+    # ESPN_HITTING_STAT_IDS map can be corrected if a fallback ever fires.
+    scoring = parse_hitter_scoring(data)
     try:
-        parsed = parse_hitter_scoring(data)
-        print(f"[hitters.py] mSettings-parsed scoring (diagnostic, not used): {parsed}")
         items = data.get("settings", {}).get("scoringSettings", {}).get("scoringItems", [])
         print(f"[hitters.py] raw scoringItems statId→points: "
-              f"{[(it.get('statId'), it.get('points')) for it in (items or [])]}")
+              f"{[(it.get('statId'), _resolve_points(it)) for it in (items or [])]}")
     except Exception as e:
         print(f"[hitters.py] scoring diagnostic failed: {e}")
 
@@ -272,14 +271,46 @@ def get_hitter_data(team_id: int, week: int) -> dict:
 # ── Caching (mirrors the espn.py warm-serve pattern, lighter) ──────────
 HITTER_CACHE_TTL = 1800  # 30 min
 # Bump whenever the payload shape, scoring, or ordering changes so a deploy
-# abandons stale cached blobs instead of serving them for up to TTL. (v1 cached
-# the pre-fix all-negative, proj-sorted payload.)
-HITTER_CACHE_VERSION = 2
+# abandons stale cached blobs instead of serving them for up to TTL.
+#   v2: TB scoring + ESPN lineup ordering. v3: scoring read from mSettings.
+#   v4: corrected ESPN_HITTING_STAT_IDS map (now parses, no longer falls back).
+HITTER_CACHE_VERSION = 4
 
 
 def _cache_key(team_id: int, week: int) -> str:
     year = os.environ.get("ESPN_SEASON", "2026")
     return f"cache:hitterdata:v{HITTER_CACHE_VERSION}:{year}:{team_id}:{week}"
+
+
+def scoring_debug(team_id: int) -> dict:
+    """Diagnostic: fetch the league mSettings and return the raw hitting/relevant
+    scoringItems alongside what the parser derives and the hardcoded fallback.
+    Lets us verify/repair the ESPN_HITTING_STAT_IDS map against a real league.
+    Hit /api/hitters?debug=scoring."""
+    league_id = os.environ["ESPN_LEAGUE_ID"]
+    year = os.environ.get("ESPN_SEASON", "2026")
+    headers, cookies = get_headers_and_cookies()
+    base = (
+        f"https://lm-api-reads.fantasy.espn.com/apis/v3/games/flb"
+        f"/seasons/{year}/segments/0/leagues/{league_id}"
+    )
+    r = requests.get(base, params=[("view", "mSettings")], cookies=cookies, headers=headers, timeout=15)
+    if r.status_code != 200:
+        return {"ok": False, "error": f"ESPN HTTP {r.status_code}"}
+    data = r.json()
+    items = data.get("settings", {}).get("scoringSettings", {}).get("scoringItems", [])
+    raw = [{
+        "statId": it.get("statId"),
+        "points": it.get("points"),
+        "pointsOverrides": it.get("pointsOverrides"),
+        "resolved": _resolve_points(it),
+    } for it in (items or [])]
+    return {
+        "ok": True,
+        "scoringItems": raw,
+        "parsed": parse_hitter_scoring(data),
+        "hardcodedFallback": DEFAULT_HITTER_SCORING,
+    }
 
 
 class handler(BaseHTTPRequestHandler):
@@ -289,6 +320,20 @@ class handler(BaseHTTPRequestHandler):
         team_id = int(env_tid) if env_tid else int(qs.get("teamId", ["1"])[0])
         week    = int(qs.get("week", ["1"])[0])
         fresh   = qs.get("fresh", ["0"])[0] in ("1", "true")
+        debug   = qs.get("debug", [""])[0]
+
+        if debug == "scoring":
+            try:
+                payload = scoring_debug(team_id)
+            except Exception as e:
+                payload = {"ok": False, "error": str(e)}
+            body = json.dumps(payload).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(body)
+            return
 
         try:
             payload = None
