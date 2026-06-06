@@ -29,12 +29,18 @@ export interface UIHitter {
   adv?: HitterAdvanced        // advanced Savant block (Stats tab)
 }
 
+export interface DayFactor { label: string; mult: number }
+
 export interface DayGame {
   date: string
   off: boolean
   opp: string
   home: boolean
   proj: number
+  oppHand?: 'L' | 'R' | null    // opposing starter throws (platoon)
+  oppStarter?: string
+  base?: number                 // pre-matchup per-game base
+  factors?: DayFactor[]         // matchup adjustments (platoon, …) for the popover
 }
 
 export type Weeks = Record<string, DayGame[]>
@@ -270,14 +276,65 @@ export function HitterScheduleGrid({ hitters, weeks, weekDates, today, showOwn }
 }
 
 function HitterDayCell({ g }: { g: DayGame }) {
+  const [open, setOpen] = useState(false)
   if (g.off) return <span style={{ color: 'var(--ink-3)', fontSize: 11 }}>—</span>
   const oppLabel = `${g.home ? '' : '@'}${g.opp}`
+  // Matchup edge cue: color the projection vs the pre-matchup base.
+  const projColor = g.base === undefined ? 'var(--ink-2)'
+    : g.proj > g.base ? 'var(--green)' : g.proj < g.base ? 'var(--red)' : 'var(--ink-2)'
+  const hasDetail = g.base !== undefined
   return (
-    <div style={{ textAlign: 'center' }}>
-      <div style={{ fontSize: 11, fontFamily: 'var(--mono)', fontWeight: 700, color: 'var(--ink)' }}>{oppLabel}</div>
-      <div style={{ fontSize: 10, fontFamily: 'var(--mono)', fontWeight: 500, color: 'var(--ink-2)', marginTop: 1 }}>
+    <div
+      style={{ position: 'relative', textAlign: 'center', cursor: hasDetail ? 'help' : 'default' }}
+      onMouseEnter={() => hasDetail && setOpen(true)}
+      onMouseLeave={() => setOpen(false)}
+      onClick={() => hasDetail && setOpen(o => !o)}
+    >
+      <div style={{ fontSize: 11, fontFamily: 'var(--mono)', fontWeight: 700, color: 'var(--ink)' }}>
+        {oppLabel}
+        {g.oppHand && (
+          <span style={{ fontSize: 9, fontWeight: 500, color: g.oppHand === 'L' ? 'var(--amber)' : 'var(--ink-3)', marginLeft: 3 }}>
+            {g.oppHand}HP
+          </span>
+        )}
+      </div>
+      <div style={{ fontSize: 10, fontFamily: 'var(--mono)', fontWeight: 500, color: projColor, marginTop: 1 }}>
         {g.proj.toFixed(1)}
       </div>
+      {open && hasDetail && <DayPopover g={g} oppLabel={oppLabel} />}
+    </div>
+  )
+}
+
+function DayPopover({ g, oppLabel }: { g: DayGame; oppLabel: string }) {
+  const row = (label: React.ReactNode, value: React.ReactNode, color?: string) => (
+    <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, padding: '1px 0', color: color || 'var(--ink-2)' }}>
+      <span>{label}</span><span style={{ fontWeight: 700 }}>{value}</span>
+    </div>
+  )
+  return (
+    <div
+      onClick={e => e.stopPropagation()}
+      style={{
+        position: 'absolute', zIndex: 30, top: '100%', left: '50%', transform: 'translateX(-50%)',
+        marginTop: 4, width: 190, textAlign: 'left',
+        background: 'var(--white)', border: '1px solid var(--border-strong)',
+        borderRadius: 'var(--radius)', boxShadow: 'var(--shadow)', padding: '10px 12px',
+        fontFamily: 'var(--mono)', fontSize: 11, whiteSpace: 'normal',
+      }}
+    >
+      <div style={{ fontWeight: 700, color: 'var(--ink)', marginBottom: 6 }}>
+        {oppLabel}{g.oppStarter ? ` · ${g.oppStarter}` : ''}{g.oppHand ? ` (${g.oppHand}HP)` : ''}
+      </div>
+      {row('Base', (g.base ?? 0).toFixed(1))}
+      {(g.factors || []).length === 0 && (
+        <div style={{ color: 'var(--ink-3)', padding: '1px 0' }}>No matchup edge</div>
+      )}
+      {(g.factors || []).map((f, i) => (
+        <div key={i}>{row(f.label, `×${f.mult.toFixed(2)}`, f.mult > 1 ? 'var(--green)' : f.mult < 1 ? 'var(--red)' : 'var(--ink-2)')}</div>
+      ))}
+      <div style={{ borderTop: '1px solid var(--border)', margin: '5px 0' }} />
+      {row('Proj', <span style={{ color: 'var(--green)' }}>{g.proj.toFixed(1)}</span>, 'var(--ink)')}
     </div>
   )
 }
@@ -365,7 +422,8 @@ export function hitterFromPayload(h: any, dates: string[]): { hitter: UIHitter; 
   const days = dates.map(date => {
     const d = byDate[date]
     return d
-      ? { date, off: false, opp: d.opp, home: d.home, proj: d.proj }
+      ? { date, off: false, opp: d.opp, home: d.home, proj: d.proj,
+          oppHand: d.oppHand ?? null, oppStarter: d.oppStarter, base: d.base, factors: d.factors }
       : { date, off: true, opp: '', home: false, proj: 0 }
   })
   const s = h.seasonStats || {}

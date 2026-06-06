@@ -29,13 +29,46 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__)))
 from mlb import get_starts_for_players, MATCHUP_PERIODS
 from fetcher import (
     get_headers_and_cookies, get_pro_team_map, load_hitter_stats,
-    load_hitter_game_logs,
+    load_hitter_game_logs, load_player_hands, load_hitter_splits,
 )
 from kv import cache_get, cache_set
 from projection_hitter import (
     parse_hitter_scoring, get_projected_hitter_fpts, strip_accents,
-    DEFAULT_HITTER_SCORING, _resolve_points,
+    platoon_multiplier, DEFAULT_HITTER_SCORING, _resolve_points,
 )
+
+
+def _build_days(name, team, game_dates, schedule, base, hands, splits, overall_ops):
+    """Per-day cells with the matchup factor stack. Phase 6 adds a platoon
+    factor (batter vs the day's probable-starter hand); later layers append
+    more entries to `factors`. day proj = base × Π(factors). Each factor is
+    {label, mult} so the frontend popover lists Base → factors → Proj."""
+    days = []
+    for d in game_dates:
+        game = schedule.get(d, {}).get(team, {})
+        opp_starter = (game.get("opp_starter") or "").strip()
+        opp_hand = (hands.get(strip_accents(opp_starter)) or {}).get("throws", "") if opp_starter else ""
+        if opp_hand not in ("L", "R"):
+            opp_hand = ""
+        factors = []
+        mult = 1.0
+        if opp_hand and overall_ops:
+            side = (splits.get(strip_accents(name)) or {}).get("vL" if opp_hand == "L" else "vR") or {}
+            pm = platoon_multiplier(side.get("ops", 0), side.get("pa", 0), overall_ops)
+            if pm != 1.0:
+                factors.append({"label": f"Platoon (v{opp_hand}HP)", "mult": pm})
+                mult *= pm
+        days.append({
+            "date": d,
+            "opp": game.get("opponent", ""),
+            "home": game.get("is_home", True),
+            "oppStarter": opp_starter.title() if opp_starter else "",
+            "oppHand": opp_hand or None,
+            "base": round(base, 1),
+            "factors": factors,
+            "proj": round(base * mult, 1),
+        })
+    return days
 
 # ESPN baseball lineup/eligible slot IDs. Hitters occupy 0–12; pitchers 13–15.
 HITTER_SLOTS = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12}
@@ -260,9 +293,10 @@ def get_hitter_data(team_id: int, week: int) -> dict:
         h["gameDates"] = [d for d in period_dates if team and team in schedule.get(d, {})]
 
     # ── Projection (+ Phase-3 recent form from game logs) ─────────────
-    roster_logs = load_hitter_game_logs(
-        year_int, hitting_current, [strip_accents(h["name"]) for h in hitters_meta]
-    )
+    roster_keys = [strip_accents(h["name"]) for h in hitters_meta]
+    roster_logs = load_hitter_game_logs(year_int, hitting_current, roster_keys)
+    hands  = load_player_hands(year_int)                                   # Phase 6
+    splits = load_hitter_splits(year_int, hitting_current, roster_keys)    # Phase 6
     proj, _details = get_projected_hitter_fpts(
         [{"name": h["name"], "team": h["team"], "gameDates": h["gameDates"]} for h in hitters_meta],
         scoring=scoring,
@@ -280,30 +314,25 @@ def get_hitter_data(team_id: int, week: int) -> dict:
         name = h["name"]
         p = proj.get(name, {})
         per_game = p.get("projPerGame", 0.0)
-        # Per-day cells. Phase 1 is flat (per_game every game); the opponent/
-        # home come from the shared schedule so the grid shows real matchups.
-        days = []
-        for d in h["gameDates"]:
-            game = schedule.get(d, {}).get(h["team"], {})
-            days.append({
-                "date": d,
-                "opp":  game.get("opponent", ""),
-                "home": game.get("is_home", True),
-                "proj": round(per_game, 1),
-            })
+        season = _season_line(hitting_current.get(strip_accents(name), {}))
+        overall_ops = (season["obp"] + season["slg"]) if season else None
+        bats = (hands.get(strip_accents(name)) or {}).get("bats") or h["bats"]
+        # Per-day cells with the matchup factor stack (Phase 6: platoon).
+        days = _build_days(name, h["team"], h["gameDates"], schedule, per_game, hands, splits, overall_ops)
+        proj_week = round(sum(d["proj"] for d in days), 1)
         roster_hitters.append({
             "name":        name,
             "team":        h["team"],
             "pos":         h["pos"],
             "rank":        h["rank"],
-            "bats":        h["bats"],
-            "projFpts":    p.get("projFpts", 0.0),
+            "bats":        bats,
+            "projFpts":    proj_week,
             "projPerGame": round(per_game, 1),
             "blendWeight": p.get("blendWeight", 0.0),
             "modelType":   p.get("modelType", "stats"),
             "recentForm":  p.get("recentForm"),
             "games":       p.get("games", len(h["gameDates"])),
-            "seasonStats": _season_line(hitting_current.get(strip_accents(name), {})),
+            "seasonStats": season,
             "advanced":    _advanced_line(name, savant_current, savant_statcast),
             "days":        days,
         })
@@ -315,7 +344,7 @@ def get_hitter_data(team_id: int, week: int) -> dict:
     free_agent_hitters = _fetch_fa_hitters(
         base, headers, cookies, PRO_TEAM_MAP, data.get("scoringPeriodId", week),
         schedule, period_dates, scoring, hitting_current, hitting_previous,
-        savant_current, savant_previous, savant_statcast, year_int, week,
+        savant_current, savant_previous, savant_statcast, hands, year_int, week,
     )
 
     return {
@@ -336,7 +365,7 @@ def get_hitter_data(team_id: int, week: int) -> dict:
 def _fetch_fa_hitters(base, headers, cookies, PRO_TEAM_MAP, current_week,
                       schedule, period_dates, scoring, hitting_current,
                       hitting_previous, savant_current, savant_previous,
-                      savant_statcast, year_int, week):
+                      savant_statcast, hands, year_int, week):
     """Top available free-agent hitters by ownership %, projected with the same
     model as the roster. Mirrors the SP free-agent fetch in espn.py, filtered to
     hitter slots. Returns [] on any failure (FA hitters are non-critical)."""
@@ -376,9 +405,9 @@ def _fetch_fa_hitters(base, headers, cookies, PRO_TEAM_MAP, current_week,
                 "gameDates": [d for d in period_dates if team_abbrev and team_abbrev in schedule.get(d, {})],
             })
 
-        fa_logs = load_hitter_game_logs(
-            year_int, hitting_current, [strip_accents(h["name"]) for h in meta]
-        )
+        fa_keys = [strip_accents(h["name"]) for h in meta]
+        fa_logs = load_hitter_game_logs(year_int, hitting_current, fa_keys)
+        fa_splits = load_hitter_splits(year_int, hitting_current, fa_keys)
         proj, _ = get_projected_hitter_fpts(
             [{"name": h["name"], "team": h["team"], "gameDates": h["gameDates"]} for h in meta],
             scoring=scoring, stat_current=hitting_current, stat_previous=hitting_previous,
@@ -391,19 +420,18 @@ def _fetch_fa_hitters(base, headers, cookies, PRO_TEAM_MAP, current_week,
         for h in meta:
             p = proj.get(h["name"], {})
             per_game = p.get("projPerGame", 0.0)
-            days = []
-            for d in h["gameDates"]:
-                game = schedule.get(d, {}).get(h["team"], {})
-                days.append({"date": d, "opp": game.get("opponent", ""),
-                             "home": game.get("is_home", True), "proj": round(per_game, 1)})
+            season = _season_line(hitting_current.get(strip_accents(h["name"]), {}))
+            overall_ops = (season["obp"] + season["slg"]) if season else None
+            bats = (hands.get(strip_accents(h["name"])) or {}).get("bats", "")
+            days = _build_days(h["name"], h["team"], h["gameDates"], schedule, per_game, hands, fa_splits, overall_ops)
             out.append({
-                "name": h["name"], "team": h["team"], "pos": h["pos"], "bats": "",
+                "name": h["name"], "team": h["team"], "pos": h["pos"], "bats": bats,
                 "percentOwned": h["ownPct"],
-                "projFpts": p.get("projFpts", 0.0), "projPerGame": round(per_game, 1),
+                "projFpts": round(sum(d["proj"] for d in days), 1), "projPerGame": round(per_game, 1),
                 "games": p.get("games", len(h["gameDates"])),
                 "modelType": p.get("modelType", "stats"),
                 "recentForm": p.get("recentForm"),
-                "seasonStats": _season_line(hitting_current.get(strip_accents(h["name"]), {})),
+                "seasonStats": season,
                 "advanced": _advanced_line(h["name"], savant_current, savant_statcast),
                 "days": days,
             })
@@ -426,7 +454,8 @@ HITTER_CACHE_TTL = 1800  # 30 min
 #   v8: advanced uses HardHit% (ev95percent) + EV instead of Whiff%.
 #   v9: drop HardHit%; add leagueAvg block for advanced-column headers.
 #   v10: Phase 3 — recent-form blend (game-log weighted) in projPerGame.
-HITTER_CACHE_VERSION = 10
+#   v11: Phase 6 — per-day platoon factor + per-day factors[] for the popover.
+HITTER_CACHE_VERSION = 11
 
 
 def _cache_key(team_id: int, week: int) -> str:

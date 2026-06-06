@@ -988,6 +988,97 @@ def fetch_game_logs(season: int, mlb_stats: dict = None) -> tuple:
     return result, stats
 
 
+def fetch_player_hands(season: int) -> dict:
+    """One bulk call to MLB Stats API for every player's handedness.
+    Returns { name_key: {"bats": "L"|"R"|"S", "throws": "L"|"R"} } — used for
+    batter bat-side and for the opposing starter's throwing hand (platoon)."""
+    try:
+        r = requests.get(
+            "https://statsapi.mlb.com/api/v1/sports/1/players",
+            params={"season": str(season)},
+            headers={"User-Agent": "Mozilla/5.0"}, timeout=15,
+        )
+        if r.status_code != 200:
+            print(f"[mlb.py] player hands HTTP {r.status_code}")
+            return {}
+        out = {}
+        for p in r.json().get("people", []):
+            name = p.get("fullName", "")
+            if not name:
+                continue
+            out[strip_accents(name)] = {
+                "bats":   (p.get("batSide") or {}).get("code", ""),
+                "throws": (p.get("pitchHand") or {}).get("code", ""),
+            }
+        print(f"[mlb.py] player hands: {len(out)} players ({season})")
+        return out
+    except Exception as e:
+        print(f"[mlb.py] fetch_player_hands failed: {e}")
+        return {}
+
+
+def fetch_hitter_splits(season: int, mlb_stats: dict = None) -> dict:
+    """Per-batter vs-LHP / vs-RHP splits for the players in `mlb_stats`
+    (keyed by accent-stripped name, each carrying "_mlbId"). Returns
+    { name_key: {"vL": {"ops", "pa"}, "vR": {"ops", "pa"}} } via the per-player
+    statSplits endpoint (sitCodes=vl,vr). Call with a SUBSET (roster + FA)."""
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    if not mlb_stats:
+        return {}
+    id_pairs = [
+        (nk, int(s["_mlbId"])) for nk, s in mlb_stats.items() if s.get("_mlbId")
+    ]
+    if not id_pairs:
+        return {}
+
+    def _f(val):
+        try:
+            return float(val)
+        except (TypeError, ValueError):
+            return 0.0
+
+    def _fetch_one(name_key: str, pid: int):
+        try:
+            r = requests.get(
+                f"https://statsapi.mlb.com/api/v1/people/{pid}/stats",
+                params={"stats": "statSplits", "group": "hitting",
+                        "season": str(season), "sitCodes": "vl,vr", "gameType": "R"},
+                headers={"User-Agent": "Mozilla/5.0"}, timeout=10,
+            )
+            if r.status_code != 200:
+                return (name_key, None)
+            splits = r.json().get("stats", [{}])[0].get("splits", [])
+        except Exception:
+            return (name_key, None)
+        out = {}
+        for sp in splits:
+            code = (sp.get("split") or {}).get("code", "")
+            st = sp.get("stat", {})
+            entry = {"ops": _f(st.get("ops", 0)), "pa": int(st.get("plateAppearances", 0) or 0)}
+            if code == "vl":
+                out["vL"] = entry
+            elif code == "vr":
+                out["vR"] = entry
+        return (name_key, out or None)
+
+    result = {}
+    try:
+        with ThreadPoolExecutor(max_workers=10) as ex:
+            futures = [ex.submit(_fetch_one, nk, pid) for nk, pid in id_pairs]
+            for fut in as_completed(futures):
+                try:
+                    name_key, data = fut.result()
+                except Exception:
+                    continue
+                if data:
+                    result[name_key] = data
+    except Exception as e:
+        print(f"[mlb.py] fetch_hitter_splits thread pool failed: {e}")
+        return {}
+    print(f"[mlb.py] Hitter splits: {len(result)}/{len(id_pairs)} hitters with vL/vR")
+    return result
+
+
 def fetch_game_logs_hitting(season: int, mlb_stats: dict = None) -> dict:
     """Per-game HITTING logs for the players in `mlb_stats` (keyed by accent-
     stripped name, each carrying "_mlbId"). Mirror of fetch_game_logs but

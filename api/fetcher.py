@@ -316,6 +316,53 @@ def load_hitter_stats(year_int: int) -> dict:
     }
 
 
+def load_player_hands(year_int: int) -> dict:
+    """Handedness map {name_key: {bats, throws}}, cached 24hr."""
+    from mlb import fetch_player_hands
+    key = f"cache:player-hands:{year_int}"
+    try:
+        cached = cache_get(key) or {}
+    except Exception:
+        cached = {}
+    if cached:
+        return cached
+    hands = fetch_player_hands(year_int) or {}
+    if hands:
+        try:
+            cache_set(key, hands, ttl_seconds=86400)
+        except Exception:
+            pass
+    return hands
+
+
+def load_hitter_splits(year_int: int, mlb_stats_hitting: dict, name_keys) -> dict:
+    """vs-LHP/RHP splits for the given name keys (roster + FA), merge-cached in
+    cache:hitter-splits:{year} (24hr); only fetches uncached names."""
+    from mlb import fetch_hitter_splits
+    key = f"cache:hitter-splits:{year_int}"
+    try:
+        cached = cache_get(key) or {}
+    except Exception:
+        cached = {}
+    need = [
+        nk for nk in set(name_keys)
+        if nk not in cached and (mlb_stats_hitting.get(nk) or {}).get("_mlbId")
+    ]
+    if need:
+        subset = {nk: mlb_stats_hitting[nk] for nk in need}
+        try:
+            fetched = fetch_hitter_splits(year_int, subset) or {}
+            if fetched:
+                cached.update(fetched)
+                try:
+                    cache_set(key, cached, ttl_seconds=86400)
+                except Exception:
+                    pass
+        except Exception as e:
+            print(f"[fetcher.py] Hitter splits fetch failed: {e}")
+    return {nk: cached[nk] for nk in name_keys if nk in cached}
+
+
 def load_hitter_game_logs(year_int: int, mlb_stats_hitting: dict, name_keys) -> dict:
     """Per-game hitting logs for the given accent-stripped name keys (rostered +
     FA hitters), for the Phase-3 recent-form blend. Caches the merged dict in

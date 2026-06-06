@@ -252,6 +252,29 @@ def pa_blend_weight(pa_cur: float) -> float:
     return min(1.0, pa_cur / PA_THRESHOLD)
 
 
+# ── Phase 6: platoon (L/R) multiplier ──────────────────────────────────
+PLATOON_REGRESSION_PA = 100.0   # split is half-trusted at this many PA vs a hand
+PLATOON_CLAMP = (0.85, 1.15)    # cap the single-factor swing
+
+
+def platoon_multiplier(ops_vs_hand: float, pa_vs_hand: float, ops_overall: float) -> float:
+    """Per-game platoon factor: how a batter fares vs the day's starter hand,
+    relative to their overall line, regressed toward 1.0 by sample size.
+
+    factor_raw = OPS_vs_hand / OPS_overall, then blended toward neutral with
+    weight pa/(pa+K) so a 30-PA split barely moves and a full-season split
+    counts. Returns 1.0 (no-op) when any input is missing — so the layer
+    degrades gracefully when splits or the opposing hand are unknown.
+    """
+    if not ops_vs_hand or not ops_overall or ops_overall <= 0:
+        return 1.0
+    raw = ops_vs_hand / ops_overall
+    w = pa_vs_hand / (pa_vs_hand + PLATOON_REGRESSION_PA) if pa_vs_hand else 0.0
+    factor = 1.0 + (raw - 1.0) * w
+    lo, hi = PLATOON_CLAMP
+    return round(max(lo, min(hi, factor)), 3)
+
+
 def apply_factors(vector: dict, per_stat: dict = None, scalar: float = 1.0) -> dict:
     """Apply per-stat multipliers and a scalar to a stat vector.
 
