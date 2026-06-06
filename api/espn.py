@@ -66,14 +66,17 @@ def _build_season_stats(stat_dict: dict) -> dict | None:
     }
 
 
-def _build_savant_expected(expected: dict, statcast: dict) -> dict | None:
-    """Combined Savant payload — expected stats from `cache:savant:{year}`
-    plus Statcast (Barrel%, Whiff%) from `cache:savant-statcast:{year}`.
+def _build_savant_expected(expected: dict, statcast: dict,
+                           whiff_pct: float = 0.0) -> dict | None:
+    """Combined Savant payload — expected stats from `cache:savant:{year}`,
+    Barrel% from `cache:savant-statcast:{year}`, and a usage-weighted Whiff%
+    from `cache:savant-arsenal:{year}` (the statcast leaderboard doesn't carry
+    whiff_pct, so it's sourced separately from the pitch-arsenal endpoint).
     Each field is included only when its source has a non-zero value, so
     the frontend can render an em-dash for any missing piece without the
-    whole sub-dict being null. Returns None only when both sources are
+    whole sub-dict being null. Returns None only when every source is
     empty (e.g. fresh-call-up rookies with no Savant footprint yet)."""
-    if not expected and not statcast:
+    if not expected and not statcast and not whiff_pct:
         return None
     out: dict = {}
     if expected:
@@ -85,7 +88,8 @@ def _build_savant_expected(expected: dict, statcast: dict) -> dict | None:
             out["wobaDiff"] = round(expected["woba_diff"], 3)
     if statcast:
         if statcast.get("brl_pct", 0):   out["barrelPct"] = round(statcast["brl_pct"], 1)
-        if statcast.get("whiff_pct", 0): out["whiffPct"]  = round(statcast["whiff_pct"], 1)
+    if whiff_pct:
+        out["whiffPct"] = round(whiff_pct, 1)
     return out if out else None
 
 
@@ -129,6 +133,7 @@ def get_league_data(team_id: int, week: int) -> dict:
     savant_current          = cached["savant_current"]
     savant_previous         = cached["savant_previous"]
     savant_statcast_current = cached["savant_statcast_current"]
+    savant_whiff_current    = cached["savant_whiff_current"]
     mlb_stats_current       = cached["mlb_stats_current"]
     mlb_stats_previous      = cached["mlb_stats_previous"]
     game_logs_current       = cached["game_logs_current"]
@@ -381,6 +386,7 @@ def get_league_data(team_id: int, week: int) -> dict:
         savant_expected  = _build_savant_expected(
             savant_current.get(name_key, {}),
             savant_statcast_current.get(name_key, {}),
+            savant_whiff_current.get(name_key, 0.0),
         )
 
         roster_sps.append({
@@ -402,6 +408,25 @@ def get_league_data(team_id: int, week: int) -> dict:
             "seasonStats":    season_stats,
             "savantExpected": savant_expected,
         })
+
+    # Diagnostic for the Dylan Cease Brl%-missing case (BACKLOG). Brl% is
+    # sourced from the Savant statcast dict, keyed by accent-stripped
+    # lowercase "first last". The name transforms are provably identical on
+    # both sides, so a rostered SP showing an em-dash means the key isn't in
+    # the dict at all — spelling, a suffix, or no statcast row. For each
+    # missing SP we surface near-matches on the last-name token so the actual
+    # divergence is visible in Vercel logs (fires only on a miss, so it's
+    # silent once every rostered SP matches).
+    for _p in roster_sps:
+        if _p["position"] != "SP":
+            continue
+        _nk = strip_accents(_p["name"])
+        if _nk in savant_statcast_current:
+            continue
+        _last = _nk.split()[-1] if _nk.split() else _nk
+        _near = [k for k in savant_statcast_current if _last in k]
+        print(f"[espn.py] Brl% diagnostic: '{_p['name']}' (key '{_nk}') not in "
+              f"statcast dict; near-matches on '{_last}': {_near}")
 
     slot_order = {"SP": 0, "RP": 1, "IL": 2, "Bench": 3, "P": 1}
     # Sort by slot group, then by average FPTS per start (best pitchers first).
@@ -509,6 +534,7 @@ def get_league_data(team_id: int, week: int) -> dict:
             fa_savant_expected = _build_savant_expected(
                 savant_current.get(fa_name_key, {}),
                 savant_statcast_current.get(fa_name_key, {}),
+                savant_whiff_current.get(fa_name_key, 0.0),
             )
 
             free_agents.append({
@@ -704,6 +730,7 @@ def get_league_data(team_id: int, week: int) -> dict:
         dp_savant_expected = _build_savant_expected(
             savant_current.get(dp_name_key, {}),
             savant_statcast_current.get(dp_name_key, {}),
+            savant_whiff_current.get(dp_name_key, 0.0),
         )
 
         dropped_players.append({

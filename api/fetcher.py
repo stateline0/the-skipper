@@ -357,7 +357,10 @@ def load_cached_data(year_int: int) -> dict:
       mlb_stats_current, mlb_stats_previous,
       game_logs_current
     """
-    from savant import fetch_expected_stats, fetch_statcast_stats
+    from savant import (
+        fetch_expected_stats, fetch_statcast_stats,
+        fetch_pitch_arsenal, aggregate_whiff_pct,
+    )
     from mlb import fetch_game_logs, get_team_win_data, get_team_woba_blended
 
     # ── Savant expected stats ─────────────────────────────────────────
@@ -422,6 +425,37 @@ def load_cached_data(year_int: int) -> dict:
             print(f"[fetcher.py] Savant statcast fetch failed: {e}")
 
     print(f"[fetcher.py] Savant statcast: {len(savant_statcast_current)} pitchers")
+
+    # ── Savant pitch-arsenal Whiff% (usage-weighted, display-only) ────
+    # whiff_pct lives on the per-pitch arsenal endpoint, NOT the statcast
+    # leaderboard — which is why the Stats-tab Whiff% column had been empty.
+    # We collapse each pitcher's arsenal to a single usage-weighted Whiff%
+    # at fetch time and cache the flat {name: whiff} map so the consumer
+    # does a plain lookup (mirrors the statcast key/TTL; isolated so an
+    # arsenal-only outage can't poison the statcast or projection caches).
+    savant_whiff_current = {}
+    try:
+        savant_whiff_current = cache_get(f"cache:savant-arsenal:{year_int}") or {}
+    except Exception:
+        pass
+
+    if not savant_whiff_current:
+        try:
+            arsenal = fetch_pitch_arsenal(year_int) or {}
+            if arsenal:
+                savant_whiff_current = {
+                    name: round(aggregate_whiff_pct(pitches), 1)
+                    for name, pitches in arsenal.items()
+                }
+                try:
+                    cache_set(f"cache:savant-arsenal:{year_int}", savant_whiff_current,
+                              ttl_seconds=86400)
+                except Exception:
+                    pass
+        except Exception as e:
+            print(f"[fetcher.py] Savant arsenal fetch failed: {e}")
+
+    print(f"[fetcher.py] Savant arsenal whiff: {len(savant_whiff_current)} pitchers")
 
     # ── MLB Stats API season stats ────────────────────────────────────
     mlb_stats_previous = {}
@@ -545,6 +579,7 @@ def load_cached_data(year_int: int) -> dict:
         "savant_current":          savant_current,
         "savant_previous":         savant_previous,
         "savant_statcast_current": savant_statcast_current,
+        "savant_whiff_current":    savant_whiff_current,
         "mlb_stats_current":       mlb_stats_current,
         "mlb_stats_previous":      mlb_stats_previous,
         "game_logs_current":       game_logs_current,

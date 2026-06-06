@@ -228,6 +228,25 @@ def fetch_pitch_arsenal(year: int, min_pa: int = 25) -> dict:
         return {}
 
 
+def aggregate_whiff_pct(arsenal: list) -> float:
+    """Collapse a pitcher's per-pitch-type arsenal into a single
+    usage-weighted Whiff%. `fetch_pitch_arsenal` returns one row per pitch
+    type, each with its own `whiff_pct` and `usage_pct` (0-100); a pitcher's
+    headline Whiff% is the average of those weighted by how often each pitch
+    is thrown. Returns 0.0 when there's no usable usage data."""
+    if not arsenal:
+        return 0.0
+    weighted = 0.0
+    total_usage = 0.0
+    for pitch in arsenal:
+        usage = pitch.get("usage_pct", 0) or 0
+        if usage <= 0:
+            continue
+        weighted += (pitch.get("whiff_pct", 0) or 0) * usage
+        total_usage += usage
+    return weighted / total_usage if total_usage > 0 else 0.0
+
+
 def fetch_all_savant_data(year: int) -> dict:
     """
     Fetch all Savant data in parallel. Returns combined dict keyed by lowercase name.
