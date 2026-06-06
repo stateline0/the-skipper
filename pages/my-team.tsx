@@ -37,6 +37,23 @@ function todayLocal(): string {
   return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`
 }
 
+// Human "Updated 4m ago" from an ISO timestamp (the payload's computedAt).
+function relativeTime(iso: string | null): string {
+  if (!iso) return ''
+  const secs = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 1000))
+  if (secs < 45) return 'just now'
+  if (secs < 3600) return `${Math.round(secs / 60)}m ago`
+  if (secs < 86400) return `${Math.round(secs / 3600)}h ago`
+  return `${Math.round(secs / 86400)}d ago`
+}
+
+// True when a rostered pitcher has a start dated today — the signal to pull a
+// fresh (live) refresh on top of the warm-cache blob, so in-game scoring stays
+// current on days our guys actually pitch.
+function rosterStartsToday(roster: any[], today: string): boolean {
+  return roster.some(p => (p.startDates || []).some((s: any) => s.date === today))
+}
+
 function MetricCard({ label, value, accent }: {
   label: string; value: string | number; accent?: 'ok' | 'warn' | 'bad'
 }) {
@@ -92,6 +109,7 @@ export default function MyTeam() {
   const [lockedProjections, setLockedProjections] = useState<Record<string, Record<string, number>>>({})
   const [projectionDetails, setProjectionDetails] = useState<Record<string, any>>({})
   const [liveStats, setLiveStats]               = useState<Record<string, any>>({})
+  const [computedAt, setComputedAt]             = useState<string | null>(null)
 
   // Tab toggle for the SP section: schedule grid (current default) vs.
   // a stats-only view of the same data. Lives in component state — no
@@ -153,6 +171,7 @@ export default function MyTeam() {
       setLockedProjections(data.lockedProjections || {})
       setProjectionDetails(data.projectionDetails || {})
       setLiveStats(data.liveStats || {})
+      setComputedAt(data.computedAt || null)
     }
   }, [])
 
@@ -174,7 +193,7 @@ export default function MyTeam() {
   }, [selectedPeriod])
 
   // ── Fetch roster data ──────────────────────────────────────────────────
-  const fetchRoster = useCallback(async () => {
+  const fetchRoster = useCallback(async (fresh = false) => {
     setLoading(true)
     setError('')
     try {
@@ -183,7 +202,7 @@ export default function MyTeam() {
       const teamId = config.teamId || '1'
 
       localStorage.setItem('skipper_selected_period', String(selectedPeriod))
-      const res = await fetch(`/api/espn?teamId=${teamId}&week=${selectedPeriod}`)
+      const res = await fetch(`/api/espn?teamId=${teamId}&week=${selectedPeriod}${fresh ? '&fresh=1' : ''}`)
       const data = await res.json()
       if (!data.ok) throw new Error(data.error || 'Failed to load ESPN data')
 
@@ -241,6 +260,7 @@ export default function MyTeam() {
         fptsPerStart: data.rosterFptsPerStart || {},
         lockedProjections: data.lockedProjections || {},
         projectionDetails: data.projectionDetails || {},
+        computedAt: data.computedAt || null,
       }
       localStorage.setItem('skipper_roster', JSON.stringify(toCache))
 
@@ -262,6 +282,15 @@ export default function MyTeam() {
       setLockedProjections(data.lockedProjections || {})
       setProjectionDetails(data.projectionDetails || {})
       setLiveStats(data.liveStats || {})
+      setComputedAt(data.computedAt || null)
+
+      // Smart live refresh: a default fetch serves the warm-cache blob (fast).
+      // If it was cached AND a rostered pitcher starts today, pull a fresh
+      // (live) recompute in the background so in-game scoring is current. The
+      // fresh fetch is guarded by `!fresh`, so it never loops.
+      if (!fresh && data.servedFrom === 'cache' && rosterStartsToday(roster, today)) {
+        fetchRoster(true)
+      }
     } catch (e: any) {
       setError(e.message || 'Failed to load roster')
     } finally {
@@ -288,12 +317,17 @@ export default function MyTeam() {
       <div style={{ maxWidth: 1100 }}>
 
         {/* Page header */}
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 24 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 24, flexWrap: 'wrap', gap: 12 }}>
           <div>
             <h1 style={{ fontSize: 22, fontWeight: 700, letterSpacing: '-0.03em', margin: 0, marginBottom: 6 }}>My Team</h1>
             <p style={{ fontSize: 13, color: 'var(--ink-3)', margin: 0 }}>
               {teamName ? `${teamName} · ` : ''}{weekLabel}
             </p>
+            {computedAt && (
+              <div style={{ fontSize: 12, color: 'var(--ink-3)', opacity: 0.7, marginTop: 2, whiteSpace: 'nowrap' }}>
+                Updated {relativeTime(computedAt)}{loading ? ' · refreshing…' : ''}
+              </div>
+            )}
           </div>
           <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
             {matchupPeriods.length > 0 && (
@@ -321,7 +355,7 @@ export default function MyTeam() {
               </select>
             )}
             <button
-              onClick={fetchRoster} disabled={loading}
+              onClick={() => fetchRoster(true)} disabled={loading}
               style={{
                 fontFamily: 'var(--sans)', fontSize: 13, fontWeight: 600,
                 padding: '9px 18px', borderRadius: 'var(--radius)',
