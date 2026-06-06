@@ -95,7 +95,7 @@ export default function MyTeam() {
 
   // Tab toggle for the SP section: schedule grid (current default) vs.
   // a stats-only view of the same data. Lives in component state — no
-  // need to persist to sessionStorage; the user re-picks per visit.
+  // need to persist to localStorage; the user re-picks per visit.
   const [activeTab, setActiveTab] = useState<RosterTab>('schedule')
   const [relieverTab, setRelieverTab] = useState<RosterTab>('schedule')
 
@@ -122,7 +122,7 @@ export default function MyTeam() {
       .then(data => {
         if (data.defaultLimit) setLimit(data.defaultLimit)
         if (data.matchupPeriods) setMatchupPeriods(data.matchupPeriods)
-        const saved = sessionStorage.getItem('skipper_selected_period')
+        const saved = localStorage.getItem('skipper_selected_period')
         const period = saved ? parseInt(saved) : (data.currentPeriod ?? 1)
         setSelectedPeriod(period)
       })
@@ -131,7 +131,7 @@ export default function MyTeam() {
 
   // ── Restore from cache on mount ────────────────────────────────────────
   useEffect(() => {
-    const cached = sessionStorage.getItem('skipper_roster')
+    const cached = localStorage.getItem('skipper_roster')
     if (cached) {
       const data = JSON.parse(cached)
       if (data.version !== CACHE_VERSION) return
@@ -156,28 +156,22 @@ export default function MyTeam() {
     }
   }, [])
 
-  // ── Auto-fetch on period change ────────────────────────────────────────
-  const isFirstRender = useRef(true)
-
+  // Keep the starts-limit in sync with the selected period.
   useEffect(() => {
     if (selectedPeriod === null) return
     const period = matchupPeriods.find(p => p.period === selectedPeriod)
     if (period) setLimit(period.limit)
-
-    if (isFirstRender.current) {
-      isFirstRender.current = false
-      const cached = sessionStorage.getItem('skipper_roster')
-      if (!cached) {
-        fetchRoster()
-      } else {
-        const data = JSON.parse(cached)
-        if (!data.matchupDates || data.matchupDates.length === 0) fetchRoster()
-      }
-      return
-    }
-
-    fetchRoster()
   }, [selectedPeriod, matchupPeriods])
+
+  // Stale-while-revalidate: cached data (restored above from localStorage)
+  // renders immediately, and every time the period is set or changed we refresh
+  // in the background. A cold first-ever load still shows the spinner; warm
+  // loads update silently underneath the cached view (the "Refreshing…" button
+  // state is the only cue).
+  useEffect(() => {
+    if (selectedPeriod === null) return
+    fetchRoster()
+  }, [selectedPeriod])
 
   // ── Fetch roster data ──────────────────────────────────────────────────
   const fetchRoster = useCallback(async () => {
@@ -188,7 +182,7 @@ export default function MyTeam() {
       const config = await configRes.json()
       const teamId = config.teamId || '1'
 
-      sessionStorage.setItem('skipper_selected_period', String(selectedPeriod))
+      localStorage.setItem('skipper_selected_period', String(selectedPeriod))
       const res = await fetch(`/api/espn?teamId=${teamId}&week=${selectedPeriod}`)
       const data = await res.json()
       if (!data.ok) throw new Error(data.error || 'Failed to load ESPN data')
@@ -248,7 +242,7 @@ export default function MyTeam() {
         lockedProjections: data.lockedProjections || {},
         projectionDetails: data.projectionDetails || {},
       }
-      sessionStorage.setItem('skipper_roster', JSON.stringify(toCache))
+      localStorage.setItem('skipper_roster', JSON.stringify(toCache))
 
       // Update all state
       setRosterSPs(roster)
