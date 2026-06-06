@@ -143,35 +143,46 @@ function NumOrDash({ value, render }: {
 // Luck lens over the wOBA-diff signal. wOBAΔ = expected wOBA − wOBA allowed:
 // positive means a pitcher's contact results have been unluckier than the
 // quality of contact warrants (results should improve), negative means they've
-// been riding good luck (regression risk). Collapse that into a 3-state badge;
-// the numeric delta and interpretation live in the cell tooltip. Threshold is
-// 10 points of wOBA — below that, treat actual and expected as in line.
+// been riding good luck (regression risk). Rendered as a compact colored
+// trend line — slope direction shows up/flat/down, slope steepness scales with
+// the magnitude of the delta. The numeric value + interpretation are in the
+// tooltip. Threshold is 10 points of wOBA — below that the line reads flat/grey.
 const LUCK_THRESHOLD = 0.010
+// Delta at which the line hits its steepest slope (a strong luck signal).
+const LUCK_FULL_SCALE = 0.030
 
-function LuckBadge({ wobaDiff }: { wobaDiff: number | undefined }) {
+function LuckTrend({ wobaDiff }: { wobaDiff: number | undefined }) {
   if (wobaDiff === undefined || !Number.isFinite(wobaDiff)) {
     return <span style={{ color: 'var(--ink-3)' }}>—</span>
   }
-  let label: string, arrow: string, style: React.CSSProperties, tip: string
-  if (wobaDiff > LUCK_THRESHOLD) {
-    label = 'Trending up'; arrow = '↗'
-    style = { background: 'var(--green-light)', color: 'var(--green)' }
-    tip = `wOBAΔ ${fmtWobaDiff(wobaDiff)} — contact allowed has been unluckier than expected; results due to improve`
-  } else if (wobaDiff < -LUCK_THRESHOLD) {
-    label = 'Trending down'; arrow = '↘'
-    style = { background: 'var(--red-light)', color: 'var(--red)' }
-    tip = `wOBAΔ ${fmtWobaDiff(wobaDiff)} — contact allowed has been luckier than expected; regression risk`
-  } else {
-    label = 'On pace'; arrow = '→'
-    style = { background: 'var(--paper-2)', color: 'var(--ink-3)' }
-    tip = `wOBAΔ ${fmtWobaDiff(wobaDiff)} — actual and expected results are in line`
-  }
+  const up = wobaDiff > LUCK_THRESHOLD
+  const down = wobaDiff < -LUCK_THRESHOLD
+  const color = up ? 'var(--green)' : down ? 'var(--red)' : 'var(--ink-3)'
+  const tip =
+    up   ? `wOBAΔ ${fmtWobaDiff(wobaDiff)} — contact allowed has been unluckier than expected; results due to improve`
+    : down ? `wOBAΔ ${fmtWobaDiff(wobaDiff)} — contact allowed has been luckier than expected; regression risk`
+    : `wOBAΔ ${fmtWobaDiff(wobaDiff)} — actual and expected results are in line`
+
+  // Geometry: a 2-point line across the cell. SVG y grows downward, so a
+  // positive (unlucky → improving) delta should END higher = smaller y.
+  const W = 46, H = 18, pad = 3
+  const maxRise = (H / 2) - pad
+  const norm = Math.max(-1, Math.min(1, wobaDiff / LUCK_FULL_SCALE))
+  const dy = norm * maxRise
+  const midY = H / 2
+  const x0 = pad, x1 = W - pad
+  const y0 = midY + dy / 2   // left endpoint
+  const y1 = midY - dy / 2   // right endpoint (rises for positive delta)
+
   return (
-    <span title={tip} style={{
-      display: 'inline-block', fontSize: 11, fontWeight: 600,
-      fontFamily: 'var(--mono)', padding: '2px 8px', borderRadius: 99,
-      whiteSpace: 'nowrap', ...style,
-    }}>{arrow} {label}</span>
+    <svg width={W} height={H} viewBox={`0 0 ${W} ${H}`}
+      style={{ display: 'inline-block', verticalAlign: 'middle' }}
+      role="img" aria-label={tip}>
+      <title>{tip}</title>
+      <line x1={x0} y1={y0} x2={x1} y2={y1}
+        stroke={color} strokeWidth={2} strokeLinecap="round" />
+      <circle cx={x1} cy={y1} r={2.5} fill={color} />
+    </svg>
   )
 }
 
@@ -323,11 +334,12 @@ export const PITCHER_COLUMNS: PitcherColumn[] = [
     ),
   },
   {
-    // 3-state luck badge derived from the wOBAΔ signal next to it. Sort by the
-    // raw delta so a desc click surfaces the most due-to-improve pitchers first.
-    key: 'luck', label: 'Luck', minWidth: 100,
+    // Colored trend-line indicator derived from the wOBAΔ signal next to it.
+    // Sort by the raw delta so a desc click surfaces the most due-to-improve
+    // pitchers (steepest green climb) first.
+    key: 'luck', label: 'Luck', minWidth: 64,
     sortValue: (p) => p.savantExpected?.wobaDiff ?? NaN,
-    render: (p) => <LuckBadge wobaDiff={p.savantExpected?.wobaDiff} />,
+    render: (p) => <LuckTrend wobaDiff={p.savantExpected?.wobaDiff} />,
   },
   {
     key: 'barrelPct', label: 'Brl%', minWidth: 56, preferredDir: 'asc',
