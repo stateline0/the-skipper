@@ -38,6 +38,35 @@ from projection_hitter import (
 )
 
 
+def _hand_probe(pid):
+    """TEMP: dump the raw /people/{id} response for one pitcher id so we can see
+    whether this env serves player bios (and what fields/handedness exist)."""
+    out = {"pid": pid}
+    if not pid:
+        return out
+    try:
+        r = requests.get(
+            f"https://statsapi.mlb.com/api/v1/people/{pid}",
+            headers={"User-Agent": "Mozilla/5.0"}, timeout=10,
+        )
+        out["status"] = r.status_code
+        try:
+            j = r.json()
+            out["topKeys"] = list(j.keys())
+            ppl = j.get("people", [])
+            out["peopleLen"] = len(ppl)
+            if ppl:
+                out["personKeys"] = sorted(ppl[0].keys())
+                out["pitchHand"] = ppl[0].get("pitchHand")
+                out["batSide"] = ppl[0].get("batSide")
+        except Exception as e:
+            out["parseErr"] = str(e)[:160]
+            out["bodyHead"] = r.text[:160]
+    except Exception as e:
+        out["reqErr"] = str(e)[:160]
+    return out
+
+
 def _build_days(name, team, game_dates, schedule, base, hands, splits, overall_ops):
     """Per-day cells with the matchup factor stack. Phase 6 adds a platoon
     factor (batter vs the day's probable-starter hand); later layers append
@@ -371,6 +400,7 @@ def get_hitter_data(team_id: int, week: int) -> dict:
             "handsCount": len(hands),
             "pitchingCacheSize": _pitching_n,
             "idsRequested": _ids_n,
+            "handProbe": _hand_probe(next(iter(opp_ids), None)),
             "sampleHands": dict(list(hands.items())[:4]),
             "splitsCovered": f"{len(splits)}/{len(roster_keys)}",
             "sampleSplits": dict(list(splits.items())[:2]),
@@ -489,7 +519,8 @@ HITTER_CACHE_TTL = 1800  # 30 min
 #   v12: TEMP — embedded _diag block (remove before merge).
 #   v13: handedness hydrated by person ID (/people?personIds) — /sports/1/players was empty.
 #   v14: handedness via per-player /people/{id}; opp-starter IDs from pitching cache.
-HITTER_CACHE_VERSION = 14
+#   v15: TEMP handProbe in _diag to inspect raw /people/{id} bio response.
+HITTER_CACHE_VERSION = 15
 
 
 def _cache_key(team_id: int, week: int) -> str:
