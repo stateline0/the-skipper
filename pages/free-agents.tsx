@@ -2,6 +2,7 @@ import Head from 'next/head'
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { useRouter } from 'next/router'
 import ScheduleGrid from '../components/ScheduleGrid'
+import StatsTable, { SeasonStats, SavantExpected } from '../components/StatsTable'
 
 const CACHE_VERSION = 4 // bump this whenever the API response shape changes
 
@@ -9,6 +10,7 @@ interface FreeSP {
   name: string; team: string; slot: string; injuryStatus: string
   percentOwned: number; projFpts: number; projBlend?: number; starts: number
   opps?: string; checked: boolean; startDates?: any[]
+  seasonStats?: SeasonStats | null; savantExpected?: SavantExpected | null
 }
 
 interface MatchupPeriod {
@@ -30,6 +32,7 @@ export default function FreeAgents() {
   const [liveStats, setLiveStats]       = useState<Record<string, any>>({})
   const [sortCol, setSortCol]           = useState<string>('percentOwned')
   const [sortDir, setSortDir]           = useState<'asc' | 'desc'>('desc')
+  const [activeTab, setActiveTab]       = useState<'schedule' | 'stats'>('schedule')
 
   useEffect(() => {
     fetch('/api/config')
@@ -283,6 +286,46 @@ function handleSort(col: string) {
               borderRadius: 'var(--radius-lg)', padding: '20px 24px',
               boxShadow: 'var(--shadow)', marginBottom: 16,
             }}>
+              <div style={{
+                display: 'flex', justifyContent: 'space-between',
+                alignItems: 'center', marginBottom: 12, gap: 12,
+              }}>
+                <div style={{
+                  fontSize: 10, fontFamily: 'var(--mono)', fontWeight: 500,
+                  letterSpacing: '0.1em', color: 'var(--ink-3)',
+                  textTransform: 'uppercase',
+                }}>Available starting pitchers</div>
+
+                {/* Tab toggle — mirrors the My Team card (Schedule / Stats). */}
+                <div style={{
+                  display: 'flex', gap: 2,
+                  background: 'var(--paper-2)', padding: 3,
+                  borderRadius: 8,
+                }}>
+                  {(['schedule', 'stats'] as const).map(tab => {
+                    const isActive = activeTab === tab
+                    return (
+                      <button
+                        key={tab}
+                        onClick={() => setActiveTab(tab)}
+                        style={{
+                          fontFamily: 'var(--sans)', fontSize: 12, fontWeight: 600,
+                          padding: '5px 14px', borderRadius: 6,
+                          border: 'none', cursor: 'pointer',
+                          background: isActive ? 'var(--white)' : 'transparent',
+                          color: isActive ? 'var(--ink)' : 'var(--ink-3)',
+                          boxShadow: isActive ? 'var(--shadow)' : 'none',
+                          transition: 'all 0.15s',
+                        }}
+                      >
+                        {tab === 'schedule' ? 'Schedule' : 'Stats'}
+                      </button>
+                    )
+                  })}
+                </div>
+              </div>
+
+              {activeTab === 'schedule' ? (
               <ScheduleGrid
                 pitchers={sortedFreeSPs}
                 schedule={schedule}
@@ -323,6 +366,13 @@ function handleSort(col: string) {
                 )}
                 onRowClick={toggleCheck}
               />
+              ) : (
+                <StatsTable
+                  pitchers={sortedFreeSPs}
+                  fptsPerStart={fptsPerStart}
+                  actualFpts={actualFpts}
+                />
+              )}
             </div>
 
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
