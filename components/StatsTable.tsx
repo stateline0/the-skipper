@@ -206,11 +206,16 @@ function LuckTrend({ wobaDiff, onInfo }: {
 
 // Form sparkline — actual FPTS for each of a pitcher's last ~10 starts,
 // oldest→newest (assembled on the backend from game logs). Plots a real line
-// with a dashed zero baseline so good vs blow-up starts read at a glance;
-// colored green/red by overall trend (last start vs first in the window), with
-// an endpoint dot. The per-start values + average live in the tooltip.
-function Sparkline({ values, onInfo }: {
+// with a dashed zero baseline so good vs blow-up starts read at a glance.
+// Colored by RECENT form vs the season baseline: the last-5-start average
+// against the pitcher's season FPTS/start (seasonFptsToDate ÷ gs) — green when
+// running hotter than the season norm, red when colder, grey within a
+// dead-band. Per-start values + the comparison live in the tap/hover detail.
+const FORM_DEADBAND = 1.0  // FPTS — |L5 avg − season avg| within this reads flat/grey
+
+function Sparkline({ values, seasonAvg, onInfo }: {
   values: number[] | null | undefined
+  seasonAvg?: number
   onInfo?: (content: React.ReactNode, e: React.MouseEvent) => void
 }) {
   if (!values || values.length < 2) {
@@ -225,12 +230,24 @@ function Sparkline({ values, onInfo }: {
   const y = (v: number) => pad + (1 - (v - min) / range) * (H - 2 * pad)
   const pts = values.map((v, i) => `${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(' ')
   const last = values[n - 1]
-  const trendColor = last >= values[0] ? 'var(--green)' : 'var(--red)'
-  const avg = values.reduce((a, b) => a + b, 0) / n
-  const tip = `Last ${n} starts FPTS: ${values.map(v => v.toFixed(0)).join(', ')} (avg ${avg.toFixed(1)})`
+
+  // Recent form: last 5 starts (or fewer if that's all we have).
+  const l5 = values.slice(-5)
+  const l5avg = l5.reduce((a, b) => a + b, 0) / l5.length
+
+  // Color by L5 vs season average, with a dead-band for "in line".
+  let formColor = 'var(--ink-3)'
+  let verdict = 'in line with season'
+  if (seasonAvg !== undefined) {
+    const delta = l5avg - seasonAvg
+    if (delta > FORM_DEADBAND)       { formColor = 'var(--green)'; verdict = 'hotter than season' }
+    else if (delta < -FORM_DEADBAND) { formColor = 'var(--red)';   verdict = 'colder than season' }
+  }
+  const seasonStr = seasonAvg !== undefined ? ` vs season ${seasonAvg.toFixed(1)}` : ''
+  const tip = `Last ${n} starts. L5 avg ${l5avg.toFixed(1)}${seasonStr} — ${verdict}`
   const popover = (
     <div>
-      <div style={{ fontWeight: 700, marginBottom: 4 }}>Form · last {n} starts</div>
+      <div style={{ fontWeight: 700, color: formColor, marginBottom: 4 }}>Form · {verdict}</div>
       <div style={{ fontFamily: 'var(--mono)', color: 'var(--ink-2)' }}>
         {values.map((v, i) => (
           <span key={i} style={{ color: v >= 0 ? 'var(--green)' : 'var(--red)' }}>
@@ -238,7 +255,10 @@ function Sparkline({ values, onInfo }: {
           </span>
         ))}
       </div>
-      <div style={{ marginTop: 4 }}>avg <strong>{avg.toFixed(1)}</strong> FPTS/start</div>
+      <div style={{ marginTop: 4 }}>
+        L5 avg <strong>{l5avg.toFixed(1)}</strong>
+        {seasonAvg !== undefined && <> vs season <strong>{seasonAvg.toFixed(1)}</strong>/start</>}
+      </div>
     </div>
   )
   return (
@@ -250,9 +270,9 @@ function Sparkline({ values, onInfo }: {
       <title>{tip}</title>
       <line x1={pad} y1={y(0)} x2={W - pad} y2={y(0)}
         stroke="var(--border)" strokeWidth={1} strokeDasharray="2 2" />
-      <polyline points={pts} fill="none" stroke={trendColor}
+      <polyline points={pts} fill="none" stroke={formColor}
         strokeWidth={1.5} strokeLinejoin="round" strokeLinecap="round" />
-      <circle cx={x(n - 1)} cy={y(last)} r={2} fill={trendColor} />
+      <circle cx={x(n - 1)} cy={y(last)} r={2} fill={formColor} />
     </svg>
   )
 }
@@ -263,6 +283,17 @@ function Sparkline({ values, onInfo }: {
 // actually started (gs > 0); relievers and unstarted arms return undefined so
 // the cell shows an em-dash rather than a fictional season total.
 const FULL_SEASON_STARTS = 32
+
+// Season actual FPTS per start = season-to-date FPTS ÷ games started. The
+// baseline the Form sparkline colors against (NOT the FPTS/G column, which is
+// the model's projected per-start). Undefined for pitchers with no starts.
+function seasonAvgPerStart(p: Pitcher): number | undefined {
+  const s = p.seasonStats
+  if (!s || !s.gs || s.gs <= 0 || !Number.isFinite(s.seasonFptsToDate as number)) {
+    return undefined
+  }
+  return (s.seasonFptsToDate as number) / s.gs
+}
 
 function projectedPace(p: Pitcher, ctx: StatsTableContext): number | undefined {
   const s = p.seasonStats
@@ -458,7 +489,7 @@ export const PITCHER_COLUMNS: PitcherColumn[] = [
       const h = p.fptsHistory
       return h && h.length ? h.reduce((a, b) => a + b, 0) / h.length : NaN
     },
-    render: (p, ctx) => <Sparkline values={p.fptsHistory} onInfo={ctx.openInfo} />,
+    render: (p, ctx) => <Sparkline values={p.fptsHistory} seasonAvg={seasonAvgPerStart(p)} onInfo={ctx.openInfo} />,
   },
   {
     key: 'projFpts', label: 'Proj FPTS', minWidth: 84,
