@@ -39,20 +39,29 @@ segmented toggle, card containers, slot badges) so it reads as a native
 screen, not a bolt-on.
 
 1. **Header metrics** — Proj FPTS today, hitters rostered, favorable matchups
-   (n/total), open upgrade nudges.
-2. **Today's lineup** with two lenses (segmented toggle, mirroring
-   Schedule/Stats on the pitcher pages):
-   - **Today's edges** — opposing SP + handedness + park, a green/red **matchup
-     edge chip** (the inverse of the pitcher model's run-environment
-     multiplier), today's projected points, and a **form sparkline** (reused
-     concept from the pitcher StatsTable). Benched/unfavorable bats are dimmed.
-   - **Season line** — AVG/OBP/SLG slash + HR/R/RBI/SB counting stats.
-3. **Bench** — same row renderer, with an inline call-out when a bench bat
-   out-projects a starter at an eligible slot today.
-4. **Waiver upgrade nudges** — the core "nudge engine": FAs projected to
+   today (n/total), open upgrade nudges.
+2. **Your hitters** with a **Schedule / Stats** segmented toggle that mirrors
+   the pitcher pages exactly:
+   - **Schedule** — a week grid (one column per day, like `ScheduleGrid`)
+     adapted for hitters. Because hitters play nearly every day, most cells are
+     filled: each shows the opponent (`@OPP`), the opposing-starter hand
+     (`LHP`/`RHP`), and the **projected points** colored by the matchup edge
+     (green favorable / red tough — the inverse of the pitcher run-environment
+     math), with an ↑/↓ edge arrow. Past days show **actual** points instead;
+     off days and bench bats are muted. Right columns total games / actual /
+     projected points for the week.
+   - **Stats** — the season-line lens: AVG/OBP/SLG slash + HR/R/RBI/SB counting
+     stats, per-game and weekly projections, and a **form sparkline** (reused
+     concept from the pitcher StatsTable).
+3. **Waiver upgrade nudges** — the core "nudge engine": FAs projected to
    out-earn a rostered hitter at the same position over the next 7 days, with a
    plain-language reason, the points delta, and a (non-functional) Compare CTA.
    Marginal nudges (<3 pts/wk) are de-emphasized to avoid alert fatigue.
+
+> The mock week is generated deterministically from a hash of each hitter's
+> name/team (`buildWeek`), so the grid looks realistic without hand-authoring
+> ~70 cells. A real build would replace this generator with the ESPN schedule +
+> MLB probable-pitcher feed the pitcher pages already consume.
 
 ## What it would take to make it real
 
