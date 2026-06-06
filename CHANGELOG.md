@@ -92,6 +92,53 @@ multipliers. Added the 2026-06-06 accuracy-chart milestone marker. Out-of-scope
 follow-ups logged: accuracy.py's `factorAnalysis` reconstruction is approximate,
 and the v1 locked value stores Proj/G rather than the per-start projection.
 
+### PRs #126–#130 — Load-time overhaul (and the docs sync, #126)
+
+After the docs sync (#126: session-30 BACKLOG/CHANGELOG + the accuracy-chart
+milestone marker), the session pivoted to the 5–10s load time on My Team /
+Free Agents. Diagnosed the cause first (every visit rebuilt the whole ~5–10s
+payload live, serially), then fixed it in three layers chosen with the owner:
+
+- **#127 — Stale-while-revalidate.** The real cause of "cold every time" was
+  `sessionStorage` (wiped on tab close) plus a cache that rendered but never
+  refreshed. Switched to `localStorage` + always-background-refresh, so warm
+  loads are instant.
+- **#128 — Backend parallelization (no output change).** Concurrent probable
+  sources (MLB + ESPN), a parallel weather pre-warm (the FA list alone was
+  100+ serial calls), and `load_cached_data` overlapped with the ESPN roster
+  fetch. Same numbers, computed concurrently. (Deferred: per-day parallelism
+  inside the probable fetches, since those build the lag-fix schedule.)
+- **#129 / #130 — Warm-cache precompute (Pro plan).** `api/warm.py` cron every
+  15 min precomputes the per-team payload into KV; `/api/espn` serves the warm
+  blob instantly, `?fresh=1` forces a live recompute. The frontend renders it
+  instantly, fires a background `?fresh=1` *only* on days a rostered pitcher
+  starts (the "smart freshness" model), and shows an "Updated Xm ago" chip so
+  the cache state is glanceable on mobile.
+
+Load story now: **instant always**, projections kept ~15 min warm by the cron,
+live in-game scoring refreshed in the background only when our pitchers play.
+
+### Review findings logged for next session
+
+Two issues the owner caught reviewing #130, both filed under BACKLOG → "Flagged
+during review":
+- **W/L impact sign tracks the pitcher's record, not the matchup.** A favored
+  pitcher (56% win prob) showed a −0.1 W/L impact because the contribution is
+  scaled by `raw_w`/`raw_l` (historical rates). Fix queued: scale by the
+  decision rate `(raw_w+raw_l)` split by win prob so the sign follows the
+  matchup. Deferred (changes projections).
+- **ESPN Forecaster scraper broken since ~mid-May.** Accuracy dashboard has no
+  ESPN projection data after ~May 17. No code changed Apr 27–Jun 5, so it's an
+  external break (ESPN page/anti-bot change). Rolling 10-day window means the
+  gap is unrecoverable; fixing the scraper resumes data going forward. Needs the
+  `/api/forecaster` diagnostic output to pinpoint.
+
+### Workflow note
+
+Two consecutive cron jobs now (`/api/cron` daily + `/api/warm` every 15 min) and
+`maxDuration` 30→120 — both unlocked by the Vercel **Pro** upgrade mid-session,
+which is what made the warm-cache approach viable without an external pinger.
+
 ---
 
 ## Session 29 — June 5, 2026
