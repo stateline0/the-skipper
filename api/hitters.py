@@ -349,6 +349,17 @@ def get_hitter_data(team_id: int, week: int) -> dict:
 
     return {
         "ok":            True,
+        "_diag":         {  # TEMP platoon diagnostic — remove before merge
+            "handsCount": len(hands),
+            "sampleHands": dict(list(hands.items())[:4]),
+            "splitsCovered": f"{len(splits)}/{len(roster_keys)}",
+            "sampleSplits": dict(list(splits.items())[:2]),
+            "sampleDays": [
+                {"hitter": h["name"], "date": d["date"], "oppStarter": d.get("oppStarter"),
+                 "oppHand": d.get("oppHand"), "factors": d.get("factors")}
+                for h in roster_hitters[:3] for d in (h.get("days") or [])[:2]
+            ],
+        },
         "teamName":      team_name,
         "weekStart":     week_start,
         "weekEnd":       week_end,
@@ -455,7 +466,8 @@ HITTER_CACHE_TTL = 1800  # 30 min
 #   v9: drop HardHit%; add leagueAvg block for advanced-column headers.
 #   v10: Phase 3 — recent-form blend (game-log weighted) in projPerGame.
 #   v11: Phase 6 — per-day platoon factor + per-day factors[] for the popover.
-HITTER_CACHE_VERSION = 11
+#   v12: TEMP — embedded _diag block (remove before merge).
+HITTER_CACHE_VERSION = 12
 
 
 def _cache_key(team_id: int, week: int) -> str:
