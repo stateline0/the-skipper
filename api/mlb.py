@@ -989,13 +989,11 @@ def fetch_game_logs(season: int, mlb_stats: dict = None) -> tuple:
 
 
 def fetch_player_hands(person_ids) -> dict:
-    """Handedness map { name_key: {"bats", "throws"} } for the given MLB person
-    IDs, via the per-player /api/v1/people/{id} endpoint (parallel).
-
-    Both bulk variants (/sports/1/players and /people?personIds) return nothing
-    in this environment, but the per-player endpoints do (splits/game-logs use
-    them), so we fetch one ID at a time. Callers pass a bounded set (opposing
-    starters this period + rostered hitters)."""
+    """Handedness for the given MLB person IDs, via the per-player
+    /api/v1/people/{id} endpoint (parallel). Returns { str(pid): {"name", "bats",
+    "throws"} } for the IDs that RESOLVED (so the caller can cache resolved-only
+    and retry the rest — the bulk variants /sports/1/players and /people?personIds
+    return nothing in this environment)."""
     from concurrent.futures import ThreadPoolExecutor
     ids = [int(i) for i in dict.fromkeys(person_ids) if i]
     if not ids:
@@ -1016,14 +1014,15 @@ def fetch_player_hands(person_ids) -> dict:
             name = p.get("fullName", "")
             if not name:
                 return None
-            return (strip_accents(name), {
+            return (str(pid), {
+                "name":   strip_accents(name),
                 "bats":   (p.get("batSide") or {}).get("code", ""),
                 "throws": (p.get("pitchHand") or {}).get("code", ""),
             })
         except Exception:
             return None
 
-    out = {}
+    out = {}   # { str(pid): {"name", "bats", "throws"} } — resolved IDs only
     try:
         with ThreadPoolExecutor(max_workers=10) as ex:
             for res in ex.map(_one, ids):

@@ -318,29 +318,29 @@ def load_hitter_stats(year_int: int) -> dict:
 
 def load_player_hands(year_int: int, person_ids) -> dict:
     """Handedness map {name_key: {bats, throws}} for the given MLB person IDs
-    (opposing starters this period + rostered hitters). Incrementally merge-
-    cached in cache:player-hands:{year} (24hr): only IDs not already fetched are
-    looked up, so coverage grows as new periods/opponents are viewed."""
+    (opposing starters this period + rostered hitters). Cached BY ID and
+    resolved-only in cache:player-hands-byid:{year} (24hr): only IDs not already
+    resolved are looked up, so unresolved IDs retry on later calls and coverage
+    grows — a failed lookup never gets recorded as 'done'."""
     from mlb import fetch_player_hands
-    key = f"cache:player-hands:{year_int}"
-    idkey = f"cache:player-hands-ids:{year_int}"
+    key = f"cache:player-hands-byid:{year_int}"
     try:
-        cached = cache_get(key) or {}
-        fetched = set(cache_get(idkey) or [])
+        by_id = cache_get(key) or {}
     except Exception:
-        cached, fetched = {}, set()
-    need = [i for i in dict.fromkeys(person_ids) if i and str(i) not in fetched]
+        by_id = {}
+    need = [i for i in dict.fromkeys(person_ids) if i and str(i) not in by_id]
     if need:
         fresh = fetch_player_hands(need) or {}
         if fresh:
-            cached.update(fresh)
-        fetched.update(str(i) for i in need)
-        try:
-            cache_set(key, cached, ttl_seconds=86400)
-            cache_set(idkey, list(fetched), ttl_seconds=86400)
-        except Exception:
-            pass
-    return cached
+            by_id.update(fresh)
+            try:
+                cache_set(key, by_id, ttl_seconds=86400)
+            except Exception:
+                pass
+    return {
+        v["name"]: {"bats": v.get("bats", ""), "throws": v.get("throws", "")}
+        for v in by_id.values() if v.get("name")
+    }
 
 
 def load_hitter_splits(year_int: int, mlb_stats_hitting: dict, name_keys) -> dict:
