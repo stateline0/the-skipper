@@ -89,7 +89,6 @@ function sortVal(h: UIHitter, weeks: Weeks, key: string): number | null {
     case 'xslg':   return h.adv?.xslg ?? null
     case 'xwoba':  return h.adv?.xwoba ?? null
     case 'barrel': return h.adv?.barrelPct ?? null
-    case 'hardhit': return h.adv?.hardHitPct ?? null
     case 'ev':     return h.adv?.evAvg ?? null
     default:
       // A date column (YYYY-MM-DD): that day's projection (off day → null).
@@ -305,7 +304,6 @@ export function HitterStatsTable({ hitters, weeks, showOwn }: {
             {th('xSLG', 'xslg')}
             {th('xwOBA', 'xwoba')}
             {th('Brl%', 'barrel')}
-            {th('HardHit%', 'hardhit')}
             {th('EV', 'ev')}
             {th('Proj/G', 'projG')}
             {th('Proj wk', 'projWk')}
@@ -337,7 +335,6 @@ export function HitterStatsTable({ hitters, weeks, showOwn }: {
                 <td style={num({ color: 'var(--ink-2)' })}>{rate(adv.xslg)}</td>
                 <td style={num({ color: 'var(--ink-2)' })}>{rate(adv.xwoba)}</td>
                 <td style={num({ color: 'var(--ink-2)' })}>{pct(adv.barrelPct)}</td>
-                <td style={num({ color: 'var(--ink-2)' })}>{pct(adv.hardHitPct)}</td>
                 <td style={num({ color: 'var(--ink-2)' })}>{adv.evAvg === undefined ? '—' : adv.evAvg.toFixed(1)}</td>
                 <td style={num({ fontWeight: 700 })}>{h.projG.toFixed(1)}</td>
                 <td style={num({ fontWeight: 700, color: 'var(--green)' })}>{projWk.toFixed(1)}</td>
