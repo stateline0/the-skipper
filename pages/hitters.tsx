@@ -179,7 +179,7 @@ export default function Hitters() {
 
               {tab === 'schedule'
                 ? <HitterScheduleGrid hitters={hitters} weeks={weeks} weekDates={weekDates} today={today} />
-                : <HitterStatsTable hitters={hitters} weeks={weeks} />}
+                : <HitterStatsTable hitters={hitters} weeks={weeks} leagueAvg={live?.leagueAvg} />}
             </div>
           </>
         )}

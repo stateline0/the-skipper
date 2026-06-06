@@ -252,7 +252,7 @@ def load_hitter_stats(year_int: int) -> dict:
     print(f"[fetcher.py] MLB hitting stats: {len(cur)} current, {len(prev)} previous")
 
     # ── Savant batter expected stats (Phase 2 de-luck) ─────────────────
-    from savant import fetch_expected_stats_batter
+    from savant import fetch_expected_stats_batter, fetch_statcast_stats_batter
     sav_cur = {}
     sav_prev = {}
     try:
@@ -289,11 +289,30 @@ def load_hitter_stats(year_int: int) -> dict:
 
     print(f"[fetcher.py] Savant batter: {len(sav_cur)} current, {len(sav_prev)} previous")
 
+    # ── Savant batter statcast (Barrel%, Whiff% — display only) ────────
+    sav_sc = {}
+    try:
+        sav_sc = cache_get(f"cache:savant-batter-statcast:{year_int}") or {}
+    except Exception:
+        pass
+    if not sav_sc:
+        try:
+            sav_sc = fetch_statcast_stats_batter(year_int) or {}
+            if sav_sc:
+                try:
+                    cache_set(f"cache:savant-batter-statcast:{year_int}", sav_sc, ttl_seconds=86400)
+                except Exception:
+                    pass
+        except Exception as e:
+            print(f"[fetcher.py] Savant batter statcast fetch failed: {e}")
+    print(f"[fetcher.py] Savant batter statcast: {len(sav_sc)} hitters")
+
     return {
-        "hitting_current":       cur,
-        "hitting_previous":      prev,
-        "savant_batter_current": sav_cur,
+        "hitting_current":        cur,
+        "hitting_previous":       prev,
+        "savant_batter_current":  sav_cur,
         "savant_batter_previous": sav_prev,
+        "savant_batter_statcast_current": sav_sc,
     }
 
 

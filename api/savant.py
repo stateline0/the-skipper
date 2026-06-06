@@ -182,6 +182,40 @@ def fetch_expected_stats_batter(year: int, min_pa: int = 25) -> dict:
         return {}
 
 
+def fetch_statcast_stats_batter(year: int, min_bbe: int = 25) -> dict:
+    """Fetch BATTER Statcast leaderboard from Baseball Savant (type=batter).
+    Returns { name_lower: { brl_pct, hard_hit_pct, avg_ev, whiff_pct } } for the
+    Hitters Stats-tab advanced view. Each field defaults to 0 when absent."""
+    url = (
+        f"https://baseballsavant.mlb.com/leaderboard/statcast"
+        f"?type=batter&year={year}&position=&team="
+        f"&min={min_bbe}&csv=true"
+    )
+    try:
+        r = requests.get(url, headers=SAVANT_HEADERS, timeout=20)
+        if r.status_code != 200:
+            print(f"[savant.py] Batter statcast returned HTTP {r.status_code}")
+            return {}
+        rows = _parse_csv(r.text)
+        result = {}
+        for row in rows:
+            name = _parse_savant_name(row)
+            if not name:
+                continue
+            # Hard-Hit% on the statcast leaderboard is the "ev95percent" column
+            # (% of batted balls ≥95 mph); "hard_hit_percent" isn't present.
+            result[name] = {
+                "avg_ev":       _safe_float(row.get("avg_hit_speed", 0)),
+                "brl_pct":      _safe_float(row.get("brl_percent", 0)),
+                "hard_hit_pct": _safe_float(row.get("ev95percent") or row.get("hard_hit_percent") or 0),
+            }
+        print(f"[savant.py] Fetched batter statcast for {len(result)} hitters ({year})")
+        return result
+    except Exception as e:
+        print(f"[savant.py] Failed to fetch batter statcast: {e}")
+        return {}
+
+
 def fetch_statcast_stats(year: int, min_bbe: int = 25) -> dict:
     """
     Fetch Statcast leaderboard from Baseball Savant.
