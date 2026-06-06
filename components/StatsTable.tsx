@@ -467,15 +467,29 @@ export const PITCHER_COLUMNS: PitcherColumn[] = [
   },
 
   {
-    key: 'fptsPerStart', label: 'FPTS/G', minWidth: 64,
+    // Model's projected FPTS per start — NOT a season average. Renamed from
+    // "FPTS/G" (which read like a season-to-date average) to "Proj/G".
+    key: 'fptsPerStart', label: 'Proj/G', minWidth: 64,
     sortValue: (_p, ctx) => 0,  // overridden inline below — see note
     render: (p, ctx) => {
       const v = ctx.fptsPerStart[p.name]
       if (v === undefined) {
         return <span style={{ color: 'var(--ink-3)' }}>—</span>
       }
+      const tip = "The projection model's estimated fantasy points per start — not a season average."
+      const popover = (
+        <div>
+          <div style={{ fontWeight: 700, marginBottom: 4 }}>Proj/G · {v.toFixed(1)}</div>
+          <div>{tip}</div>
+        </div>
+      )
       return (
-        <span style={{ fontFamily: 'var(--mono)', fontWeight: 600 }}>
+        <span
+          title={tip}
+          onClick={ctx.openInfo ? (e) => ctx.openInfo!(popover, e) : undefined}
+          style={{ fontFamily: 'var(--mono)', fontWeight: 600,
+                   cursor: ctx.openInfo ? 'pointer' : 'default' }}
+        >
           {v.toFixed(1)}
         </span>
       )
