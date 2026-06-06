@@ -260,6 +260,13 @@ def get_hitter_data(team_id: int, week: int) -> dict:
     # Match ESPN's roster order: by lineup-slot rank, ties broken by projection.
     roster_hitters.sort(key=lambda x: (x["rank"], -x["projFpts"]))
 
+    # ── Free-agent hitters (top available by ownership %) ─────────────
+    free_agent_hitters = _fetch_fa_hitters(
+        base, headers, cookies, PRO_TEAM_MAP, data.get("scoringPeriodId", week),
+        schedule, period_dates, scoring, hitting_current, hitting_previous,
+        savant_current, savant_previous, year_int, week,
+    )
+
     return {
         "ok":            True,
         "teamName":      team_name,
@@ -268,9 +275,85 @@ def get_hitter_data(team_id: int, week: int) -> dict:
         "matchupDates":  [mp["start"], mp["end"]],
         "schedule":      schedule,
         "rosterHitters": roster_hitters,
+        "freeAgentHitters": free_agent_hitters,
         "scoringStats":  sorted(scoring.keys()),
         "computedAt":    datetime.now(timezone.utc).isoformat(),
     }
+
+
+def _fetch_fa_hitters(base, headers, cookies, PRO_TEAM_MAP, current_week,
+                      schedule, period_dates, scoring, hitting_current,
+                      hitting_previous, savant_current, savant_previous,
+                      year_int, week):
+    """Top available free-agent hitters by ownership %, projected with the same
+    model as the roster. Mirrors the SP free-agent fetch in espn.py, filtered to
+    hitter slots. Returns [] on any failure (FA hitters are non-critical)."""
+    try:
+        xff = json.dumps({
+            "players": {
+                "filterStatus": {"value": ["FREEAGENT", "WAIVERS"]},
+                "filterSlotIds": {"value": sorted(HITTER_SLOTS)},
+                "limit": 100,
+                "sortPercOwned": {"sortPriority": 1, "sortAsc": False},
+                "filterStatsForCurrentSeasonScoringPeriodId": {"value": [current_week]},
+            }
+        })
+        r = requests.get(
+            base,
+            params=[("view", "kona_player_info"), ("scoringPeriodId", current_week)],
+            cookies=cookies, headers={**headers, "x-fantasy-filter": xff}, timeout=15,
+        )
+        if r.status_code != 200:
+            print(f"[hitters.py] FA hitters HTTP {r.status_code}")
+            return []
+
+        meta = []
+        for p in r.json().get("players", []):
+            player = p.get("player", {})
+            name = player.get("fullName", "")
+            if not name:
+                continue
+            eligible = set(player.get("eligibleSlots", []))
+            if not (eligible & HITTER_SLOTS):
+                continue
+            team_abbrev = PRO_TEAM_MAP.get(player.get("proTeamId", 0), "")
+            own = round(float(player.get("ownership", {}).get("percentOwned", 0) or 0), 1)
+            meta.append({
+                "name": name, "team": team_abbrev,
+                "pos": _eligible_label(eligible), "ownPct": own,
+                "gameDates": [d for d in period_dates if team_abbrev and team_abbrev in schedule.get(d, {})],
+            })
+
+        proj, _ = get_projected_hitter_fpts(
+            [{"name": h["name"], "team": h["team"], "gameDates": h["gameDates"]} for h in meta],
+            scoring=scoring, stat_current=hitting_current, stat_previous=hitting_previous,
+            savant_current=savant_current, savant_previous=savant_previous,
+            season=year_int, period=week,
+        )
+
+        out = []
+        for h in meta:
+            p = proj.get(h["name"], {})
+            per_game = p.get("projPerGame", 0.0)
+            days = []
+            for d in h["gameDates"]:
+                game = schedule.get(d, {}).get(h["team"], {})
+                days.append({"date": d, "opp": game.get("opponent", ""),
+                             "home": game.get("is_home", True), "proj": round(per_game, 1)})
+            out.append({
+                "name": h["name"], "team": h["team"], "pos": h["pos"], "bats": "",
+                "percentOwned": h["ownPct"],
+                "projFpts": p.get("projFpts", 0.0), "projPerGame": round(per_game, 1),
+                "games": p.get("games", len(h["gameDates"])),
+                "modelType": p.get("modelType", "stats"),
+                "seasonStats": _season_line(hitting_current.get(strip_accents(h["name"]), {})),
+                "days": days,
+            })
+        out.sort(key=lambda x: -x["percentOwned"])
+        return out
+    except Exception as e:
+        print(f"[hitters.py] FA hitters fetch failed: {e}")
+        return []
 
 
 # ── Caching (mirrors the espn.py warm-serve pattern, lighter) ──────────
@@ -280,7 +363,8 @@ HITTER_CACHE_TTL = 1800  # 30 min
 #   v2: TB scoring + ESPN lineup ordering. v3: scoring read from mSettings.
 #   v4: corrected ESPN_HITTING_STAT_IDS map (now parses, no longer falls back).
 #   v5: Phase 2 — Savant xBA/xSLG de-luck.
-HITTER_CACHE_VERSION = 5
+#   v6: add freeAgentHitters to the payload.
+HITTER_CACHE_VERSION = 6
 
 
 def _cache_key(team_id: int, week: int) -> str:

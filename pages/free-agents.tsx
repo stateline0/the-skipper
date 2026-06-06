@@ -3,6 +3,10 @@ import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { useRouter } from 'next/router'
 import ScheduleGrid from '../components/ScheduleGrid'
 import StatsTable, { SeasonStats, SavantExpected } from '../components/StatsTable'
+import {
+  UIHitter, Weeks, buildDateRange, todayISO, hitterFromPayload,
+  HitterScheduleGrid, HitterStatsTable,
+} from '../components/HitterTables'
 
 const CACHE_VERSION = 7 // bump this whenever the API response shape changes
 
@@ -45,6 +49,7 @@ export default function FreeAgents() {
   const [sortCol, setSortCol]           = useState<string>('percentOwned')
   const [sortDir, setSortDir]           = useState<'asc' | 'desc'>('desc')
   const [activeTab, setActiveTab]       = useState<'schedule' | 'stats'>('schedule')
+  const [mode, setMode]                 = useState<'pitchers' | 'hitters'>('pitchers')
 
   useEffect(() => {
     fetch('/api/config')
@@ -207,15 +212,32 @@ function handleSort(col: string) {
           <div>
             <h1 style={{ fontSize: 22, fontWeight: 700, letterSpacing: '-0.03em', margin: 0, marginBottom: 6 }}>Free Agents</h1>
             <p style={{ fontSize: 13, color: 'var(--ink-3)', margin: 0 }}>
-              Available SPs — check the ones to include in your analysis
+              {mode === 'pitchers'
+                ? 'Available SPs — check the ones to include in your analysis'
+                : 'Available hitters — projected with the hitter model'}
             </p>
-            {computedAt && (
+            {mode === 'pitchers' && computedAt && (
               <div style={{ fontSize: 12, color: 'var(--ink-3)', opacity: 0.7, marginTop: 2, whiteSpace: 'nowrap' }}>
                 Updated {relativeTime(computedAt)}{loading ? ' · refreshing…' : ''}
               </div>
             )}
           </div>
           <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+            {/* Pitchers / Hitters toggle */}
+            <div style={{ display: 'flex', gap: 2, background: 'var(--paper-2)', padding: 3, borderRadius: 8 }}>
+              {(['pitchers', 'hitters'] as const).map(m => {
+                const active = mode === m
+                return (
+                  <button key={m} onClick={() => setMode(m)} style={{
+                    fontFamily: 'var(--sans)', fontSize: 12, fontWeight: 600, padding: '5px 14px',
+                    borderRadius: 6, border: 'none', cursor: 'pointer',
+                    background: active ? 'var(--white)' : 'transparent',
+                    color: active ? 'var(--ink)' : 'var(--ink-3)',
+                    boxShadow: active ? 'var(--shadow)' : 'none', transition: 'all 0.15s',
+                  }}>{m === 'pitchers' ? 'Pitchers' : 'Hitters'}</button>
+                )
+              })}
+            </div>
             {matchupPeriods.length > 0 && (
               <select
                 value={selectedPeriod ?? ''}
@@ -240,19 +262,24 @@ function handleSort(col: string) {
                 })}
               </select>
             )}
-            <button onClick={() => fetchFreeAgents(true)} disabled={loading} style={{
-              fontFamily: 'var(--sans)', fontSize: 13, fontWeight: 600,
-              padding: '9px 18px', borderRadius: 'var(--radius)',
-              cursor: loading ? 'not-allowed' : 'pointer',
-              border: '1.5px solid var(--border-strong)',
-              background: 'transparent', color: 'var(--ink)',
-              opacity: loading ? 0.5 : 1,
-            }}>
-              {loading ? 'Refreshing...' : '↻ Refresh'}
-            </button>
+            {mode === 'pitchers' && (
+              <button onClick={() => fetchFreeAgents(true)} disabled={loading} style={{
+                fontFamily: 'var(--sans)', fontSize: 13, fontWeight: 600,
+                padding: '9px 18px', borderRadius: 'var(--radius)',
+                cursor: loading ? 'not-allowed' : 'pointer',
+                border: '1.5px solid var(--border-strong)',
+                background: 'transparent', color: 'var(--ink)',
+                opacity: loading ? 0.5 : 1,
+              }}>
+                {loading ? 'Refreshing...' : '↻ Refresh'}
+              </button>
+            )}
           </div>
         </div>
 
+        {mode === 'hitters' && <FAHitters period={selectedPeriod} />}
+
+        {mode === 'pitchers' && (<>
         {error && (
           <div style={{
             background: 'var(--red-light)', border: '1px solid var(--red)',
@@ -395,6 +422,101 @@ function handleSort(col: string) {
             </div>
           </>
         )}
+        </>)}
+      </div>
+    </>
+  )
+}
+
+// ─── Free-agent hitters view ──────────────────────────────────────────────────
+// Fetches /api/hitters for the selected period and renders its freeAgentHitters
+// through the shared HitterTables components, with a Schedule/Stats sub-toggle
+// and an Own% column.
+function FAHitters({ period }: { period: number | null }) {
+  const [tab, setTab] = useState<'schedule' | 'stats'>('schedule')
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+  const [data, setData] = useState<any | null>(null)
+
+  useEffect(() => {
+    if (period === null) return
+    let cancelled = false
+    setLoading(true); setError('')
+    fetch(`/api/hitters?week=${period}`).then(r => r.json()).then(d => {
+      if (cancelled) return
+      if (d && d.ok) setData(d)
+      else { setData(null); setError(d?.error || 'Failed to load free-agent hitters') }
+    }).catch(e => {
+      if (!cancelled) { setData(null); setError(e?.message || 'Failed to load free-agent hitters') }
+    }).finally(() => { if (!cancelled) setLoading(false) })
+    return () => { cancelled = true }
+  }, [period])
+
+  const { hitters, weeks, weekDates, today } = useMemo(() => {
+    if (!data) return { hitters: [] as UIHitter[], weeks: {} as Weeks, weekDates: [] as string[], today: todayISO() }
+    const [start, end] = data.matchupDates || []
+    const dates = start && end ? buildDateRange(start, end) : []
+    const weeks: Weeks = {}
+    const hitters: UIHitter[] = (data.freeAgentHitters || []).map((h: any) => {
+      const { hitter, days } = hitterFromPayload(h, dates)
+      weeks[h.name] = days
+      return hitter
+    })
+    return { hitters, weeks, weekDates: dates, today: todayISO() }
+  }, [data])
+
+  if (loading) {
+    return (
+      <div style={{ background: 'var(--white)', border: '1px solid var(--border)', borderRadius: 'var(--radius-lg)', padding: '40px 24px', textAlign: 'center', boxShadow: 'var(--shadow)', color: 'var(--ink-3)', fontSize: 14 }}>
+        Loading free-agent hitters…
+      </div>
+    )
+  }
+  if (error) {
+    return (
+      <div style={{ background: 'var(--red-light)', border: '1px solid var(--red)', borderRadius: 'var(--radius)', padding: '12px 16px', fontSize: 13, color: 'var(--red)' }}>⚠ {error}</div>
+    )
+  }
+  if (hitters.length === 0) {
+    return (
+      <div style={{ background: 'var(--white)', border: '1px solid var(--border)', borderRadius: 'var(--radius-lg)', padding: '40px 24px', textAlign: 'center', boxShadow: 'var(--shadow)' }}>
+        <div style={{ fontSize: 32, marginBottom: 12 }}>🏏</div>
+        <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 8 }}>No free-agent hitters</div>
+        <div style={{ fontSize: 13, color: 'var(--ink-3)' }}>None were returned for this period.</div>
+      </div>
+    )
+  }
+
+  return (
+    <>
+      <div style={{
+        background: 'var(--blue-light)', border: '1px solid rgba(26,95,168,0.2)',
+        borderRadius: 'var(--radius)', padding: '10px 14px',
+        fontSize: 13, color: 'var(--blue)', marginBottom: 16,
+      }}>
+        Top available hitters by ownership %, projected with the hitter model (Savant-de-lucked).
+      </div>
+      <div style={{ background: 'var(--white)', border: '1px solid var(--border)', borderRadius: 'var(--radius-lg)', padding: '20px 24px', boxShadow: 'var(--shadow)', marginBottom: 16 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14, gap: 12 }}>
+          <div style={{ fontSize: 10, fontFamily: 'var(--mono)', fontWeight: 500, letterSpacing: '0.1em', color: 'var(--ink-3)', textTransform: 'uppercase' }}>Available hitters</div>
+          <div style={{ display: 'flex', gap: 2, background: 'var(--paper-2)', padding: 3, borderRadius: 8 }}>
+            {(['schedule', 'stats'] as const).map(t => {
+              const active = tab === t
+              return (
+                <button key={t} onClick={() => setTab(t)} style={{
+                  fontFamily: 'var(--sans)', fontSize: 12, fontWeight: 600, padding: '5px 14px',
+                  borderRadius: 6, border: 'none', cursor: 'pointer',
+                  background: active ? 'var(--white)' : 'transparent',
+                  color: active ? 'var(--ink)' : 'var(--ink-3)',
+                  boxShadow: active ? 'var(--shadow)' : 'none', transition: 'all 0.15s',
+                }}>{t === 'schedule' ? 'Schedule' : 'Stats'}</button>
+              )
+            })}
+          </div>
+        </div>
+        {tab === 'schedule'
+          ? <HitterScheduleGrid hitters={hitters} weeks={weeks} weekDates={weekDates} today={today} showOwn />
+          : <HitterStatsTable hitters={hitters} weeks={weeks} showOwn />}
       </div>
     </>
   )
