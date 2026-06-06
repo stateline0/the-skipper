@@ -135,6 +135,53 @@ def fetch_expected_stats(year: int, min_pa: int = 25) -> dict:
         return {}
 
 
+def fetch_expected_stats_batter(year: int, min_pa: int = 25) -> dict:
+    """
+    Fetch BATTER expected statistics from Baseball Savant (type=batter).
+    Mirror of fetch_expected_stats() for the hitter projection model. Returns
+    { "player_name_lower": { "xba", "xslg", "xwoba", "ba", "slg", "woba",
+      "woba_diff", "pa" }, ... }.
+
+    For hitters the de-luck stats are:
+      - xba  (est_ba):  expected batting average (strips BABIP luck)
+      - xslg (est_slg): expected slugging → expected total bases = xslg × AB
+      - xwoba(est_woba): overall expected offensive rate
+    (xera/era are pitcher-only and absent here.)
+    """
+    url = (
+        f"https://baseballsavant.mlb.com/leaderboard/expected_statistics"
+        f"?type=batter&year={year}&position=&team="
+        f"&filterType=pa&min={min_pa}&csv=true"
+    )
+    try:
+        r = requests.get(url, headers=SAVANT_HEADERS, timeout=20)
+        if r.status_code != 200:
+            print(f"[savant.py] Batter expected stats returned HTTP {r.status_code}")
+            return {}
+
+        rows = _parse_csv(r.text)
+        result = {}
+        for row in rows:
+            name = _parse_savant_name(row)
+            if not name:
+                continue
+            result[name] = {
+                "pa":        _safe_int(row.get("pa", 0)),
+                "xwoba":     _safe_float(row.get("est_woba", 0)),
+                "xba":       _safe_float(row.get("est_ba", 0)),
+                "xslg":      _safe_float(row.get("est_slg", 0)),
+                "woba":      _safe_float(row.get("woba", 0)),
+                "ba":        _safe_float(row.get("ba", 0)),
+                "slg":       _safe_float(row.get("slg", 0)),
+                "woba_diff": _safe_float(row.get("est_woba_minus_woba_diff", 0)),
+            }
+        print(f"[savant.py] Fetched batter expected stats for {len(result)} hitters ({year})")
+        return result
+    except Exception as e:
+        print(f"[savant.py] Failed to fetch batter expected stats: {e}")
+        return {}
+
+
 def fetch_statcast_stats(year: int, min_bbe: int = 25) -> dict:
     """
     Fetch Statcast leaderboard from Baseball Savant.

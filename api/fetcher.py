@@ -206,12 +206,14 @@ def fetch_season_stats_hitting(yr: int) -> dict:
 
 
 def load_hitter_stats(year_int: int) -> dict:
-    """Load current + previous season hitting stats for the hitter model,
-    cached in KV under cache:mlb-stats-hitting:{year} (24hr TTL on current).
+    """Load the external data the hitter model needs, cached in KV:
+      - current + previous season hitting stats (cache:mlb-stats-hitting:{year})
+      - current + previous Savant batter expected stats (cache:savant-batter:{year})
+        for the Phase-2 de-luck step.
 
     Standalone from load_cached_data() so the hitter endpoint doesn't pull the
-    full pitcher external-data bundle (Savant/game-logs/wOBA/win-data) it
-    doesn't need yet. Returns {hitting_current, hitting_previous}.
+    pitcher-only external data. Returns {hitting_current, hitting_previous,
+    savant_batter_current, savant_batter_previous}.
     """
     cur = {}
     prev = {}
@@ -248,7 +250,51 @@ def load_hitter_stats(year_int: int) -> dict:
             print(f"[fetcher.py] Hitting stats fetch failed: {e}")
 
     print(f"[fetcher.py] MLB hitting stats: {len(cur)} current, {len(prev)} previous")
-    return {"hitting_current": cur, "hitting_previous": prev}
+
+    # ── Savant batter expected stats (Phase 2 de-luck) ─────────────────
+    from savant import fetch_expected_stats_batter
+    sav_cur = {}
+    sav_prev = {}
+    try:
+        sav_prev = cache_get(f"cache:savant-batter:{year_int - 1}") or {}
+        sav_cur  = cache_get(f"cache:savant-batter:{year_int}") or {}
+    except Exception:
+        pass
+
+    if not sav_cur or not sav_prev:
+        try:
+            with ThreadPoolExecutor(max_workers=2) as ex:
+                futures = {}
+                if not sav_prev:
+                    futures[ex.submit(fetch_expected_stats_batter, year_int - 1)] = "prev"
+                if not sav_cur:
+                    futures[ex.submit(fetch_expected_stats_batter, year_int)] = "cur"
+                for fut in as_completed(futures):
+                    label = futures[fut]
+                    res = fut.result() or {}
+                    if label == "prev":
+                        sav_prev = res
+                        try:
+                            cache_set(f"cache:savant-batter:{year_int - 1}", res)
+                        except Exception:
+                            pass
+                    else:
+                        sav_cur = res
+                        try:
+                            cache_set(f"cache:savant-batter:{year_int}", res, ttl_seconds=86400)
+                        except Exception:
+                            pass
+        except Exception as e:
+            print(f"[fetcher.py] Savant batter fetch failed: {e}")
+
+    print(f"[fetcher.py] Savant batter: {len(sav_cur)} current, {len(sav_prev)} previous")
+
+    return {
+        "hitting_current":       cur,
+        "hitting_previous":      prev,
+        "savant_batter_current": sav_cur,
+        "savant_batter_previous": sav_prev,
+    }
 
 
 def get_actual_fpts(past_dates: list, player_names: set, headers: dict,

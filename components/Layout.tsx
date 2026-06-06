@@ -6,7 +6,7 @@ import { signOut, useSession } from 'next-auth/react'
 // These are the five main nav items
 const NAV_ITEMS = [
   { href: '/dashboard',        label: 'Dashboard',        icon: '⚡' },
-  { href: '/my-team',          label: 'My Team',           icon: '⚾' },
+  { href: '/my-team',          label: 'Pitchers',          icon: '⚾' },
   { href: '/hitters',          label: 'Hitters',           icon: '🏏' },
   { href: '/free-agents',      label: 'Free Agents',       icon: '🔍' },
   { href: '/accuracy',         label: 'Accuracy',          icon: '📊' },

@@ -202,10 +202,12 @@ def get_hitter_data(team_id: int, week: int) -> dict:
         [h["name"] for h in hitters_meta], week, team_map=team_map
     )
 
-    # ── Season hitting stats (cached) ─────────────────────────────────
+    # ── Season hitting stats + Savant batter expecteds (cached) ───────
     hit = load_hitter_stats(year_int)
     hitting_current  = hit["hitting_current"]
     hitting_previous = hit["hitting_previous"]
+    savant_current   = hit["savant_batter_current"]
+    savant_previous  = hit["savant_batter_previous"]
 
     # ── Game days per hitter (days their team plays in the period) ────
     for h in hitters_meta:
@@ -218,6 +220,8 @@ def get_hitter_data(team_id: int, week: int) -> dict:
         scoring=scoring,
         stat_current=hitting_current,
         stat_previous=hitting_previous,
+        savant_current=savant_current,
+        savant_previous=savant_previous,
         season=year_int, period=week,
     )
 
@@ -247,6 +251,7 @@ def get_hitter_data(team_id: int, week: int) -> dict:
             "projFpts":    p.get("projFpts", 0.0),
             "projPerGame": round(per_game, 1),
             "blendWeight": p.get("blendWeight", 0.0),
+            "modelType":   p.get("modelType", "stats"),
             "games":       p.get("games", len(h["gameDates"])),
             "seasonStats": _season_line(hitting_current.get(strip_accents(name), {})),
             "days":        days,
@@ -274,12 +279,52 @@ HITTER_CACHE_TTL = 1800  # 30 min
 # abandons stale cached blobs instead of serving them for up to TTL.
 #   v2: TB scoring + ESPN lineup ordering. v3: scoring read from mSettings.
 #   v4: corrected ESPN_HITTING_STAT_IDS map (now parses, no longer falls back).
-HITTER_CACHE_VERSION = 4
+#   v5: Phase 2 — Savant xBA/xSLG de-luck.
+HITTER_CACHE_VERSION = 5
 
 
 def _cache_key(team_id: int, week: int) -> str:
     year = os.environ.get("ESPN_SEASON", "2026")
     return f"cache:hitterdata:v{HITTER_CACHE_VERSION}:{year}:{team_id}:{week}"
+
+
+def savant_debug(team_id: int, week: int) -> dict:
+    """Diagnostic: confirm the Phase-2 Savant de-luck is live. Returns the
+    batter-expected-stats coverage counts plus, per rostered hitter, whether a
+    Savant row matched (modelType) and the actual SLG vs xSLG that drives the
+    de-luck. Hit /api/hitters?debug=savant."""
+    year_int = int(os.environ.get("ESPN_SEASON", "2026"))
+    payload = get_hitter_data(team_id, week)            # cached; has modelType + seasonStats
+    hit = load_hitter_stats(year_int)                   # cached
+    sav = hit.get("savant_batter_current", {})
+    sav_prev = hit.get("savant_batter_previous", {})
+
+    rows = []
+    for h in payload.get("rosterHitters", []):
+        key = strip_accents(h["name"])
+        srow = sav.get(key)
+        season = h.get("seasonStats") or {}
+        rows.append({
+            "name":      h["name"],
+            "modelType": h.get("modelType"),
+            "matched":   bool(srow),
+            "actualSlg": season.get("slg"),
+            "xslg":      round(srow["xslg"], 3) if srow else None,
+            "xba":       round(srow["xba"], 3) if srow else None,
+            "projPerGame": h.get("projPerGame"),
+        })
+    matched = sum(1 for r in rows if r["matched"])
+    return {
+        "ok": True,
+        "savantBatterCurrentCount": len(sav),
+        "savantBatterPreviousCount": len(sav_prev),
+        "rosteredMatched": f"{matched}/{len(rows)}",
+        "sample": [
+            {"name": n, "xba": round(v.get("xba", 0), 3), "xslg": round(v.get("xslg", 0), 3)}
+            for n, v in list(sav.items())[:5]
+        ],
+        "hitters": rows,
+    }
 
 
 def scoring_debug(team_id: int) -> dict:
@@ -322,9 +367,9 @@ class handler(BaseHTTPRequestHandler):
         fresh   = qs.get("fresh", ["0"])[0] in ("1", "true")
         debug   = qs.get("debug", [""])[0]
 
-        if debug == "scoring":
+        if debug in ("scoring", "savant"):
             try:
-                payload = scoring_debug(team_id)
+                payload = scoring_debug(team_id) if debug == "scoring" else savant_debug(team_id, week)
             except Exception as e:
                 payload = {"ok": False, "error": str(e)}
             body = json.dumps(payload).encode()

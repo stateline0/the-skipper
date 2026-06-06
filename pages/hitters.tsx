@@ -35,6 +35,10 @@ interface DayGame {
 
 type Weeks = Record<string, DayGame[]>
 
+interface MatchupPeriod {
+  period: number; label: string; start: string; end: string; limit: number
+}
+
 // ─── Date / format helpers ──────────────────────────────────────────────────
 
 const WD = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
@@ -110,26 +114,34 @@ export default function Hitters() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [live, setLive] = useState<any | null>(null)
+  const [matchupPeriods, setMatchupPeriods] = useState<MatchupPeriod[]>([])
+  const [selectedPeriod, setSelectedPeriod] = useState<number | null>(null)
 
+  // Load matchup periods + the initial selection (shared with the other pages
+  // via the skipper_selected_period localStorage key).
   useEffect(() => {
-    let cancelled = false
-    async function load() {
-      try {
-        const cfg = await fetch('/api/config').then(r => r.json()).catch(() => ({}))
-        const period = cfg.currentPeriod ?? 1
-        const data = await fetch(`/api/hitters?week=${period}`).then(r => r.json())
-        if (cancelled) return
-        if (data && data.ok) setLive(data)
-        else setError(data?.error || 'Failed to load hitters')
-      } catch (e: any) {
-        if (!cancelled) setError(e?.message || 'Failed to load hitters')
-      } finally {
-        if (!cancelled) setLoading(false)
-      }
-    }
-    load()
-    return () => { cancelled = true }
+    fetch('/api/config').then(r => r.json()).then(cfg => {
+      if (cfg.matchupPeriods) setMatchupPeriods(cfg.matchupPeriods)
+      const saved = localStorage.getItem('skipper_selected_period')
+      setSelectedPeriod(saved ? parseInt(saved) : (cfg.currentPeriod ?? 1))
+    }).catch(() => setSelectedPeriod(1))
   }, [])
+
+  // Fetch hitters whenever the selected period changes.
+  useEffect(() => {
+    if (selectedPeriod === null) return
+    let cancelled = false
+    setLoading(true); setError('')
+    localStorage.setItem('skipper_selected_period', String(selectedPeriod))
+    fetch(`/api/hitters?week=${selectedPeriod}`).then(r => r.json()).then(data => {
+      if (cancelled) return
+      if (data && data.ok) setLive(data)
+      else { setLive(null); setError(data?.error || 'Failed to load hitters') }
+    }).catch(e => {
+      if (!cancelled) { setLive(null); setError(e?.message || 'Failed to load hitters') }
+    }).finally(() => { if (!cancelled) setLoading(false) })
+    return () => { cancelled = true }
+  }, [selectedPeriod])
 
   const { hitters, weeks, weekDates, today, label } = useMemo(() => {
     if (!live) {
@@ -187,6 +199,29 @@ export default function Hitters() {
               {live?.teamName ? `${live.teamName} · ` : ''}{label || 'Daily projections'}
             </p>
           </div>
+          {matchupPeriods.length > 0 && (
+            <select
+              value={selectedPeriod ?? ''}
+              onChange={e => setSelectedPeriod(parseInt(e.target.value))}
+              style={{
+                fontFamily: 'var(--mono)', fontSize: 12, padding: '8px 12px',
+                borderRadius: 'var(--radius)', border: '1.5px solid var(--border-strong)',
+                background: 'var(--white)', color: 'var(--ink)', cursor: 'pointer', outline: 'none',
+              }}
+            >
+              {matchupPeriods.map(p => {
+                const fmt = (iso: string) => {
+                  const [, m, d] = iso.split('-')
+                  return `${MONTHS[parseInt(m) - 1]} ${parseInt(d)}`
+                }
+                return (
+                  <option key={p.period} value={p.period}>
+                    {p.label} · {fmt(p.start)}–{fmt(p.end)}
+                  </option>
+                )
+              })}
+            </select>
+          )}
         </div>
 
         {loading ? (

@@ -42,7 +42,7 @@ hitter) — the opposite of the pitcher model's `env_to_pitcher_mult()` inversio
 | 0 | Scoring detection from ESPN `mSettings`; keep hitter roster entries; hitter season-stats fetcher; pitcher handedness | **done** (dynamic `mSettings` scoring with sanity-check fallback to a verified default + `?debug=scoring`; `fetch_season_stats_hitting`; hitter roster parse; handedness + Savant batter mode deferred to their phases) |
 | 1 | Baseline per-game stat vector from season-rate stats, year-blended by PA | **done** (`projection_hitter.py`) |
 | **Wire-in** | `/api/hitters` endpoint + Hitters page consuming real roster/schedule/projections (falls back to mock) | **done** |
-| 2 | Savant expected-stat de-luck (xBA/xSLG/xwOBA) | planned |
+| 2 | Savant expected-stat de-luck (xBA/xSLG) | **done** (`fetch_expected_stats_batter` + `apply_savant_hitter`: expected H = xBA·AB, expected TB = xSLG·AB) |
 | 3 | Recent form (weighted last ~12–15 games, 60/40) | planned |
 | 4 | Park factor (direct, per-game) | planned |
 | 5 | Weather (temp; reuse `get_weather_factor`) | planned |

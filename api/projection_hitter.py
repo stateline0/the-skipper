@@ -264,15 +264,46 @@ def apply_factors(vector: dict, per_stat: dict = None, scalar: float = 1.0) -> d
     return {k: vector.get(k, 0.0) * per_stat.get(k, 1.0) * scalar for k in vector}
 
 
+def apply_savant_hitter(vector: dict, savant_row: dict) -> dict:
+    """Phase 2: replace luck-influenced offense with Savant expected values.
+
+    - Expected hits  = xBA  × AB  (strips BABIP variance)
+    - Expected bases = xSLG × AB  (the league's primary stat → expected TB)
+    Hit-type cells (1b/2b/3b/hr) are scaled by the TB ratio so the mix stays
+    internally consistent. Skill stats (BB/SB/HBP/SO) and context stats (R/RBI)
+    are unchanged — they aren't quality-of-contact luck. Returns the vector
+    unchanged when there's no usable Savant row or no at-bats.
+    """
+    if not vector or not savant_row:
+        return vector
+    ab = vector.get("ab", 0.0)
+    xba = savant_row.get("xba", 0) or 0
+    xslg = savant_row.get("xslg", 0) or 0
+    if ab <= 0 or xba <= 0 or xslg <= 0:
+        return vector
+    adjusted = dict(vector)
+    adjusted["h"] = xba * ab
+    new_tb = xslg * ab
+    old_tb = vector.get("tb", 0.0)
+    adjusted["tb"] = new_tb
+    if old_tb > 0:
+        ratio = new_tb / old_tb
+        for k in ("1b", "2b", "3b", "hr"):
+            adjusted[k] = vector.get(k, 0.0) * ratio
+    return adjusted
+
+
 def get_projected_hitter_fpts(
     hitters: list,
     scoring: dict = None,
     stat_current: dict = None,
     stat_previous: dict = None,
+    savant_current: dict = None,
+    savant_previous: dict = None,
     season: int = 2026,
     period: int = 1,
 ) -> tuple:
-    """Baseline (Phase 1) hitter projections.
+    """Hitter projections (Phase 1 baseline + Phase 2 Savant de-luck).
 
     Args:
         hitters: list of {"name", "team", "gameDates": [...]} dicts. gameDates
@@ -282,19 +313,23 @@ def get_projected_hitter_fpts(
                  back to DEFAULT_HITTER_SCORING.
         stat_current / stat_previous: {name_lower: mlb_hitting_stat_obj} for the
                  current and previous seasons.
+        savant_current / savant_previous: {name_lower: batter expected-stats}
+                 from Baseball Savant; when present, H/TB are de-lucked (Phase 2).
 
     Returns (projections, details):
-        projections — {name: {"projFpts": period total, "projPerGame": float,
-                              "blendWeight": float, "games": int}}
-        details     — {name: {"seasonBase", "blendWeight", "perGame", "games",
-                              "total"}} breakdown for the frontend tooltip.
+        projections — {name: {"projFpts", "projPerGame", "blendWeight",
+                              "games", "modelType"}}
+        details     — {name: {"seasonBase", "modelType", "blendWeight",
+                              "perGame", "games", "total"}} for the tooltip.
 
-    Phases 2–10 (Savant de-luck, recent form, park, weather, platoon,
-    opposing-pitcher, BvP, volume) layer on top via apply_factors() per game.
+    Phases 3–10 (recent form, park, weather, platoon, opposing-pitcher, BvP,
+    volume) layer on top via apply_factors() per game.
     """
     scoring = scoring or dict(DEFAULT_HITTER_SCORING)
     stat_current = stat_current or {}
     stat_previous = stat_previous or {}
+    savant_current = savant_current or {}
+    savant_previous = savant_previous or {}
 
     projections = {}
     details = {}
@@ -311,13 +346,21 @@ def get_projected_hitter_fpts(
         v_cur = per_game_vector(cur, int(cur.get("gamesPlayed", 0))) if cur else None
         v_prev = per_game_vector(prev, int(prev.get("gamesPlayed", 0))) if prev else None
 
+        # Phase 2: Savant de-luck, applied to each season before blending.
+        model_type = "stats"
+        if v_cur is not None and name_key in savant_current:
+            v_cur = apply_savant_hitter(v_cur, savant_current[name_key])
+            model_type = "savant"
+        if v_prev is not None and name_key in savant_previous:
+            v_prev = apply_savant_hitter(v_prev, savant_previous[name_key])
+
         pa_cur = float((cur or {}).get("plateAppearances", 0) or 0)
         w_cur = pa_blend_weight(pa_cur)
 
         base_vector = blend_vectors(v_cur, v_prev, w_cur)
         season_base = apply_hitter_formula(base_vector, scoring)
 
-        # Phase 1: no matchup context — every game uses the season-rate vector.
+        # Phases 1–2: no matchup context — every game uses the season-rate vector.
         per_game = season_base
         total = round(per_game * n_games, 1)
 
@@ -326,9 +369,11 @@ def get_projected_hitter_fpts(
             "projPerGame": round(per_game, 2),
             "blendWeight": round(w_cur, 2),
             "games":       n_games,
+            "modelType":   model_type,
         }
         details[name] = {
             "seasonBase":  round(season_base, 2),
+            "modelType":   model_type,
             "blendWeight": round(w_cur, 2),
             "perGame":     round(per_game, 2),
             "games":       n_games,

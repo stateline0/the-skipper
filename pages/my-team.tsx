@@ -301,7 +301,7 @@ export default function MyTeam() {
   // ── Render ─────────────────────────────────────────────────────────────
   return (
     <>
-      <Head><title>My Team · The Skipper</title></Head>
+      <Head><title>Pitchers · The Skipper</title></Head>
 
       <style>{`
         input[type=number] {
@@ -319,7 +319,7 @@ export default function MyTeam() {
         {/* Page header */}
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 24, flexWrap: 'wrap', gap: 12 }}>
           <div>
-            <h1 style={{ fontSize: 22, fontWeight: 700, letterSpacing: '-0.03em', margin: 0, marginBottom: 6 }}>My Team</h1>
+            <h1 style={{ fontSize: 22, fontWeight: 700, letterSpacing: '-0.03em', margin: 0, marginBottom: 6 }}>Pitchers</h1>
             <p style={{ fontSize: 13, color: 'var(--ink-3)', margin: 0 }}>
               {teamName ? `${teamName} · ` : ''}{weekLabel}
             </p>
