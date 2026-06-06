@@ -9,7 +9,7 @@
 // projected season pace) plug into the same renderer. The table itself
 // stays renderer-only — all data shaping lives in the column defs.
 
-import { useMemo, useState } from 'react'
+import { useCallback, useMemo, useState } from 'react'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -63,6 +63,10 @@ export interface Pitcher {
 export interface StatsTableContext {
   fptsPerStart: Record<string, number>
   actualFpts: Record<string, Record<string, number>>
+  // Opens a tap-to-show popover anchored at the tapped element. Set by the
+  // table so cell renderers can surface their detail on touch (where the
+  // native hover `title` never fires). Undefined in the sort-only context.
+  openInfo?: (content: React.ReactNode, e: React.MouseEvent) => void
 }
 
 export interface PitcherColumn {
@@ -152,17 +156,28 @@ const LUCK_THRESHOLD = 0.010
 // Delta at which the line hits its steepest slope (a strong luck signal).
 const LUCK_FULL_SCALE = 0.030
 
-function LuckTrend({ wobaDiff }: { wobaDiff: number | undefined }) {
+function LuckTrend({ wobaDiff, onInfo }: {
+  wobaDiff: number | undefined
+  onInfo?: (content: React.ReactNode, e: React.MouseEvent) => void
+}) {
   if (wobaDiff === undefined || !Number.isFinite(wobaDiff)) {
     return <span style={{ color: 'var(--ink-3)' }}>—</span>
   }
   const up = wobaDiff > LUCK_THRESHOLD
   const down = wobaDiff < -LUCK_THRESHOLD
   const color = up ? 'var(--green)' : down ? 'var(--red)' : 'var(--ink-3)'
-  const tip =
-    up   ? `wOBAΔ ${fmtWobaDiff(wobaDiff)} — contact allowed has been unluckier than expected; results due to improve`
-    : down ? `wOBAΔ ${fmtWobaDiff(wobaDiff)} — contact allowed has been luckier than expected; regression risk`
-    : `wOBAΔ ${fmtWobaDiff(wobaDiff)} — actual and expected results are in line`
+  const label = up ? 'Trending up' : down ? 'Trending down' : 'On pace'
+  const meaning =
+    up   ? 'contact allowed has been unluckier than expected; results due to improve'
+    : down ? 'contact allowed has been luckier than expected; regression risk'
+    : 'actual and expected results are in line'
+  const tip = `wOBAΔ ${fmtWobaDiff(wobaDiff)} — ${meaning}`
+  const popover = (
+    <div>
+      <div style={{ fontWeight: 700, color, marginBottom: 4 }}>Luck · {label}</div>
+      <div>wOBAΔ <strong>{fmtWobaDiff(wobaDiff)}</strong> — {meaning}.</div>
+    </div>
+  )
 
   // Geometry: a 2-point line across the cell. SVG y grows downward, so a
   // positive (unlucky → improving) delta should END higher = smaller y.
@@ -177,7 +192,9 @@ function LuckTrend({ wobaDiff }: { wobaDiff: number | undefined }) {
 
   return (
     <svg width={W} height={H} viewBox={`0 0 ${W} ${H}`}
-      style={{ display: 'inline-block', verticalAlign: 'middle' }}
+      onClick={onInfo ? (e) => onInfo(popover, e) : undefined}
+      style={{ display: 'inline-block', verticalAlign: 'middle',
+               cursor: onInfo ? 'pointer' : 'default' }}
       role="img" aria-label={tip}>
       <title>{tip}</title>
       <line x1={x0} y1={y0} x2={x1} y2={y1}
@@ -192,7 +209,10 @@ function LuckTrend({ wobaDiff }: { wobaDiff: number | undefined }) {
 // with a dashed zero baseline so good vs blow-up starts read at a glance;
 // colored green/red by overall trend (last start vs first in the window), with
 // an endpoint dot. The per-start values + average live in the tooltip.
-function Sparkline({ values }: { values: number[] | null | undefined }) {
+function Sparkline({ values, onInfo }: {
+  values: number[] | null | undefined
+  onInfo?: (content: React.ReactNode, e: React.MouseEvent) => void
+}) {
   if (!values || values.length < 2) {
     return <span style={{ color: 'var(--ink-3)' }}>—</span>
   }
@@ -208,9 +228,24 @@ function Sparkline({ values }: { values: number[] | null | undefined }) {
   const trendColor = last >= values[0] ? 'var(--green)' : 'var(--red)'
   const avg = values.reduce((a, b) => a + b, 0) / n
   const tip = `Last ${n} starts FPTS: ${values.map(v => v.toFixed(0)).join(', ')} (avg ${avg.toFixed(1)})`
+  const popover = (
+    <div>
+      <div style={{ fontWeight: 700, marginBottom: 4 }}>Form · last {n} starts</div>
+      <div style={{ fontFamily: 'var(--mono)', color: 'var(--ink-2)' }}>
+        {values.map((v, i) => (
+          <span key={i} style={{ color: v >= 0 ? 'var(--green)' : 'var(--red)' }}>
+            {v.toFixed(0)}{i < n - 1 ? ', ' : ''}
+          </span>
+        ))}
+      </div>
+      <div style={{ marginTop: 4 }}>avg <strong>{avg.toFixed(1)}</strong> FPTS/start</div>
+    </div>
+  )
   return (
     <svg width={W} height={H} viewBox={`0 0 ${W} ${H}`}
-      style={{ display: 'inline-block', verticalAlign: 'middle' }}
+      onClick={onInfo ? (e) => onInfo(popover, e) : undefined}
+      style={{ display: 'inline-block', verticalAlign: 'middle',
+               cursor: onInfo ? 'pointer' : 'default' }}
       role="img" aria-label={tip}>
       <title>{tip}</title>
       <line x1={pad} y1={y(0)} x2={W - pad} y2={y(0)}
@@ -375,7 +410,7 @@ export const PITCHER_COLUMNS: PitcherColumn[] = [
     // pitchers (steepest green climb) first.
     key: 'luck', label: 'Luck', minWidth: 64,
     sortValue: (p) => p.savantExpected?.wobaDiff ?? NaN,
-    render: (p) => <LuckTrend wobaDiff={p.savantExpected?.wobaDiff} />,
+    render: (p, ctx) => <LuckTrend wobaDiff={p.savantExpected?.wobaDiff} onInfo={ctx.openInfo} />,
   },
   {
     key: 'barrelPct', label: 'Brl%', minWidth: 56, preferredDir: 'asc',
@@ -423,7 +458,7 @@ export const PITCHER_COLUMNS: PitcherColumn[] = [
       const h = p.fptsHistory
       return h && h.length ? h.reduce((a, b) => a + b, 0) / h.length : NaN
     },
-    render: (p) => <Sparkline values={p.fptsHistory} />,
+    render: (p, ctx) => <Sparkline values={p.fptsHistory} onInfo={ctx.openInfo} />,
   },
   {
     key: 'projFpts', label: 'Proj FPTS', minWidth: 84,
@@ -461,14 +496,25 @@ export const PITCHER_COLUMNS: PitcherColumn[] = [
     key: 'pace', label: 'Pace', minWidth: 72,
     sortValue: (p, ctx) => projectedPace(p, ctx) ?? NaN,
     render: (p, ctx) => (
-      <NumOrDash value={projectedPace(p, ctx)} render={(v) => (
-        <span
-          title="Projected full-season FPTS: season-to-date actual + model FPTS/start × estimated remaining starts (~32-start season). A rough comparator, not a prediction."
-          style={{ fontFamily: 'var(--mono)', fontWeight: 600, color: 'var(--ink-2)' }}
-        >
-          {v.toFixed(0)}
-        </span>
-      )} />
+      <NumOrDash value={projectedPace(p, ctx)} render={(v) => {
+        const tip = 'Projected full-season FPTS: season-to-date actual + model FPTS/start × estimated remaining starts (~32-start season). A rough comparator, not a prediction.'
+        const popover = (
+          <div>
+            <div style={{ fontWeight: 700, marginBottom: 4 }}>Pace · {v.toFixed(0)} FPTS</div>
+            <div>{tip}</div>
+          </div>
+        )
+        return (
+          <span
+            title={tip}
+            onClick={ctx.openInfo ? (e) => ctx.openInfo!(popover, e) : undefined}
+            style={{ fontFamily: 'var(--mono)', fontWeight: 600, color: 'var(--ink-2)',
+                     cursor: ctx.openInfo ? 'pointer' : 'default' }}
+          >
+            {v.toFixed(0)}
+          </span>
+        )
+      }} />
     ),
   },
 ]
@@ -499,6 +545,19 @@ export default function StatsTable({
 }: Props) {
   const [sortCol, setSortCol] = useState(defaultSortCol)
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>(defaultSortDir)
+  // Tap-to-show popover for cell detail (sparkline values, Luck/Pace help) —
+  // surfaces what the hover `title` can't reach on touch devices.
+  const [popover, setPopover] = useState<{ content: React.ReactNode; top: number; left: number } | null>(null)
+
+  const openInfo = useCallback((content: React.ReactNode, e: React.MouseEvent) => {
+    const rect = (e.currentTarget as Element).getBoundingClientRect()
+    const PW = 220
+    setPopover({
+      content,
+      top: rect.bottom + 6,
+      left: Math.max(8, Math.min(rect.left, window.innerWidth - PW - 8)),
+    })
+  }, [])
 
   function handleSort(col: PitcherColumn) {
     if (!col.sortValue && !col.stringValue) return
@@ -548,7 +607,7 @@ export default function StatsTable({
     return list
   }, [pitchers, sortCol, sortDir, columns, fptsPerStart, actualFpts])
 
-  const ctx: StatsTableContext = { fptsPerStart, actualFpts }
+  const ctx: StatsTableContext = { fptsPerStart, actualFpts, openInfo }
 
   // ── Styles ──
   const headerBase: React.CSSProperties = {
@@ -588,6 +647,7 @@ export default function StatsTable({
   }
 
   return (
+    <>
     <div style={{ overflowX: 'auto' }}>
       <table style={{ borderCollapse: 'collapse', width: '100%' }}>
         <thead>
@@ -636,5 +696,29 @@ export default function StatsTable({
         </tbody>
       </table>
     </div>
+
+    {/* Tap-to-show popover. Full-screen overlay catches the dismiss tap; the
+        box is fixed-positioned just under the tapped indicator. */}
+    {popover && (
+      <>
+        <div
+          onClick={() => setPopover(null)}
+          style={{ position: 'fixed', inset: 0, zIndex: 50 }}
+        />
+        <div
+          role="dialog"
+          style={{
+            position: 'fixed', top: popover.top, left: popover.left, zIndex: 51,
+            width: 220, background: 'var(--paper-2)', color: 'var(--ink)',
+            border: '1px solid var(--border)', borderRadius: 8,
+            boxShadow: 'var(--shadow)', padding: '10px 12px',
+            fontSize: 12, lineHeight: 1.45,
+          }}
+        >
+          {popover.content}
+        </div>
+      </>
+    )}
+    </>
   )
 }
