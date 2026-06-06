@@ -55,6 +55,7 @@ export interface Pitcher {
   startDates?: StartDate[]
   seasonStats?: SeasonStats | null
   savantExpected?: SavantExpected | null
+  fptsHistory?: number[] | null   // actual FPTS per start, oldest→newest (last ~10)
 }
 
 // Lookups the table needs but that don't live on the player object itself.
@@ -182,6 +183,41 @@ function LuckTrend({ wobaDiff }: { wobaDiff: number | undefined }) {
       <line x1={x0} y1={y0} x2={x1} y2={y1}
         stroke={color} strokeWidth={2} strokeLinecap="round" />
       <circle cx={x1} cy={y1} r={2.5} fill={color} />
+    </svg>
+  )
+}
+
+// Form sparkline — actual FPTS for each of a pitcher's last ~10 starts,
+// oldest→newest (assembled on the backend from game logs). Plots a real line
+// with a dashed zero baseline so good vs blow-up starts read at a glance;
+// colored green/red by overall trend (last start vs first in the window), with
+// an endpoint dot. The per-start values + average live in the tooltip.
+function Sparkline({ values }: { values: number[] | null | undefined }) {
+  if (!values || values.length < 2) {
+    return <span style={{ color: 'var(--ink-3)' }}>—</span>
+  }
+  const W = 76, H = 22, pad = 3
+  const n = values.length
+  const min = Math.min(0, ...values)
+  const max = Math.max(0, ...values)
+  const range = max - min || 1
+  const x = (i: number) => pad + (i / (n - 1)) * (W - 2 * pad)
+  const y = (v: number) => pad + (1 - (v - min) / range) * (H - 2 * pad)
+  const pts = values.map((v, i) => `${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(' ')
+  const last = values[n - 1]
+  const trendColor = last >= values[0] ? 'var(--green)' : 'var(--red)'
+  const avg = values.reduce((a, b) => a + b, 0) / n
+  const tip = `Last ${n} starts FPTS: ${values.map(v => v.toFixed(0)).join(', ')} (avg ${avg.toFixed(1)})`
+  return (
+    <svg width={W} height={H} viewBox={`0 0 ${W} ${H}`}
+      style={{ display: 'inline-block', verticalAlign: 'middle' }}
+      role="img" aria-label={tip}>
+      <title>{tip}</title>
+      <line x1={pad} y1={y(0)} x2={W - pad} y2={y(0)}
+        stroke="var(--border)" strokeWidth={1} strokeDasharray="2 2" />
+      <polyline points={pts} fill="none" stroke={trendColor}
+        strokeWidth={1.5} strokeLinejoin="round" strokeLinecap="round" />
+      <circle cx={x(n - 1)} cy={y(last)} r={2} fill={trendColor} />
     </svg>
   )
 }
@@ -378,6 +414,16 @@ export const PITCHER_COLUMNS: PitcherColumn[] = [
         </span>
       )
     },
+  },
+  {
+    // Recent-form sparkline: actual FPTS over the last ~10 starts. Sort by the
+    // window average so a desc click surfaces the hottest arms.
+    key: 'form', label: 'Form', minWidth: 88,
+    sortValue: (p) => {
+      const h = p.fptsHistory
+      return h && h.length ? h.reduce((a, b) => a + b, 0) / h.length : NaN
+    },
+    render: (p) => <Sparkline values={p.fptsHistory} />,
   },
   {
     key: 'projFpts', label: 'Proj FPTS', minWidth: 84,
