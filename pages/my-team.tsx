@@ -317,17 +317,17 @@ export default function MyTeam() {
       <div style={{ maxWidth: 1100 }}>
 
         {/* Page header */}
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 24 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 24, flexWrap: 'wrap', gap: 12 }}>
           <div>
             <h1 style={{ fontSize: 22, fontWeight: 700, letterSpacing: '-0.03em', margin: 0, marginBottom: 6 }}>My Team</h1>
             <p style={{ fontSize: 13, color: 'var(--ink-3)', margin: 0 }}>
               {teamName ? `${teamName} · ` : ''}{weekLabel}
-              {computedAt && (
-                <span style={{ opacity: 0.7 }}>
-                  {' · '}Updated {relativeTime(computedAt)}{loading ? ' · refreshing…' : ''}
-                </span>
-              )}
             </p>
+            {computedAt && (
+              <div style={{ fontSize: 12, color: 'var(--ink-3)', opacity: 0.7, marginTop: 2, whiteSpace: 'nowrap' }}>
+                Updated {relativeTime(computedAt)}{loading ? ' · refreshing…' : ''}
+              </div>
+            )}
           </div>
           <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
             {matchupPeriods.length > 0 && (
