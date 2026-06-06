@@ -9,7 +9,7 @@
 // projected season pace) plug into the same renderer. The table itself
 // stays renderer-only — all data shaping lives in the column defs.
 
-import { useMemo, useState } from 'react'
+import { useCallback, useMemo, useState } from 'react'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -29,6 +29,7 @@ export interface SeasonStats {
   bb9: number
   ip: number
   gs: number
+  seasonFptsToDate?: number  // season-to-date FPTS from season totals (backend)
 }
 
 // Combined Savant payload — expected stats + statcast. Each field is
@@ -54,6 +55,7 @@ export interface Pitcher {
   startDates?: StartDate[]
   seasonStats?: SeasonStats | null
   savantExpected?: SavantExpected | null
+  fptsHistory?: number[] | null   // actual FPTS per start, oldest→newest (last ~10)
 }
 
 // Lookups the table needs but that don't live on the player object itself.
@@ -61,6 +63,10 @@ export interface Pitcher {
 export interface StatsTableContext {
   fptsPerStart: Record<string, number>
   actualFpts: Record<string, Record<string, number>>
+  // Opens a tap-to-show popover anchored at the tapped element. Set by the
+  // table so cell renderers can surface their detail on touch (where the
+  // native hover `title` never fires). Undefined in the sort-only context.
+  openInfo?: (content: React.ReactNode, e: React.MouseEvent) => void
 }
 
 export interface PitcherColumn {
@@ -137,6 +143,167 @@ function NumOrDash({ value, render }: {
     return <span style={{ color: 'var(--ink-3)' }}>—</span>
   }
   return <>{render(value)}</>
+}
+
+// Luck lens over the wOBA-diff signal. wOBAΔ = expected wOBA − wOBA allowed:
+// positive means a pitcher's contact results have been unluckier than the
+// quality of contact warrants (results should improve), negative means they've
+// been riding good luck (regression risk). Rendered as a compact colored
+// trend line — slope direction shows up/flat/down, slope steepness scales with
+// the magnitude of the delta. The numeric value + interpretation are in the
+// tooltip. Threshold is 10 points of wOBA — below that the line reads flat/grey.
+const LUCK_THRESHOLD = 0.010
+// Delta at which the line hits its steepest slope (a strong luck signal).
+const LUCK_FULL_SCALE = 0.030
+
+function LuckTrend({ wobaDiff, onInfo }: {
+  wobaDiff: number | undefined
+  onInfo?: (content: React.ReactNode, e: React.MouseEvent) => void
+}) {
+  if (wobaDiff === undefined || !Number.isFinite(wobaDiff)) {
+    return <span style={{ color: 'var(--ink-3)' }}>—</span>
+  }
+  const up = wobaDiff > LUCK_THRESHOLD
+  const down = wobaDiff < -LUCK_THRESHOLD
+  const color = up ? 'var(--green)' : down ? 'var(--red)' : 'var(--ink-3)'
+  const label = up ? 'Trending up' : down ? 'Trending down' : 'On pace'
+  const meaning =
+    up   ? 'contact allowed has been unluckier than expected; results due to improve'
+    : down ? 'contact allowed has been luckier than expected; regression risk'
+    : 'actual and expected results are in line'
+  const tip = `wOBAΔ ${fmtWobaDiff(wobaDiff)} — ${meaning}`
+  const popover = (
+    <div>
+      <div style={{ fontWeight: 700, color, marginBottom: 4 }}>Luck · {label}</div>
+      <div>wOBAΔ <strong>{fmtWobaDiff(wobaDiff)}</strong> — {meaning}.</div>
+    </div>
+  )
+
+  // Geometry: a 2-point line across the cell. SVG y grows downward, so a
+  // positive (unlucky → improving) delta should END higher = smaller y.
+  const W = 46, H = 18, pad = 3
+  const maxRise = (H / 2) - pad
+  const norm = Math.max(-1, Math.min(1, wobaDiff / LUCK_FULL_SCALE))
+  const dy = norm * maxRise
+  const midY = H / 2
+  const x0 = pad, x1 = W - pad
+  const y0 = midY + dy / 2   // left endpoint
+  const y1 = midY - dy / 2   // right endpoint (rises for positive delta)
+
+  return (
+    <svg width={W} height={H} viewBox={`0 0 ${W} ${H}`}
+      onClick={onInfo ? (e) => onInfo(popover, e) : undefined}
+      style={{ display: 'inline-block', verticalAlign: 'middle',
+               cursor: onInfo ? 'pointer' : 'default' }}
+      role="img" aria-label={tip}>
+      <title>{tip}</title>
+      <line x1={x0} y1={y0} x2={x1} y2={y1}
+        stroke={color} strokeWidth={2} strokeLinecap="round" />
+      <circle cx={x1} cy={y1} r={2.5} fill={color} />
+    </svg>
+  )
+}
+
+// Form sparkline — actual FPTS for each of a pitcher's last ~10 starts,
+// oldest→newest (assembled on the backend from game logs). Plots a real line
+// with a dashed zero baseline so good vs blow-up starts read at a glance.
+// Colored by RECENT form vs the season baseline: the last-5-start average
+// against the pitcher's season FPTS/start (seasonFptsToDate ÷ gs) — green when
+// running hotter than the season norm, red when colder, grey within a
+// dead-band. Per-start values + the comparison live in the tap/hover detail.
+const FORM_DEADBAND = 1.0  // FPTS — |L5 avg − season avg| within this reads flat/grey
+
+function Sparkline({ values, seasonAvg, onInfo }: {
+  values: number[] | null | undefined
+  seasonAvg?: number
+  onInfo?: (content: React.ReactNode, e: React.MouseEvent) => void
+}) {
+  if (!values || values.length < 2) {
+    return <span style={{ color: 'var(--ink-3)' }}>—</span>
+  }
+  const W = 76, H = 22, pad = 3
+  const n = values.length
+  const min = Math.min(0, ...values)
+  const max = Math.max(0, ...values)
+  const range = max - min || 1
+  const x = (i: number) => pad + (i / (n - 1)) * (W - 2 * pad)
+  const y = (v: number) => pad + (1 - (v - min) / range) * (H - 2 * pad)
+  const pts = values.map((v, i) => `${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(' ')
+  const last = values[n - 1]
+
+  // Recent form: last 5 starts (or fewer if that's all we have).
+  const l5 = values.slice(-5)
+  const l5avg = l5.reduce((a, b) => a + b, 0) / l5.length
+
+  // Color by L5 vs season average, with a dead-band for "in line".
+  let formColor = 'var(--ink-3)'
+  let verdict = 'in line with season'
+  if (seasonAvg !== undefined) {
+    const delta = l5avg - seasonAvg
+    if (delta > FORM_DEADBAND)       { formColor = 'var(--green)'; verdict = 'hotter than season' }
+    else if (delta < -FORM_DEADBAND) { formColor = 'var(--red)';   verdict = 'colder than season' }
+  }
+  const seasonStr = seasonAvg !== undefined ? ` vs season ${seasonAvg.toFixed(1)}` : ''
+  const tip = `Last ${n} starts. L5 avg ${l5avg.toFixed(1)}${seasonStr} — ${verdict}`
+  const popover = (
+    <div>
+      <div style={{ fontWeight: 700, color: formColor, marginBottom: 4 }}>Form · {verdict}</div>
+      <div style={{ fontFamily: 'var(--mono)', color: 'var(--ink-2)' }}>
+        {values.map((v, i) => (
+          <span key={i} style={{ color: v >= 0 ? 'var(--green)' : 'var(--red)' }}>
+            {v.toFixed(0)}{i < n - 1 ? ', ' : ''}
+          </span>
+        ))}
+      </div>
+      <div style={{ marginTop: 4 }}>
+        L5 avg <strong>{l5avg.toFixed(1)}</strong>
+        {seasonAvg !== undefined && <> vs season <strong>{seasonAvg.toFixed(1)}</strong>/start</>}
+      </div>
+    </div>
+  )
+  return (
+    <svg width={W} height={H} viewBox={`0 0 ${W} ${H}`}
+      onClick={onInfo ? (e) => onInfo(popover, e) : undefined}
+      style={{ display: 'inline-block', verticalAlign: 'middle',
+               cursor: onInfo ? 'pointer' : 'default' }}
+      role="img" aria-label={tip}>
+      <title>{tip}</title>
+      <line x1={pad} y1={y(0)} x2={W - pad} y2={y(0)}
+        stroke="var(--border)" strokeWidth={1} strokeDasharray="2 2" />
+      <polyline points={pts} fill="none" stroke={formColor}
+        strokeWidth={1.5} strokeLinejoin="round" strokeLinecap="round" />
+      <circle cx={x(n - 1)} cy={y(last)} r={2} fill={formColor} />
+    </svg>
+  )
+}
+
+// Projected full-season FPTS: season-to-date actual + model FPTS/start ×
+// estimated remaining starts. A rough comparator (not a prediction) — remaining
+// starts assume a healthy ~32-start season. Only meaningful for pitchers who've
+// actually started (gs > 0); relievers and unstarted arms return undefined so
+// the cell shows an em-dash rather than a fictional season total.
+const FULL_SEASON_STARTS = 32
+
+// Season actual FPTS per start = season-to-date FPTS ÷ games started. The
+// baseline the Form sparkline colors against (NOT the FPTS/G column, which is
+// the model's projected per-start). Undefined for pitchers with no starts.
+function seasonAvgPerStart(p: Pitcher): number | undefined {
+  const s = p.seasonStats
+  if (!s || !s.gs || s.gs <= 0 || !Number.isFinite(s.seasonFptsToDate as number)) {
+    return undefined
+  }
+  return (s.seasonFptsToDate as number) / s.gs
+}
+
+function projectedPace(p: Pitcher, ctx: StatsTableContext): number | undefined {
+  const s = p.seasonStats
+  if (!s || !s.gs || s.gs <= 0 || !Number.isFinite(s.seasonFptsToDate as number)) {
+    return undefined
+  }
+  const perStart = ctx.fptsPerStart[p.name]
+  if (perStart === undefined) return undefined
+  const remaining = Math.max(0, FULL_SEASON_STARTS - s.gs)
+  return (s.seasonFptsToDate as number) + perStart * remaining
 }
 
 // ─── Column definitions ──────────────────────────────────────────────────────
@@ -269,6 +436,14 @@ export const PITCHER_COLUMNS: PitcherColumn[] = [
     ),
   },
   {
+    // Colored trend-line indicator derived from the wOBAΔ signal next to it.
+    // Sort by the raw delta so a desc click surfaces the most due-to-improve
+    // pitchers (steepest green climb) first.
+    key: 'luck', label: 'Luck', minWidth: 64,
+    sortValue: (p) => p.savantExpected?.wobaDiff ?? NaN,
+    render: (p, ctx) => <LuckTrend wobaDiff={p.savantExpected?.wobaDiff} onInfo={ctx.openInfo} />,
+  },
+  {
     key: 'barrelPct', label: 'Brl%', minWidth: 56, preferredDir: 'asc',
     sortValue: (p) => p.savantExpected?.barrelPct ?? NaN,
     render: (p) => (
@@ -307,6 +482,16 @@ export const PITCHER_COLUMNS: PitcherColumn[] = [
     },
   },
   {
+    // Recent-form sparkline: actual FPTS over the last ~10 starts. Sort by the
+    // window average so a desc click surfaces the hottest arms.
+    key: 'form', label: 'Form', minWidth: 88,
+    sortValue: (p) => {
+      const h = p.fptsHistory
+      return h && h.length ? h.reduce((a, b) => a + b, 0) / h.length : NaN
+    },
+    render: (p, ctx) => <Sparkline values={p.fptsHistory} seasonAvg={seasonAvgPerStart(p)} onInfo={ctx.openInfo} />,
+  },
+  {
     key: 'projFpts', label: 'Proj FPTS', minWidth: 84,
     sortValue: (p) => p.projFpts ?? 0,
     render: (p) => (
@@ -336,6 +521,33 @@ export const PITCHER_COLUMNS: PitcherColumn[] = [
       )
     },
   },
+  {
+    // Projected full-season FPTS pace — a comparator, not a prediction.
+    // Blank (em-dash) for non-starters, where it would be meaningless.
+    key: 'pace', label: 'Pace', minWidth: 72,
+    sortValue: (p, ctx) => projectedPace(p, ctx) ?? NaN,
+    render: (p, ctx) => (
+      <NumOrDash value={projectedPace(p, ctx)} render={(v) => {
+        const tip = 'Projected full-season FPTS: season-to-date actual + model FPTS/start × estimated remaining starts (~32-start season). A rough comparator, not a prediction.'
+        const popover = (
+          <div>
+            <div style={{ fontWeight: 700, marginBottom: 4 }}>Pace · {v.toFixed(0)} FPTS</div>
+            <div>{tip}</div>
+          </div>
+        )
+        return (
+          <span
+            title={tip}
+            onClick={ctx.openInfo ? (e) => ctx.openInfo!(popover, e) : undefined}
+            style={{ fontFamily: 'var(--mono)', fontWeight: 600, color: 'var(--ink-2)',
+                     cursor: ctx.openInfo ? 'pointer' : 'default' }}
+          >
+            {v.toFixed(0)}
+          </span>
+        )
+      }} />
+    ),
+  },
 ]
 
 // Patch FPTS/G sortValue to use the actual ctx lookup. Done out-of-line so the
@@ -364,6 +576,19 @@ export default function StatsTable({
 }: Props) {
   const [sortCol, setSortCol] = useState(defaultSortCol)
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>(defaultSortDir)
+  // Tap-to-show popover for cell detail (sparkline values, Luck/Pace help) —
+  // surfaces what the hover `title` can't reach on touch devices.
+  const [popover, setPopover] = useState<{ content: React.ReactNode; top: number; left: number } | null>(null)
+
+  const openInfo = useCallback((content: React.ReactNode, e: React.MouseEvent) => {
+    const rect = (e.currentTarget as Element).getBoundingClientRect()
+    const PW = 220
+    setPopover({
+      content,
+      top: rect.bottom + 6,
+      left: Math.max(8, Math.min(rect.left, window.innerWidth - PW - 8)),
+    })
+  }, [])
 
   function handleSort(col: PitcherColumn) {
     if (!col.sortValue && !col.stringValue) return
@@ -413,7 +638,7 @@ export default function StatsTable({
     return list
   }, [pitchers, sortCol, sortDir, columns, fptsPerStart, actualFpts])
 
-  const ctx: StatsTableContext = { fptsPerStart, actualFpts }
+  const ctx: StatsTableContext = { fptsPerStart, actualFpts, openInfo }
 
   // ── Styles ──
   const headerBase: React.CSSProperties = {
@@ -453,6 +678,7 @@ export default function StatsTable({
   }
 
   return (
+    <>
     <div style={{ overflowX: 'auto' }}>
       <table style={{ borderCollapse: 'collapse', width: '100%' }}>
         <thead>
@@ -501,5 +727,29 @@ export default function StatsTable({
         </tbody>
       </table>
     </div>
+
+    {/* Tap-to-show popover. Full-screen overlay catches the dismiss tap; the
+        box is fixed-positioned just under the tapped indicator. */}
+    {popover && (
+      <>
+        <div
+          onClick={() => setPopover(null)}
+          style={{ position: 'fixed', inset: 0, zIndex: 50 }}
+        />
+        <div
+          role="dialog"
+          style={{
+            position: 'fixed', top: popover.top, left: popover.left, zIndex: 51,
+            width: 220, background: 'var(--paper-2)', color: 'var(--ink)',
+            border: '1px solid var(--border)', borderRadius: 8,
+            boxShadow: 'var(--shadow)', padding: '10px 12px',
+            fontSize: 12, lineHeight: 1.45,
+          }}
+        >
+          {popover.content}
+        </div>
+      </>
+    )}
+    </>
   )
 }

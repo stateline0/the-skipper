@@ -6,7 +6,7 @@ import StatsTable from '../components/StatsTable'
 
 type RosterTab = 'schedule' | 'stats'
 
-const CACHE_VERSION = 7 // bump this whenever the API response shape changes
+const CACHE_VERSION = 9 // bump this whenever the API response shape changes
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 interface RosterSP {
@@ -97,6 +97,7 @@ export default function MyTeam() {
   // a stats-only view of the same data. Lives in component state — no
   // need to persist to sessionStorage; the user re-picks per visit.
   const [activeTab, setActiveTab] = useState<RosterTab>('schedule')
+  const [relieverTab, setRelieverTab] = useState<RosterTab>('schedule')
 
   // ── Derived values ─────────────────────────────────────────────────────
   const weekLabel = getWeekRange(weekStart, weekEnd)
@@ -467,16 +468,46 @@ export default function MyTeam() {
                     fontSize: 10, fontFamily: 'var(--mono)', fontWeight: 500,
                     letterSpacing: '0.1em', color: 'var(--ink-3)', textTransform: 'uppercase',
                   }}>Your relievers</div>
-                  {teamSavesTotal > 0 && (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                    {teamSavesTotal > 0 && (
+                      <div style={{
+                        fontSize: 11, fontFamily: 'var(--mono)', fontWeight: 700,
+                        color: 'var(--ink-2)', background: 'var(--paper-2)',
+                        borderRadius: 99, padding: '3px 10px',
+                      }}>
+                        🔒 {teamSavesTotal} team SV this period
+                      </div>
+                    )}
+                    {/* Tab toggle — mirrors the SP card (Schedule / Stats). */}
                     <div style={{
-                      fontSize: 11, fontFamily: 'var(--mono)', fontWeight: 700,
-                      color: 'var(--ink-2)', background: 'var(--paper-2)',
-                      borderRadius: 99, padding: '3px 10px',
+                      display: 'flex', gap: 2,
+                      background: 'var(--paper-2)', padding: 3,
+                      borderRadius: 8,
                     }}>
-                      🔒 {teamSavesTotal} team SV this period
+                      {(['schedule', 'stats'] as const).map(tab => {
+                        const isActive = relieverTab === tab
+                        return (
+                          <button
+                            key={tab}
+                            onClick={() => setRelieverTab(tab)}
+                            style={{
+                              fontFamily: 'var(--sans)', fontSize: 12, fontWeight: 600,
+                              padding: '5px 14px', borderRadius: 6,
+                              border: 'none', cursor: 'pointer',
+                              background: isActive ? 'var(--white)' : 'transparent',
+                              color: isActive ? 'var(--ink)' : 'var(--ink-3)',
+                              boxShadow: isActive ? 'var(--shadow)' : 'none',
+                              transition: 'all 0.15s',
+                            }}
+                          >
+                            {tab === 'schedule' ? 'Schedule' : 'Stats'}
+                          </button>
+                        )
+                      })}
                     </div>
-                  )}
+                  </div>
                 </div>
+                {relieverTab === 'schedule' ? (
                 <ScheduleGrid
                   pitchers={rosterRelievers}
                   schedule={schedule}
@@ -489,6 +520,13 @@ export default function MyTeam() {
                   lockedProjections={lockedProjections}
                   liveStats={liveStats}
                 />
+                ) : (
+                  <StatsTable
+                    pitchers={rosterRelievers}
+                    fptsPerStart={fptsPerStart}
+                    actualFpts={actualFpts}
+                  />
+                )}
               </div>
             )}
 

@@ -55,14 +55,30 @@ def _build_season_stats(stat_dict: dict) -> dict | None:
         return None
     so = int(stat_dict.get("strikeOuts", 0))
     bb = int(stat_dict.get("baseOnBalls", 0))
+    w  = int(stat_dict.get("wins",   0))
+    l  = int(stat_dict.get("losses", 0))
+    # Season-to-date fantasy points from season totals, using the league's
+    # pitching scoring (IP×3, K×1, H/BB/HBP×-1, ER×-2, SV×5, W×5, L×-5) —
+    # the same weights projection.py applies per start. Feeds the Stats-tab
+    # full-season pace column. (HBP is "hitBatsmen" in the MLB Stats API
+    # pitching group, with "hitByPitch" as an older fallback.)
+    hits = _safe_float(stat_dict.get("hits", 0))
+    er   = _safe_float(stat_dict.get("earnedRuns", 0))
+    hbp  = _safe_float(stat_dict.get("hitBatsmen", stat_dict.get("hitByPitch", 0)))
+    sv   = _safe_float(stat_dict.get("saves", 0))
+    season_fpts = (
+        ip * 3 + so * 1 + hits * -1 + bb * -1
+        + er * -2 + hbp * -1 + sv * 5 + w * 5 + l * -5
+    )
     return {
-        "w":   int(stat_dict.get("wins",   0)),
-        "l":   int(stat_dict.get("losses", 0)),
+        "w":   w,
+        "l":   l,
         "era": _safe_float(stat_dict.get("era", 0)),
         "k9":  round(so / ip * 9, 2),
         "bb9": round(bb / ip * 9, 2),
         "ip":  round(ip, 1),
         "gs":  int(stat_dict.get("gamesStarted", 0)),
+        "seasonFptsToDate": round(season_fpts, 1),
     }
 
 
@@ -91,6 +107,28 @@ def _build_savant_expected(expected: dict, statcast: dict,
     if whiff_pct:
         out["whiffPct"] = round(whiff_pct, 1)
     return out if out else None
+
+
+def _build_fpts_history(games: list, n_starts: int = 10) -> list | None:
+    """Per-start FPTS series for the Stats-tab Form sparkline. Filters the
+    pitcher's game log to actual starts (gs >= 1), takes the last n_starts in
+    chronological order (oldest→newest), and scores each line with the league
+    pitching weights — the same formula as compute_recent_form_fpts /
+    projection.py. Returns the raw per-start FPTS list, or None when there
+    aren't at least two starts to draw a meaningful line."""
+    if not games:
+        return None
+    starts = [g for g in games if g.get("gs", 0) >= 1]
+    if len(starts) < 2:
+        return None
+    history = []
+    for g in starts[-n_starts:]:
+        fpts = (
+            g["ip"] * 3 + g["so"] * 1 + g["h"] * -1 + g["bb"] * -1
+            + g["er"] * -2 + g["hb"] * -1 + g["w"] * 5 + g["l"] * -5 + g["sv"] * 5
+        )
+        history.append(round(fpts, 1))
+    return history
 
 
 # ── Roster helpers ────────────────────────────────────────────────────
@@ -388,6 +426,7 @@ def get_league_data(team_id: int, week: int) -> dict:
             savant_statcast_current.get(name_key, {}),
             savant_whiff_current.get(name_key, 0.0),
         )
+        fpts_history     = _build_fpts_history(game_logs_current.get(name_key, []))
 
         roster_sps.append({
             "name":         player_name,
@@ -407,6 +446,7 @@ def get_league_data(team_id: int, week: int) -> dict:
             "percentOwned":   percent_owned_by_player.get(player_id, 0.0),
             "seasonStats":    season_stats,
             "savantExpected": savant_expected,
+            "fptsHistory":    fpts_history,
         })
 
     # Diagnostic for the Dylan Cease Brl%-missing case (BACKLOG). Brl% is
@@ -536,6 +576,7 @@ def get_league_data(team_id: int, week: int) -> dict:
                 savant_statcast_current.get(fa_name_key, {}),
                 savant_whiff_current.get(fa_name_key, 0.0),
             )
+            fa_fpts_history    = _build_fpts_history(game_logs_current.get(fa_name_key, []))
 
             free_agents.append({
                 "name":           fa_name,
@@ -550,6 +591,7 @@ def get_league_data(team_id: int, week: int) -> dict:
                 "checked":        player.get("ownership", {}).get("percentOwned", 0) >= 15,
                 "seasonStats":    fa_season_stats,
                 "savantExpected": fa_savant_expected,
+                "fptsHistory":    fa_fpts_history,
             })
 
     # ── Fetch actual FPTS for past dates + today (for live stats) ────
@@ -732,6 +774,7 @@ def get_league_data(team_id: int, week: int) -> dict:
             savant_statcast_current.get(dp_name_key, {}),
             savant_whiff_current.get(dp_name_key, 0.0),
         )
+        dp_fpts_history    = _build_fpts_history(game_logs_current.get(dp_name_key, []))
 
         dropped_players.append({
             "name":           name,
@@ -748,6 +791,7 @@ def get_league_data(team_id: int, week: int) -> dict:
             "daysOnTeam":     info["days_on_team"],
             "seasonStats":    dp_season_stats,
             "savantExpected": dp_savant_expected,
+            "fptsHistory":    dp_fpts_history,
         })
         # Rostered-window invariant: prune dropped-player Act FPTS to dates the
         # player was actually on our roster (mirror of the startDates
