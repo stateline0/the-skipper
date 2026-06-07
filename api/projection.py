@@ -287,9 +287,15 @@ def get_projected_fpts(player_starts: list, team_woba_factors: dict = None,
         #
         # W/L per start:
         #   base_no_wl = all stats except W/L
-        #   w_contrib  = raw_w_rate × win_prob × STARTER_WIN_SHARE × 5
-        #   l_contrib  = raw_l_rate × (1 - win_prob) × STARTER_WIN_SHARE × (-5)
+        #   decision_rate = raw_w_rate + raw_l_rate  (how often a decision)
+        #   w_contrib  = decision_rate × win_prob       × STARTER_WIN_SHARE × 5
+        #   l_contrib  = decision_rate × (1 - win_prob) × STARTER_WIN_SHARE × (-5)
         #   start_proj = (base_no_wl + w_contrib + l_contrib) × woba × park
+        # Net W/L = decision_rate × STARTER_WIN_SHARE × 5 × (2·win_prob − 1):
+        # the SIGN tracks the matchup (positive when favored, 0 at a coin flip,
+        # negative as an underdog), not the pitcher's historical record. The old
+        # split (raw_w × wp − raw_l × (1−wp)) let a losing-record pitcher show a
+        # negative W/L impact even when favored — see BACKLOG / session 32.
         start_dates = player_info.get("startDates", [])
         per_start_details = []
         if not is_rp and start_dates:
@@ -366,9 +372,13 @@ def get_projected_fpts(player_starts: list, team_woba_factors: dict = None,
                 park_mult    = env_to_pitcher_mult(park_factor)
                 weather_mult = env_to_pitcher_mult(weather_factor)
 
-                # W/L contribution for this specific start
-                w_contrib = raw_w * win_prob * STARTER_WIN_SHARE * 5
-                l_contrib = raw_l * (1 - win_prob) * STARTER_WIN_SHARE * (-5)
+                # W/L contribution for this specific start. Expected wins and
+                # losses both scale by the pitcher's total decision rate, split
+                # by win prob — so the net sign follows the matchup, not the
+                # pitcher's W-L record (magnitude stays pitcher-specific).
+                decision_rate = raw_w + raw_l
+                w_contrib = decision_rate * win_prob       * STARTER_WIN_SHARE * 5
+                l_contrib = decision_rate * (1 - win_prob) * STARTER_WIN_SHARE * (-5)
                 start_base = base_no_wl + w_contrib + l_contrib
                 start_proj = start_base * woba_mult * park_mult * weather_mult
                 adjusted_total += start_proj
@@ -448,8 +458,13 @@ def get_projected_fpts(player_starts: list, team_woba_factors: dict = None,
                             ) or DEFAULT_WIN_PROB
                         else:
                             lock_wp = DEFAULT_WIN_PROB
-                        w_adj = blended["w"] * lock_wp * STARTER_WIN_SHARE
-                        l_adj = blended["l"] * (1 - lock_wp) * STARTER_WIN_SHARE
+                        # Mirror the live W/L fix: expected W and L both scale
+                        # by the total decision rate split by win prob, so the
+                        # net (w_adj×5 + l_adj×−5 = decision_rate × SWS × 5 ×
+                        # (2·lock_wp−1)) tracks the matchup, not the W-L record.
+                        decision_rate = blended["w"] + blended["l"]
+                        w_adj = decision_rate * lock_wp * STARTER_WIN_SHARE
+                        l_adj = decision_rate * (1 - lock_wp) * STARTER_WIN_SHARE
                         # Mirror the live calc: recent-form-scaled skill base and
                         # run-environment factors converted to pitcher multipliers.
                         lock_base = (

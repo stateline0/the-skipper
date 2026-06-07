@@ -48,6 +48,7 @@ const MILESTONES: Array<{ date: string; label: string }> = [
   { date: '2026-04-18', label: 'Blended wOBA + weather' },
   { date: '2026-04-19', label: 'PR G: recentForm fix' },
   { date: '2026-06-06', label: 'Factor directions + recent form per-start' },
+  { date: '2026-06-07', label: 'W/L sign tracks win prob' },
 ]
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────

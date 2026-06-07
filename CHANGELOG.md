@@ -2,6 +2,44 @@
 
 ---
 
+## Session 33 — June 7, 2026 — W/L impact sign fix
+
+Fixed a review-flagged projection-model bug: the per-start W/L impact's **sign**
+tracked the pitcher's historical record instead of the matchup (PR #146).
+
+### What shipped
+- **`projection.py` (live + lock paths).** The old per-start W/L was
+  `raw_w × win_prob × SWS × 5  +  raw_l × (1−win_prob) × SWS × (−5)`, where
+  `raw_w`/`raw_l` are the pitcher's separate historical W/L *rates*. Because the
+  win and loss terms used different rates, a losing-record pitcher could show a
+  **negative** W/L impact even when favored (observed: 56% win prob → −0.1 pts).
+  Now both terms scale by the **total decision rate** `(raw_w + raw_l)` split by
+  win prob, so net `= decision_rate × SWS × 5 × (2·win_prob − 1)` — **positive
+  when favored, 0 at a coin flip, negative as an underdog**, magnitude still
+  pitcher-specific. The same edit is mirrored in the per-start lock path.
+- **`MaeTimelineChart.tsx`** — added a `2026-06-07 · "W/L sign tracks win prob"`
+  milestone marker so the projection-output shift is annotated on the chart.
+
+### Key learnings this session
+- **The fix dropped into the existing shape with zero downstream churn.** The
+  corrected net, `decision_rate × SWS × 5 × (2·wp−1)`, factors *exactly* back
+  into the stored `w×5 + l×−5` decomposition — so the locked v2 breakdown's
+  `stats.w`/`stats.l` (which `accuracy.py` diffs against actual W/L) kept their
+  shape and even became a cleaner expected-W/L estimate, and the tooltip's
+  `wlContrib` (net) just flipped to the right sign. Re-deriving the algebra
+  before editing found the change that touched the least.
+- **Reproduce the reported number before and after.** A 5-line script confirmed
+  the old formula reproduced the exact −0.1 case at 56% win prob and the new one
+  returns +0.19 — turning "the sign looks wrong" into a verified before/after.
+- **Forward-only, like every locked-value change.** Existing `proj2:` locks keep
+  their old W/L until they cycle out of the rolling window, hence the chart
+  milestone marker rather than a silent discontinuity.
+
+### Carried forward
+- **Hitter accuracy** remains the next big chunk.
+
+---
+
 ## Session 32 — June 7, 2026 — Forecaster scraper un-broken
 
 Fixed the ESPN Forecaster scraper, dead since ~mid-May, which had flatlined the
