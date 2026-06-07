@@ -44,8 +44,8 @@ hitter) — the opposite of the pitcher model's `env_to_pitcher_mult()` inversio
 | **Wire-in** | `/api/hitters` endpoint + Hitters page consuming real roster/schedule/projections (falls back to mock) | **done** |
 | 2 | Savant expected-stat de-luck (xBA/xSLG) | **done** (`fetch_expected_stats_batter` + `apply_savant_hitter`: expected H = xBA·AB, expected TB = xSLG·AB) |
 | 3 | Recent form (weighted last ~15 games, 60/40) | **done** (`compute_recent_form_hitter` + `fetch_game_logs_hitting`, blended into `projPerGame`) |
-| 4 | Park factor (direct, per-game) | planned |
-| 5 | Weather (temp; reuse `get_weather_factor`) | planned |
+| 4 | Park factor (direct, per-game) | **done** (`get_park_factor` applied un-inverted) |
+| 5 | Weather (temp; reuse `get_weather_factor`) | **done** (precomputed per host-park/future-date, applied direct) |
 | 6 | Platoon (L/R) splits vs the probable starter | **done** (`platoon_multiplier` + per-day factor stack; per-day detail popover) |
 | 7 | Opposing-pitcher quality (xwOBA-against) | **done** (`opp_pitcher_multiplier` vs league avg; + `fetch_probable_pitcher_ids` → 100% starter-id/handedness coverage) |
 | 8 | Regressed batter-vs-pitcher history | planned |

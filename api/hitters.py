@@ -24,9 +24,11 @@ import requests
 from http.server import BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs
 from datetime import datetime, timedelta, timezone
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__)))
-from mlb import get_starts_for_players, MATCHUP_PERIODS, fetch_probable_pitcher_ids
+from mlb import get_starts_for_players, MATCHUP_PERIODS, fetch_probable_pitcher_ids, get_park_factor
+from weather import get_weather_factor
 from fetcher import (
     get_headers_and_cookies, get_pro_team_map, load_hitter_stats,
     load_hitter_game_logs, load_player_hands, load_hitter_splits,
@@ -39,10 +41,12 @@ from projection_hitter import (
 
 
 def _build_days(name, team, game_dates, schedule, base, hands, splits, overall_ops,
-                opp_savant, league_xwoba):
+                opp_savant, league_xwoba, weather_map, today_iso):
     """Per-day cells with the matchup factor stack:
       Phase 6 — platoon (batter vs the day's probable-starter hand)
       Phase 7 — opposing-starter quality (their xwOBA-against vs league)
+      Phase 4 — park factor (host park; applied directly, un-inverted)
+      Phase 5 — weather (host park, future days; warm = more offense)
     day proj = base × Π(factors); each factor is {label, mult} so the frontend
     popover lists Base → factors → Proj."""
     days = []
@@ -67,6 +71,21 @@ def _build_days(name, team, game_dates, schedule, base, hands, splits, overall_o
             if qm != 1.0:
                 factors.append({"label": "Opp SP quality", "mult": qm})
                 mult *= qm
+        # Host park (home team's park): hitter's team if home, else the opponent.
+        park_team = team if game.get("is_home", True) else game.get("opponent", "")
+        if park_team:
+            pf = get_park_factor(park_team)        # run-env factor, applied directly
+            if pf != 1.0:
+                factors.append({"label": f"Park ({park_team})", "mult": round(pf, 3)})
+                mult *= pf
+            if game.get("status") == "scheduled":   # unplayed → forecast applies
+                wx = weather_map.get((park_team, d))
+                wf = wx.get("factor", 1.0) if wx else 1.0
+                if wf and wf != 1.0:
+                    temp = wx.get("temp_f") if wx else None
+                    label = f"Weather ({round(temp)}°F)" if temp else "Weather"
+                    factors.append({"label": label, "mult": round(wf, 3)})
+                    mult *= wf
         days.append({
             "date": d,
             "opp": game.get("opponent", ""),
@@ -336,6 +355,31 @@ def get_hitter_data(team_id: int, week: int) -> dict:
         pass
     _xw = [v.get("xwoba", 0) for v in pitch_savant.values() if isinstance(v, dict) and v.get("xwoba")]
     league_xwoba = round(sum(_xw) / len(_xw), 3) if _xw else None
+
+    # Phase 4/5: park is a cheap dict lookup; weather is precomputed in parallel
+    # for the unique (host park, future date) combos so it's not fetched inside
+    # the per-hitter loop. Keyed by the home team's abbrev (the host park).
+    today_iso = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    wx_targets = set()
+    for d in period_dates:
+        for tm_abbrev, g in schedule.get(d, {}).items():
+            # Gate on game status ("scheduled" = not yet played) rather than a
+            # UTC date compare, so tonight's local games (already UTC-tomorrow)
+            # still get a forecast.
+            if g.get("is_home") and g.get("status") == "scheduled":
+                wx_targets.add((tm_abbrev, d))
+    weather_map = {}
+    if wx_targets:
+        try:
+            with ThreadPoolExecutor(max_workers=12) as ex:
+                futs = {ex.submit(get_weather_factor, p, dd): (p, dd) for (p, dd) in wx_targets}
+                for f in as_completed(futs):
+                    try:
+                        weather_map[futs[f]] = f.result()
+                    except Exception:
+                        pass
+        except Exception as e:
+            print(f"[hitters.py] weather precompute failed: {e}")
     proj, _details = get_projected_hitter_fpts(
         [{"name": h["name"], "team": h["team"], "gameDates": h["gameDates"]} for h in hitters_meta],
         scoring=scoring,
@@ -358,7 +402,8 @@ def get_hitter_data(team_id: int, week: int) -> dict:
         bats = (hands.get(strip_accents(name)) or {}).get("bats") or h["bats"]
         # Per-day cells with the matchup factor stack (Phase 6 platoon + Phase 7 opp SP).
         days = _build_days(name, h["team"], h["gameDates"], schedule, per_game,
-                           hands, splits, overall_ops, pitch_savant, league_xwoba)
+                           hands, splits, overall_ops, pitch_savant, league_xwoba,
+                           weather_map, today_iso)
         proj_week = round(sum(d["proj"] for d in days), 1)
         roster_hitters.append({
             "name":        name,
@@ -385,7 +430,7 @@ def get_hitter_data(team_id: int, week: int) -> dict:
         base, headers, cookies, PRO_TEAM_MAP, data.get("scoringPeriodId", week),
         schedule, period_dates, scoring, hitting_current, hitting_previous,
         savant_current, savant_previous, savant_statcast, hands,
-        pitch_savant, league_xwoba, year_int, week,
+        pitch_savant, league_xwoba, weather_map, today_iso, year_int, week,
     )
 
     return {
@@ -406,7 +451,8 @@ def get_hitter_data(team_id: int, week: int) -> dict:
 def _fetch_fa_hitters(base, headers, cookies, PRO_TEAM_MAP, current_week,
                       schedule, period_dates, scoring, hitting_current,
                       hitting_previous, savant_current, savant_previous,
-                      savant_statcast, hands, pitch_savant, league_xwoba, year_int, week):
+                      savant_statcast, hands, pitch_savant, league_xwoba,
+                      weather_map, today_iso, year_int, week):
     """Top available free-agent hitters by ownership %, projected with the same
     model as the roster. Mirrors the SP free-agent fetch in espn.py, filtered to
     hitter slots. Returns [] on any failure (FA hitters are non-critical)."""
@@ -465,7 +511,8 @@ def _fetch_fa_hitters(base, headers, cookies, PRO_TEAM_MAP, current_week,
             overall_ops = (season["obp"] + season["slg"]) if season else None
             bats = (hands.get(strip_accents(h["name"])) or {}).get("bats", "")
             days = _build_days(h["name"], h["team"], h["gameDates"], schedule, per_game,
-                               hands, fa_splits, overall_ops, pitch_savant, league_xwoba)
+                               hands, fa_splits, overall_ops, pitch_savant, league_xwoba,
+                               weather_map, today_iso)
             out.append({
                 "name": h["name"], "team": h["team"], "pos": h["pos"], "bats": bats,
                 "percentOwned": h["ownPct"],
@@ -505,7 +552,9 @@ HITTER_CACHE_TTL = 1800  # 30 min
 #   v17: fix NameError in fetch_player_hands (_strip_accents_mlb) — the real root cause.
 #   v18: remove temp _diag block.
 #   v19: Phase 7 — opposing-pitcher quality factor + probable-id starter coverage.
-HITTER_CACHE_VERSION = 19
+#   v20: Phase 4/5 — park + weather per-day factors.
+#   v21: gate weather on game status (scheduled), not UTC date (today boundary).
+HITTER_CACHE_VERSION = 21
 
 
 def _cache_key(team_id: int, week: int) -> str:

@@ -151,7 +151,7 @@ export default function Hitters() {
         ) : (
           <>
             <div style={{ background: 'var(--green-light)', border: '1px solid rgba(46,196,160,0.35)', borderRadius: 'var(--radius)', padding: '10px 14px', fontSize: 13, color: 'var(--green)', marginBottom: 20 }}>
-              ● <strong>Phase 7.</strong> Season rate + Savant de-luck + recent form, with per-day matchup factors (platoon, opposing-starter quality). Hover/tap a day for the breakdown. Park &amp; weather next.
+              ● <strong>Matchup-aware.</strong> Season rate + Savant de-luck + recent form, with per-day factors: platoon, opposing-starter quality, park &amp; weather. Hover/tap a day for the full breakdown.
             </div>
 
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 12, marginBottom: 20 }}>
