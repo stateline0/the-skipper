@@ -321,10 +321,18 @@ function HitterDayCell({ g, actualsTracked }: { g: DayGame; actualsTracked?: boo
         )}
       </div>
       {showActual ? (
-        // Actual / live — bold, signed, saturated (the "real" number).
-        <div style={{ fontSize: 12, fontFamily: 'var(--mono)', fontWeight: 700, color: g.actual! > 0 ? 'var(--green)' : g.actual! < 0 ? 'var(--red)' : 'var(--ink-3)', marginTop: 1 }}>
-          {g.actual! > 0 ? '+' : ''}{g.actual!.toFixed(1)}
-        </div>
+        // Actual / live — bold, signed, saturated — with the projection beneath
+        // it so projection-vs-actual is visible at a glance.
+        <>
+          <div style={{ fontSize: 12, fontFamily: 'var(--mono)', fontWeight: 700, color: g.actual! > 0 ? 'var(--green)' : g.actual! < 0 ? 'var(--red)' : 'var(--ink-3)', marginTop: 1 }}>
+            {g.actual! > 0 ? '+' : ''}{g.actual!.toFixed(1)}
+          </div>
+          {g.base !== undefined && (
+            <div style={{ fontSize: 8, fontFamily: 'var(--mono)', color: 'var(--ink-3)', marginTop: 0 }}>
+              proj {g.proj.toFixed(1)}
+            </div>
+          )}
+        </>
       ) : dnp ? (
         // Game played but hitter didn't appear — no projection shown.
         <div style={{ fontSize: 9, fontFamily: 'var(--mono)', fontWeight: 600, color: 'var(--ink-3)', marginTop: 1, letterSpacing: '0.04em' }}>DNP</div>
