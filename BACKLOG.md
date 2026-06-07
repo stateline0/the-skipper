@@ -62,9 +62,10 @@ PR #111 fixed the user-visible aggregates for mid-week pickups but deliberately 
   `HITTERS_MODEL.md` (Phases 0–7 shipped: baseline, Savant de-luck, recent form,
   platoon, opp-SP quality, park, weather; per-day popover; actual/live tracking
   for roster + FA).
-- [ ] **Hitter accuracy** (in progress, session 34) — lock `proj2h:` per game,
-  `kind=hitter` MAE series + Pitchers/Hitters toggle on the Accuracy page,
-  excluding DNP games.
+- [x] ~~**Hitter accuracy**~~ — **done (session 34, PRs #147–#150).** lock
+  `proj2h:` per game, `kind=hitter` MAE series + Pitchers/Hitters toggle on the
+  Accuracy page, DNP games excluded. End to end; data fills in from Hitters-page
+  loads.
   - [x] **PR 1 — lock `proj2h:` per game (PR #147).** `kv.py` hitter-lock
     helpers (`set_locked_hitter_projection`, `get_all_locked_hitter_projections`,
     key `proj2h:{season}:{period}:{slug}:{date}`, NX). `hitters.py` freezes each
@@ -82,7 +83,10 @@ PR #111 fixed the user-visible aggregates for mid-week pickups but deliberately 
     FPTS MAE/max/min/bias/directional; no `acth:` entry = DNP → excluded
     (`unmatchedCount`). No roster filter / factor analysis / ESPN overlay.
     `?kind=` dispatch; pitcher path untouched. Added `name` to the proj2h lock.
-  - [ ] PR 4 — Pitchers/Hitters toggle + hitter MAE series on the Accuracy page.
+  - [x] **PR 4 — Pitchers/Hitters toggle + hitter MAE series (PR #150).**
+    `accuracy.tsx` `?kind=` toggle, hitter-shaped table + `HitterBreakdown`
+    (base × factors = proj + actual line), Skipper-only hitter MAE timeline
+    (`MaeTimelineChart kind="hitter"`). Pitcher path untouched.
 - [ ] **Pitcher-actuals unification (follow-up to hitter accuracy).** Switch
   roster-scope pitcher actuals from ESPN-box (`cache:daily.actual_stats`,
   name-keyed first-write-wins → two-way Ohtani collision risk, roster-only) to

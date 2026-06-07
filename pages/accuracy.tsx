@@ -11,11 +11,16 @@ interface StartComparison {
   projFpts: number
   actualFpts: number
   fptsError: number
-  projStats: Record<string, number>
+  base?: number                                  // hitter: per-game skill base
+  projStats?: Record<string, number>             // pitcher only
   actualStats: Record<string, number>
-  statErrors: Record<string, number>
-  matchup: { opponent?: string; woba?: number; park?: number; parkTeam?: string; isHome?: boolean }
+  statErrors?: Record<string, number>            // pitcher only
+  matchup: {
+    opponent?: string; woba?: number; park?: number; parkTeam?: string; isHome?: boolean
+    opp?: string; oppStarter?: string; oppHand?: string | null   // hitter shape
+  }
   model: { type?: string; blendWeight?: number; recentForm?: number; seasonBase?: number; adjustedBase?: number }
+  factors?: Array<{ label: string; mult: number }>  // hitter factor stack
   espnFpts?: number
   espnError?: number
 }
@@ -25,6 +30,7 @@ interface Summary {
   mae?: number
   maxError?: number
   minError?: number
+  bias?: number
   directionalAccuracy?: number
   statMAE?: Record<string, number>
   statBias?: Record<string, number>
@@ -61,6 +67,7 @@ interface AccuracyData {
   espnSummary?: EspnSummary | null
   unmatchedCount?: number
   filteredNonRoster?: number
+  kind?: 'pitcher' | 'hitter'
   error?: string
   message?: string
 }
@@ -73,6 +80,13 @@ const STAT_WEIGHTS: Record<string, number> = {
   ip: 3, so: 1, h: -1, bb: -1, er: -2, hb: -1, w: 5, l: -5, sv: 5
 }
 const STAT_ORDER = ['ip', 'so', 'h', 'bb', 'er', 'hb', 'w', 'l', 'sv']
+
+// Hitter actual-line display (no projected per-stat — the hitter model is
+// FPTS-centric, so the expanded row shows the factor stack + the actual line).
+const HITTER_STAT_LABELS: Record<string, string> = {
+  h: 'H', tb: 'TB', hr: 'HR', r: 'R', rbi: 'RBI', bb: 'BB', sb: 'SB', hbp: 'HBP', so: 'SO',
+}
+const HITTER_STAT_ORDER = ['h', 'tb', 'hr', 'r', 'rbi', 'bb', 'sb', 'hbp', 'so']
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 function formatDate(dateStr: string): string {
@@ -105,18 +119,22 @@ export default function AccuracyPage() {
   const [data, setData] = useState<AccuracyData | null>(null)
   const [loading, setLoading] = useState(true)
   const [scope, setScope] = useState<'roster' | 'all'>('roster')
+  const [kind, setKind] = useState<'pitcher' | 'hitter'>('pitcher')
   const [expandedRow, setExpandedRow] = useState<string | null>(null)
 
   const fetchData = () => {
     setLoading(true)
     // No period param → backend aggregates across all 22 periods (all-time view).
-    fetch(`/api/accuracy?season=2026&scope=${scope}`)
+    // kind=hitter is roster-only (proj2h is roster-scoped), so scope is ignored there.
+    fetch(`/api/accuracy?season=2026&scope=${scope}&kind=${kind}`)
       .then(r => r.json())
       .then(d => { setData(d); setLoading(false) })
       .catch(() => setLoading(false))
   }
 
-  useEffect(() => { fetchData() }, [scope])
+  useEffect(() => { fetchData() }, [scope, kind])
+
+  const isHitter = kind === 'hitter'
 
   const summary = data?.summary || {}
   const starts = data?.starts || []
@@ -135,10 +153,42 @@ export default function AccuracyPage() {
               Model Accuracy
             </h1>
             <p style={{ fontSize: 13, color: 'var(--ink-3)', margin: 0 }}>
-              All-time projected vs actual per-stat breakdown — every locked start, every period
+              {isHitter
+                ? 'All-time projected vs actual FPTS per game — every locked game, DNPs excluded'
+                : 'All-time projected vs actual per-stat breakdown — every locked start, every period'}
             </p>
           </div>
           <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+            {/* Pitchers / Hitters toggle */}
+            <div style={{
+              display: 'flex', borderRadius: 6, overflow: 'hidden',
+              border: '1px solid var(--border-strong)',
+            }}>
+              <button
+                onClick={() => setKind('pitcher')}
+                style={{
+                  padding: '6px 12px', fontSize: 12, border: 'none', cursor: 'pointer',
+                  fontFamily: 'var(--mono)',
+                  background: !isHitter ? 'var(--ink)' : 'transparent',
+                  color: !isHitter ? 'var(--paper)' : 'var(--ink-3)',
+                }}
+              >
+                Pitchers
+              </button>
+              <button
+                onClick={() => setKind('hitter')}
+                style={{
+                  padding: '6px 12px', fontSize: 12, border: 'none', cursor: 'pointer',
+                  fontFamily: 'var(--mono)', borderLeft: '1px solid var(--border-strong)',
+                  background: isHitter ? 'var(--ink)' : 'transparent',
+                  color: isHitter ? 'var(--paper)' : 'var(--ink-3)',
+                }}
+              >
+                Hitters
+              </button>
+            </div>
+            {/* Roster / All MLB scope — pitchers only (hitter locks are roster-scoped) */}
+            {!isHitter && (
             <div style={{
               display: 'flex', borderRadius: 6, overflow: 'hidden',
               border: '1px solid var(--border-strong)',
@@ -166,6 +216,7 @@ export default function AccuracyPage() {
                 All MLB
               </button>
             </div>
+            )}
             <button
               onClick={fetchData}
               disabled={loading}
@@ -200,8 +251,8 @@ export default function AccuracyPage() {
           <>
             {/* ESPN head-to-head renders above the empty state when scope=all,
                 so ESPN-locked projections surface even before Skipper has any
-                matched actuals yet. */}
-            {scope === 'all' && espnSummary && (
+                matched actuals yet. (Pitchers only — no ESPN Forecaster for hitters.) */}
+            {!isHitter && scope === 'all' && espnSummary && (
               <EspnHeadToHead espnSummary={espnSummary} />
             )}
             <div style={{
@@ -210,18 +261,19 @@ export default function AccuracyPage() {
             }}>
               <div style={{ fontSize: 32, marginBottom: 12 }}>📊</div>
               <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 8, color: 'var(--ink)' }}>
-                No accuracy data yet
+                No {isHitter ? 'hitter ' : ''}accuracy data yet
               </div>
               <div style={{ fontSize: 13, maxWidth: 400, margin: '0 auto' }}>
-                Accuracy tracking started in session 14. Data accumulates as locked projections are
-                matched against completed-game actuals across all 22 matchup periods.
+                {isHitter
+                  ? 'Hitter accuracy accumulates as per-game projections are locked (on Hitters-page loads) and matched against completed-game actuals. DNP games are excluded.'
+                  : 'Accuracy tracking started in session 14. Data accumulates as locked projections are matched against completed-game actuals across all 22 matchup periods.'}
               </div>
               {data?.unmatchedCount ? (
                 <div style={{ fontSize: 12, marginTop: 12, fontFamily: 'var(--mono)' }}>
-                  {data.unmatchedCount} projected start{data.unmatchedCount > 1 ? 's' : ''} without matching actual stats
+                  {data.unmatchedCount} projected {isHitter ? 'game' : 'start'}{data.unmatchedCount > 1 ? 's' : ''} without matching actuals
                 </div>
               ) : null}
-              {scope === 'all' && espnSummary && espnSummary.espnKeysFound > 0 ? (
+              {!isHitter && scope === 'all' && espnSummary && espnSummary.espnKeysFound > 0 ? (
                 <div style={{ fontSize: 12, marginTop: 8, fontFamily: 'var(--mono)' }}>
                   {espnSummary.espnKeysFound} ESPN projection{espnSummary.espnKeysFound === 1 ? '' : 's'} locked across all periods
                 </div>
@@ -230,19 +282,21 @@ export default function AccuracyPage() {
           </>
         ) : (
           <>
-            {/* ESPN head-to-head (scope=all only) */}
-            {scope === 'all' && espnSummary && (
+            {/* ESPN head-to-head (pitchers, scope=all only) */}
+            {!isHitter && scope === 'all' && espnSummary && (
               <EspnHeadToHead espnSummary={espnSummary} />
             )}
 
-            {/* MAE timeline chart (scope=all only — ESPN comparison is whole-MLB).
-                Client-side computes daily MAE + 7-day rolling off the starts
-                array that /api/accuracy already returns. */}
-            {scope === 'all' && <MaeTimelineChart starts={starts} />}
+            {/* MAE timeline chart. Pitchers: scope=all only (ESPN comparison is
+                whole-MLB). Hitters: always, Skipper-only. Client-side computes
+                daily MAE + 7-day rolling off the starts array. */}
+            {isHitter
+              ? <MaeTimelineChart starts={starts} kind="hitter" />
+              : scope === 'all' && <MaeTimelineChart starts={starts} />}
 
             {/* Summary tiles */}
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 24 }}>
-              <SummaryTile label="STARTS TRACKED" value={summary.totalStarts ?? 0} />
+              <SummaryTile label={isHitter ? 'GAMES TRACKED' : 'STARTS TRACKED'} value={summary.totalStarts ?? 0} />
               <SummaryTile label="MEAN ABS ERROR" value={`${summary.mae ?? 0} pts`} />
               <SummaryTile label="DIRECTION ACC" value={summary.directionalAccuracy ? `${summary.directionalAccuracy}%` : '—'} />
               <SummaryTile label="WORST MISS" value={`${summary.maxError ?? 0} pts`} />
@@ -356,11 +410,11 @@ export default function AccuracyPage() {
               }}>
                 <thead>
                   <tr style={{ borderBottom: '2px solid var(--paper-3)' }}>
-                    <th style={thStyle}>Pitcher</th>
+                    <th style={thStyle}>{isHitter ? 'Hitter' : 'Pitcher'}</th>
                     <th style={thStyle}>Date</th>
                     <th style={thStyle}>Matchup</th>
                     <th style={thStyle}>Proj</th>
-                    {scope === 'all' && <th style={thStyle}>ESPN</th>}
+                    {!isHitter && scope === 'all' && <th style={thStyle}>ESPN</th>}
                     <th style={thStyle}>Actual</th>
                     <th style={thStyle}>Error</th>
                   </tr>
@@ -383,9 +437,9 @@ export default function AccuracyPage() {
                         >
                           <td style={tdStyle}>{titleCase(s.player)}</td>
                           <td style={tdStyle}>{formatDate(s.date)}</td>
-                          <td style={tdStyle}>{location} {s.matchup.opponent || '?'}</td>
+                          <td style={tdStyle}>{location} {s.matchup.opponent ?? s.matchup.opp ?? '?'}</td>
                           <td style={{ ...tdStyle, textAlign: 'right' }}>{s.projFpts.toFixed(1)}</td>
-                          {scope === 'all' && (
+                          {!isHitter && scope === 'all' && (
                             <td style={{ ...tdStyle, textAlign: 'right', color: 'var(--ink-3)' }}>
                               {s.espnFpts != null ? s.espnFpts.toFixed(1) : '—'}
                             </td>
@@ -400,8 +454,8 @@ export default function AccuracyPage() {
                         </tr>
                         {isExpanded && (
                           <tr key={`${rowKey}-detail`} style={{ background: 'var(--paper-2)' }}>
-                            <td colSpan={scope === 'all' ? 7 : 6} style={{ padding: '8px 12px 16px' }}>
-                              <StatBreakdown start={s} />
+                            <td colSpan={(!isHitter && scope === 'all') ? 7 : 6} style={{ padding: '8px 12px 16px' }}>
+                              {isHitter ? <HitterBreakdown start={s} /> : <StatBreakdown start={s} />}
                             </td>
                           </tr>
                         )}
@@ -419,8 +473,8 @@ export default function AccuracyPage() {
               }}>
                 {data?.unmatchedCount ? (
                   <div>
-                    {data.unmatchedCount} projected start{data.unmatchedCount > 1 ? 's' : ''} without
-                    matching actual stats (games not yet completed)
+                    {data.unmatchedCount} projected {isHitter ? 'game' : 'start'}{data.unmatchedCount > 1 ? 's' : ''} without
+                    matching actuals ({isHitter ? 'DNP or games not yet completed' : 'games not yet completed'})
                   </div>
                 ) : null}
                 {scope === 'roster' && data?.filteredNonRoster ? (
@@ -638,7 +692,7 @@ function StatBreakdown({ start }: { start: StartComparison }) {
             <td style={detailTdStyle}>Projected</td>
             {STAT_ORDER.map(s => (
               <td key={s} style={{ ...detailTdStyle, textAlign: 'center' }}>
-                {(start.projStats[s] ?? 0).toFixed(s === 'w' || s === 'l' || s === 'sv' ? 2 : 1)}
+                {(start.projStats?.[s] ?? 0).toFixed(s === 'w' || s === 'l' || s === 'sv' ? 2 : 1)}
               </td>
             ))}
             <td style={{ ...detailTdStyle, textAlign: 'right' }}>{start.projFpts.toFixed(1)}</td>
@@ -655,7 +709,7 @@ function StatBreakdown({ start }: { start: StartComparison }) {
           <tr>
             <td style={{ ...detailTdStyle, color: 'var(--ink-3)' }}>Error</td>
             {STAT_ORDER.map(s => {
-              const err = start.statErrors[s] ?? 0
+              const err = start.statErrors?.[s] ?? 0
               return (
                 <td key={s} style={{
                   ...detailTdStyle, textAlign: 'center',
@@ -680,6 +734,77 @@ function StatBreakdown({ start }: { start: StartComparison }) {
               </td>
             ))}
             <td style={detailTdStyle}></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
+function HitterBreakdown({ start }: { start: StartComparison }) {
+  const factors = start.factors || []
+  const m = start.matchup || {}
+  const stats = start.actualStats || {}
+  return (
+    <div>
+      {/* Model + matchup info */}
+      <div style={{
+        fontSize: 11, color: 'var(--ink-3)', marginBottom: 10,
+        display: 'flex', gap: 16, flexWrap: 'wrap',
+      }}>
+        <span>Model: {start.model.type || '?'}</span>
+        <span>Blend: {start.model.blendWeight != null ? `${Math.round(start.model.blendWeight * 100)}% '26` : '?'}</span>
+        {start.model.recentForm != null && <span>Recent form: {start.model.recentForm}/g</span>}
+        {m.oppStarter ? <span>Opp SP: {m.oppStarter}{m.oppHand ? ` (${m.oppHand}HP)` : ''}</span> : null}
+      </div>
+
+      {/* Factor stack: base × each factor = projected */}
+      <div style={{ fontSize: 12, fontFamily: 'var(--mono)', marginBottom: 12 }}>
+        <span style={{ color: 'var(--ink-3)' }}>Base </span>
+        <span style={{ fontWeight: 600 }}>{start.base != null ? start.base.toFixed(1) : '—'}</span>
+        {factors.map((f, i) => (
+          <span key={i} title={f.label}>
+            {' × '}<span style={{ color: f.mult >= 1 ? '#27ae60' : '#c0392b' }}>{f.mult.toFixed(3)}</span>
+          </span>
+        ))}
+        <span style={{ color: 'var(--ink-3)' }}> = </span>
+        <span style={{ fontWeight: 700 }}>{start.projFpts.toFixed(1)}</span>
+        {factors.length > 0 && (
+          <div style={{ color: 'var(--ink-3)', fontSize: 10, marginTop: 4 }}>
+            {factors.map(f => f.label).join(' · ')}
+          </div>
+        )}
+      </div>
+
+      {/* Actual hitting line (no projected per-stat — the model is FPTS-centric) */}
+      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+        <thead>
+          <tr>
+            <th style={detailThStyle}>Actual</th>
+            {HITTER_STAT_ORDER.map(s => (
+              <th key={s} style={{ ...detailThStyle, textAlign: 'center' }}>{HITTER_STAT_LABELS[s]}</th>
+            ))}
+            <th style={{ ...detailThStyle, textAlign: 'right' }}>FPTS</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td style={{ ...detailTdStyle, fontWeight: 600 }}>Line</td>
+            {HITTER_STAT_ORDER.map(s => (
+              <td key={s} style={{ ...detailTdStyle, textAlign: 'center', fontWeight: 600 }}>
+                {stats[s] != null ? Math.round(stats[s]) : 0}
+              </td>
+            ))}
+            <td style={{ ...detailTdStyle, textAlign: 'right', fontWeight: 600 }}>{start.actualFpts.toFixed(1)}</td>
+          </tr>
+          <tr>
+            <td style={{ ...detailTdStyle, color: 'var(--ink-3)' }}>Proj / Err</td>
+            <td style={detailTdStyle} colSpan={HITTER_STAT_ORDER.length} />
+            <td style={{
+              ...detailTdStyle, textAlign: 'right', color: errorColor(start.fptsError), fontWeight: 600,
+            }}>
+              {start.projFpts.toFixed(1)} / {start.fptsError > 0 ? '+' : ''}{start.fptsError.toFixed(1)}
+            </td>
           </tr>
         </tbody>
       </table>
