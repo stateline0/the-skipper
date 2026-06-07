@@ -13,7 +13,8 @@ from projection_hitter import (
     parse_hitter_scoring, apply_hitter_formula, per_game_vector,
     blend_vectors, pa_blend_weight, apply_factors, scoring_is_sane,
     apply_savant_hitter, compute_recent_form_hitter, platoon_multiplier,
-    opp_pitcher_multiplier, get_projected_hitter_fpts,
+    opp_pitcher_multiplier, score_game_log, actuals_from_logs,
+    get_projected_hitter_fpts,
 )
 
 
@@ -264,6 +265,19 @@ def test_opp_pitcher_multiplier():
     # Extreme → clamp holds.
     assert opp_pitcher_multiplier(0.500, lg) == 1.12
     print("✓ opp_pitcher_multiplier: directional (ace↓ / weak↑), dampened, clamped, safe")
+
+
+def test_score_game_log_and_actuals():
+    # 2-for-4 with a HR, a walk, 2 runs, 3 RBI, a steal, 1 K (default scoring):
+    # TB = 1B(1) + HR(4) = 5; +BB1 +R2 +RBI3 +SB1 +HBP0 -K1 = 5+1+2+3+1-1 = 11
+    g = {"date": "2026-06-01", "h": 2, "2b": 0, "3b": 0, "hr": 1, "r": 2, "rbi": 3,
+         "bb": 1, "hbp": 0, "sb": 1, "cs": 0, "so": 1, "ab": 4, "pa": 5}
+    assert approx(score_game_log(g, DEFAULT_HITTER_SCORING), 11.0)
+    # actuals_from_logs sums doubleheaders by date.
+    g2 = dict(g, hr=0, h=1, r=0, rbi=0, sb=0, so=2, bb=0)  # 1B only, 2K → 1-2 = -1
+    out = actuals_from_logs([g, g2], DEFAULT_HITTER_SCORING)
+    assert approx(out["2026-06-01"], 10.0)   # 11 + (-1)
+    print("✓ score_game_log + actuals_from_logs: by-category FPTS, doubleheaders summed")
 
 
 def test_end_to_end_projection():

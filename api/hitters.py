@@ -36,7 +36,8 @@ from fetcher import (
 from kv import cache_get, cache_set
 from projection_hitter import (
     parse_hitter_scoring, get_projected_hitter_fpts, strip_accents,
-    platoon_multiplier, opp_pitcher_multiplier, DEFAULT_HITTER_SCORING, _resolve_points,
+    platoon_multiplier, opp_pitcher_multiplier, actuals_from_logs,
+    DEFAULT_HITTER_SCORING, _resolve_points,
 )
 
 
@@ -411,6 +412,21 @@ def get_hitter_data(team_id: int, week: int) -> dict:
         except Exception as e:
             print(f"[hitters.py] hitter actuals fetch failed: {e}")
 
+    # Validate the by-category game-log scoring against ESPN's applied totals on
+    # the roster (where both exist) — the basis for trusting it for free agents.
+    try:
+        checked = match = 0
+        for h in hitters_meta:
+            la = actuals_from_logs(roster_logs.get(strip_accents(h["name"])), scoring)
+            for d, ev in (actual_fpts.get(h["name"]) or {}).items():
+                checked += 1
+                if abs(la.get(d, 0.0) - ev) <= 0.5:
+                    match += 1
+        if checked:
+            print(f"[hitters.py] actuals validation (game-log vs ESPN): {match}/{checked} match")
+    except Exception as e:
+        print(f"[hitters.py] actuals validation failed: {e}")
+
     # ── Assemble output ───────────────────────────────────────────────
     roster_hitters = []
     for h in hitters_meta:
@@ -517,6 +533,9 @@ def _fetch_fa_hitters(base, headers, cookies, PRO_TEAM_MAP, current_week,
         fa_keys = [strip_accents(h["name"]) for h in meta]
         fa_logs = load_hitter_game_logs(year_int, hitting_current, fa_keys)
         fa_splits = load_hitter_splits(year_int, hitting_current, fa_keys)
+        # FA actuals: computed by category from the MLB game logs (ESPN won't
+        # expose FPTS for unrostered players). Keyed by display name.
+        fa_actuals = {h["name"]: actuals_from_logs(fa_logs.get(strip_accents(h["name"])), scoring) for h in meta}
         proj, _ = get_projected_hitter_fpts(
             [{"name": h["name"], "team": h["team"], "gameDates": h["gameDates"]} for h in meta],
             scoring=scoring, stat_current=hitting_current, stat_previous=hitting_previous,
@@ -534,11 +553,12 @@ def _fetch_fa_hitters(base, headers, cookies, PRO_TEAM_MAP, current_week,
             bats = (hands.get(strip_accents(h["name"])) or {}).get("bats", "")
             days = _build_days(h["name"], h["team"], h["gameDates"], schedule, per_game,
                                hands, fa_splits, overall_ops, pitch_savant, league_xwoba,
-                               weather_map, today_iso)
+                               weather_map, today_iso, fa_actuals)
             out.append({
                 "name": h["name"], "team": h["team"], "pos": h["pos"], "bats": bats,
                 "percentOwned": h["ownPct"],
                 "projFpts": round(sum(d["proj"] for d in days), 1), "projPerGame": round(per_game, 1),
+                "actualFpts": round(sum(d["actual"] for d in days if d.get("actual") is not None), 1),
                 "games": p.get("games", len(h["gameDates"])),
                 "modelType": p.get("modelType", "stats"),
                 "recentForm": p.get("recentForm"),
@@ -577,7 +597,8 @@ HITTER_CACHE_TTL = 1800  # 30 min
 #   v20: Phase 4/5 — park + weather per-day factors.
 #   v21: gate weather on game status (scheduled), not UTC date (today boundary).
 #   v22: capture actual/live FPTS per day (roster) — status + actual on day cells.
-HITTER_CACHE_VERSION = 22
+#   v23: FA actuals computed from game logs by category (ESPN can't expose them).
+HITTER_CACHE_VERSION = 23
 
 
 def _cache_key(team_id: int, week: int) -> str:
