@@ -62,8 +62,19 @@ PR #111 fixed the user-visible aggregates for mid-week pickups but deliberately 
   `HITTERS_MODEL.md` (Phases 0–7 shipped: baseline, Savant de-luck, recent form,
   platoon, opp-SP quality, park, weather; per-day popover; actual/live tracking
   for roster + FA).
-- [ ] **Hitter accuracy** (next) — lock `proj2h:` per game, `kind=hitter` MAE
-  series + Pitchers/Hitters toggle on the Accuracy page, excluding DNP games.
+- [ ] **Hitter accuracy** (in progress, session 34) — lock `proj2h:` per game,
+  `kind=hitter` MAE series + Pitchers/Hitters toggle on the Accuracy page,
+  excluding DNP games.
+  - [x] **PR 1 — lock `proj2h:` per game (PR #147).** `kv.py` hitter-lock
+    helpers (`set_locked_hitter_projection`, `get_all_locked_hitter_projections`,
+    key `proj2h:{season}:{period}:{slug}:{date}`, NX). `hitters.py` freezes each
+    roster hitter's per-game projection once the game starts (`status !=
+    "scheduled"`), storing fpts + base + factor stack + matchup + model. Locks
+    on Hitters-page loads (the warm cron only covers pitchers); pre-fetches the
+    period's locks once so reloads don't re-write. No user-visible change.
+  - [ ] PR 2 — hitter per-game actuals queryable by date for accuracy.
+  - [ ] PR 3 — `kind=hitter` in `/api/accuracy` (hitter stat keys, exclude DNP).
+  - [ ] PR 4 — Pitchers/Hitters toggle + hitter MAE series on the Accuracy page.
 - [ ] **Phase 8–10** — regressed BvP, PA/lineup-spot volume, per-stat park +
   wind-for-HR.
 - [ ] **Hitter nudge engine** — "this waiver guy is outperforming your current

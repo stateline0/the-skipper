@@ -253,3 +253,92 @@ def get_all_locked_projections_v2(season: int, period: int) -> dict:
     except Exception as e:
         print(f"[kv.py] get_all_v2 failed for {season}/{period}: {e}")
         return {}
+
+
+# ── Hitter locked projections (proj2h:) ──────────────────────────────────────
+#
+# Mirrors the pitcher v2 lock, but for hitters and keyed PER GAME-DATE rather
+# than per start. Frozen at game start (status != "scheduled") so the locked
+# value reflects the model's most-informed guess just before the game, the same
+# contract as pitcher per-start locks. Feeds the hitter accuracy dashboard.
+#
+# Key schema:
+#   proj2h:{season}:{period}:{player-slug}:{date} → JSON
+
+
+def _make_hitter_key(season: int, period: int, player_name: str, date: str) -> str:
+    """Build a Redis key for a locked hitter projection (JSON breakdown)."""
+    slug = re.sub(r"[^a-z0-9]+", "-", player_name.lower().strip()).strip("-")
+    return f"proj2h:{season}:{period}:{slug}:{date}"
+
+
+def set_locked_hitter_projection(season: int, period: int, player_name: str, date: str, breakdown: dict):
+    """
+    Lock a hitter's per-game projection breakdown into Redis as JSON.
+    Uses NX — will not overwrite an existing locked value (freeze at game start).
+
+    breakdown should contain:
+      - fpts: float — the per-game FPTS projection (base × factor stack)
+      - base: float — the per-game skill base before factors
+      - factors: list — [{label, mult}, ...] the matchup factor stack
+      - matchup: dict — {opp, isHome, oppStarter, oppHand}
+      - model: dict — {type, blendWeight, recentForm}
+    """
+    if not KV_AVAILABLE or _redis is None:
+        return
+    try:
+        import json
+        key = _make_hitter_key(season, period, player_name, date)
+        val = json.dumps(breakdown)
+        _redis.set(key, val, nx=True)
+        print(f"[kv.py] Locked hitter projection: {key} ({len(val)} bytes)")
+    except Exception as e:
+        print(f"[kv.py] set_hitter failed for {player_name} {date}: {e}")
+
+
+def get_locked_hitter_projection(season: int, period: int, player_name: str, date: str) -> dict:
+    """Return the locked hitter projection breakdown for this player+date, or None."""
+    if not KV_AVAILABLE or _redis is None:
+        return None
+    try:
+        import json
+        key = _make_hitter_key(season, period, player_name, date)
+        val = _redis.get(key)
+        if val is None:
+            return None
+        return json.loads(val)
+    except Exception as e:
+        print(f"[kv.py] get_hitter failed for {player_name} {date}: {e}")
+        return None
+
+
+def get_all_locked_hitter_projections(season: int, period: int) -> dict:
+    """
+    Returns all locked hitter projections for a season + period as a nested dict:
+    { "aaron-judge": { "2026-04-07": { "fpts": 9.2, "base": ..., ... }, ... }, ... }
+    """
+    if not KV_AVAILABLE or _redis is None:
+        return {}
+    try:
+        import json
+        keys = _redis.keys(f"proj2h:{season}:{period}:*")
+        if not keys:
+            return {}
+        result = {}
+        for key in keys:
+            # key format: proj2h:{season}:{period}:{slug}:{date}
+            parts = key.split(":")
+            if len(parts) != 5:
+                continue
+            _, _, _, slug, date = parts
+            val = _redis.get(key)
+            if val is None:
+                continue
+            try:
+                result.setdefault(slug, {})[date] = json.loads(val)
+            except json.JSONDecodeError:
+                continue
+        return result
+    except Exception as e:
+        print(f"[kv.py] get_all_hitter failed for {season}/{period}: {e}")
+        return {}

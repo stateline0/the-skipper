@@ -19,6 +19,7 @@ payload mirrors the fields the Hitters page consumes.
 """
 import json
 import os
+import re
 import sys
 import requests
 from http.server import BaseHTTPRequestHandler
@@ -33,7 +34,10 @@ from fetcher import (
     get_headers_and_cookies, get_pro_team_map, load_hitter_stats,
     load_hitter_game_logs, load_player_hands, load_hitter_splits, get_actual_fpts,
 )
-from kv import cache_get, cache_set
+from kv import (
+    cache_get, cache_set,
+    set_locked_hitter_projection, get_all_locked_hitter_projections,
+)
 from projection_hitter import (
     parse_hitter_scoring, get_projected_hitter_fpts, strip_accents,
     platoon_multiplier, opp_pitcher_multiplier, actuals_from_logs,
@@ -101,6 +105,41 @@ def _build_days(name, team, game_dates, schedule, base, hands, splits, overall_o
             "actual": round(av, 1) if av is not None else None,
         })
     return days
+
+
+def _hitter_slug(name: str) -> str:
+    """Match kv._make_hitter_key's slug so we can skip already-locked dates."""
+    return re.sub(r"[^a-z0-9]+", "-", name.lower().strip()).strip("-")
+
+
+def _lock_started_days(season, period, name, days, model, today_iso, existing):
+    """Freeze each started game-date projection (NX). `status != "scheduled"` is
+    the timezone-independent "game has begun" signal (mirrors pitcher per-start
+    locks). `existing` is the pre-fetched {slug: {date: ...}} map so we only
+    write genuinely new locks — avoids redundant writes + log spam on reloads.
+    Returns the count of new locks written."""
+    have = existing.get(_hitter_slug(name), {})
+    new_locks = 0
+    for d in days:
+        if d.get("status") not in ("final", "in_progress"):
+            continue                      # not yet played → still mutable
+        date = d.get("date")
+        if not date or date > today_iso or date in have:
+            continue
+        set_locked_hitter_projection(season, period, name, date, {
+            "fpts":    d["proj"],
+            "base":    d["base"],
+            "factors": d["factors"],
+            "matchup": {
+                "opp":        d["opp"],
+                "isHome":     d["home"],
+                "oppStarter": d["oppStarter"],
+                "oppHand":    d["oppHand"],
+            },
+            "model":   model,
+        })
+        new_locks += 1
+    return new_locks
 
 # ESPN baseball lineup/eligible slot IDs. Hitters occupy 0–12; pitchers 13–15.
 HITTER_SLOTS = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12}
@@ -428,6 +467,10 @@ def get_hitter_data(team_id: int, week: int) -> dict:
         print(f"[hitters.py] actuals validation failed: {e}")
 
     # ── Assemble output ───────────────────────────────────────────────
+    # Pre-fetch this period's locked hitter projections once so the per-day
+    # freeze below only writes genuinely new locks (see _lock_started_days).
+    existing_hit_locks = get_all_locked_hitter_projections(year_int, week)
+    hit_locks_new = 0
     roster_hitters = []
     for h in hitters_meta:
         name = h["name"]
@@ -440,6 +483,14 @@ def get_hitter_data(team_id: int, week: int) -> dict:
         days = _build_days(name, h["team"], h["gameDates"], schedule, per_game,
                            hands, splits, overall_ops, pitch_savant, league_xwoba,
                            weather_map, today_iso, actual_fpts)
+        # Freeze each started game's projection for the accuracy dashboard.
+        hit_locks_new += _lock_started_days(
+            year_int, week, name, days,
+            {"type": p.get("modelType", "stats"),
+             "blendWeight": p.get("blendWeight", 0.0),
+             "recentForm": p.get("recentForm")},
+            today_iso, existing_hit_locks,
+        )
         proj_week = round(sum(d["proj"] for d in days), 1)
         act_week = round(sum(d["actual"] for d in days if d.get("actual") is not None), 1)
         roster_hitters.append({
@@ -459,6 +510,10 @@ def get_hitter_data(team_id: int, week: int) -> dict:
             "advanced":    _advanced_line(name, savant_current, savant_statcast),
             "days":        days,
         })
+
+    if hit_locks_new:
+        print(f"[hitters.py] Locked {hit_locks_new} new hitter projection(s) "
+              f"(season {year_int}, period {week})")
 
     # Match ESPN's roster order: by lineup-slot rank, ties broken by projection.
     roster_hitters.sort(key=lambda x: (x["rank"], -x["projFpts"]))

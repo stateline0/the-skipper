@@ -2,6 +2,38 @@
 
 ---
 
+## Session 34 — June 7, 2026 — Hitter accuracy buildout
+
+Began the hitter accuracy chunk carried forward from session 31 — mirroring the
+pitcher accuracy machinery so the dashboard can track hitter projection error.
+Phased across 4 PRs; this entry grows as they land.
+
+### What shipped
+- **PR 1 — lock `proj2h:` per game (PR #147).** The foundation: freeze each
+  roster hitter's per-game projection so there's a historical record to compare
+  actuals against later.
+  - `api/kv.py` — hitter-lock helpers mirroring the pitcher v2 lock:
+    `set_locked_hitter_projection` / `get_locked_hitter_projection` /
+    `get_all_locked_hitter_projections`, key `proj2h:{season}:{period}:{slug}:
+    {date}`, NX (freeze, never overwrite).
+  - `api/hitters.py` — after building each roster hitter's per-day cells,
+    `_lock_started_days()` writes a lock for every game that has **started**
+    (`status != "scheduled"` — the timezone-independent "game has begun" signal,
+    same contract as pitcher per-start locks) and is on/before today. Stores
+    `fpts` + `base` + the factor stack + `matchup` + `model`. Pre-fetches the
+    period's existing locks once so page reloads don't re-issue NX writes (or
+    spam the "Locked" log). No user-visible change.
+
+### Notes / carried forward this chunk
+- Hitter locks accumulate on **Hitters-page loads** — the warm cron
+  (`api/warm.py`) only precomputes the pitcher payload, so a hitter equivalent
+  (or a cron-based all-hitter lock) is a possible later add for fuller coverage.
+- Remaining: PR 2 (per-game actuals queryable by date), PR 3 (`kind=hitter` in
+  `/api/accuracy`, hitter stat keys, exclude DNP), PR 4 (Pitchers/Hitters toggle
+  + hitter MAE series on the Accuracy page).
+
+---
+
 ## Session 33 — June 7, 2026 — W/L impact sign fix
 
 Fixed a review-flagged projection-model bug: the per-start W/L impact's **sign**
