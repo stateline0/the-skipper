@@ -196,8 +196,9 @@ export function PosBadge({ pos }: { pos: string }) {
 
 // ─── Schedule grid ──────────────────────────────────────────────────────────
 
-export function HitterScheduleGrid({ hitters, weeks, weekDates, today, showOwn }: {
-  hitters: UIHitter[]; weeks: Weeks; weekDates: string[]; today: string; showOwn?: boolean
+export function HitterScheduleGrid({ hitters, weeks, weekDates, today, showOwn, actualsTracked }: {
+  hitters: UIHitter[]; weeks: Weeks; weekDates: string[]; today: string
+  showOwn?: boolean; actualsTracked?: boolean
 }) {
   const { sorted, key, dir, onSort } = useSortedHitters(hitters, weeks)
   const headerStyle: React.CSSProperties = {
@@ -239,7 +240,7 @@ export function HitterScheduleGrid({ hitters, weeks, weekDates, today, showOwn }
               )
             })}
             <th onClick={() => onSort('g')} style={{ ...headerStyle, minWidth: 36, cursor: 'pointer', userSelect: 'none', color: key === 'g' ? 'var(--ink)' : 'var(--ink-3)' }}>G{arrow('g')}</th>
-            <th onClick={() => onSort('act')} style={{ ...headerStyle, minWidth: 56, cursor: 'pointer', userSelect: 'none', color: key === 'act' ? 'var(--ink)' : 'var(--ink-3)' }}>Act{arrow('act')}</th>
+            {actualsTracked && <th onClick={() => onSort('act')} style={{ ...headerStyle, minWidth: 56, cursor: 'pointer', userSelect: 'none', color: key === 'act' ? 'var(--ink)' : 'var(--ink-3)' }}>Act{arrow('act')}</th>}
             <th onClick={() => onSort('projWk')} style={{ ...headerStyle, minWidth: 60, cursor: 'pointer', userSelect: 'none', color: key === 'projWk' ? 'var(--ink)' : 'var(--ink-3)' }}>Proj{arrow('projWk')}</th>
             {showOwn && <th onClick={() => onSort('own')} style={{ ...headerStyle, minWidth: 52, cursor: 'pointer', userSelect: 'none', color: key === 'own' ? 'var(--ink)' : 'var(--ink-3)' }}>Own%{arrow('own')}</th>}
           </tr>
@@ -263,13 +264,15 @@ export function HitterScheduleGrid({ hitters, weeks, weekDates, today, showOwn }
                 </td>
                 {week.map(g => (
                   <td key={g.date} style={{ ...cellStyle, background: g.date === today ? 'var(--paper-2)' : 'transparent' }}>
-                    <HitterDayCell g={g} />
+                    <HitterDayCell g={g} actualsTracked={actualsTracked} />
                   </td>
                 ))}
                 <td style={{ ...cellStyle, fontFamily: 'var(--mono)', fontWeight: 700 }}>{games.length}</td>
-                <td style={{ ...cellStyle, fontFamily: 'var(--mono)', fontWeight: 700, color: actGames.length ? (actTotal >= 0 ? 'var(--green)' : 'var(--red)') : 'var(--ink-3)' }}>
-                  {actGames.length ? actTotal.toFixed(1) : '—'}
-                </td>
+                {actualsTracked && (
+                  <td style={{ ...cellStyle, fontFamily: 'var(--mono)', fontWeight: 700, color: actGames.length ? (actTotal >= 0 ? 'var(--green)' : 'var(--red)') : 'var(--ink-3)' }}>
+                    {actGames.length ? actTotal.toFixed(1) : '—'}
+                  </td>
+                )}
                 <td style={{ ...cellStyle, fontFamily: 'var(--mono)', fontWeight: 700, color: 'var(--green)' }}>
                   {projTotal.toFixed(1)}
                 </td>
@@ -287,14 +290,16 @@ export function HitterScheduleGrid({ hitters, weeks, weekDates, today, showOwn }
   )
 }
 
-function HitterDayCell({ g }: { g: DayGame }) {
+function HitterDayCell({ g, actualsTracked }: { g: DayGame; actualsTracked?: boolean }) {
   const [open, setOpen] = useState(false)
   if (g.off) return <span style={{ color: 'var(--ink-3)', fontSize: 11 }}>—</span>
   const oppLabel = `${g.home ? '' : '@'}${g.opp}`
-  const played = g.status === 'final' || g.status === 'in_progress'
-  const live = g.status === 'in_progress'
+  // Only treat games as actual/DNP when actuals are tracked for this view
+  // (rostered hitters). For free agents we have no actuals, so always project.
+  const played = !!actualsTracked && (g.status === 'final' || g.status === 'in_progress')
+  const live = !!actualsTracked && g.status === 'in_progress'
   const showActual = played && g.actual != null
-  const dnp = g.status === 'final' && g.actual == null   // game played, hitter didn't appear
+  const dnp = !!actualsTracked && g.status === 'final' && g.actual == null   // played, hitter didn't appear
   const hasDetail = g.base !== undefined
   // Projection edge arrow vs the pre-matchup base (only shown on projections).
   const up = g.base !== undefined && g.proj > g.base
