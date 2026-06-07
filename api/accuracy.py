@@ -450,6 +450,114 @@ def get_accuracy_data(season: int, period=None, scope: str = "roster") -> dict:
     }
 
 
+def _deslug(slug: str) -> str:
+    """Best-effort display name from a slug ('shohei-ohtani' → 'Shohei Ohtani').
+    Used when a lock predates name capture; accents are not recoverable here."""
+    return " ".join(w.capitalize() for w in slug.split("-") if w)
+
+
+def get_hitter_accuracy_data(season: int, period=None) -> dict:
+    """
+    Hitter accuracy: match `proj2h:` locks against `acth:` game-log actuals.
+
+    Mirrors get_accuracy_data, but for hitters and simpler:
+      - proj2h:{season}:{period}:{slug}:{date}  → locked per-game projection
+      - acth:{date} = {slug: {fpts, stats}}      → game-log actuals; a date
+        present means the hitter PLAYED, so DNP games (no log row) are excluded
+        for free. Both sides share the same slug, so matching is a direct lookup.
+
+    No roster filter (proj2h is only ever written for the user's roster, so there
+    is no FA leak like the pitcher proj2: path), no factor analysis (the hitter
+    model is FPTS-centric — there's no per-stat projection to run counterfactuals
+    against), and no ESPN overlay (the Forecaster is pitchers only). FPTS MAE is
+    the metric; actual per-stat lines are surfaced for display.
+    """
+    if not KV_AVAILABLE or _redis is None:
+        return {"starts": [], "summary": {}, "error": "KV not available"}
+
+    period_glob = f"{period}" if period is not None else "*"
+    proj_keys = _redis.keys(f"proj2h:{season}:{period_glob}:*")
+    if not proj_keys:
+        return {"starts": [], "summary": {}, "message": "No hitter projections found"}
+
+    projections = {}      # { "slug:date": breakdown }
+    all_dates = set()
+    for key in proj_keys:
+        parts = key.split(":")
+        if len(parts) != 5:
+            continue
+        _, _, _, slug, date = parts
+        val = _redis.get(key)
+        if val is None:
+            continue
+        try:
+            projections[f"{slug}:{date}"] = json.loads(val)
+            all_dates.add(date)
+        except (json.JSONDecodeError, TypeError):
+            continue
+
+    # Actuals: one acth:{date} blob per date, keyed by the same slug.
+    actuals_by_date = {}
+    for date in sorted(all_dates):
+        val = _redis.get(f"acth:{date}")
+        if val is None:
+            continue
+        try:
+            actuals_by_date[date] = json.loads(val)
+        except (json.JSONDecodeError, TypeError):
+            continue
+
+    print(f"[accuracy.py] hitter: {len(projections)} proj2h locks, "
+          f"actuals for {len(actuals_by_date)} dates")
+
+    starts = []
+    unmatched = 0      # locked but no actual yet → DNP or actuals not captured
+    for key, proj in projections.items():
+        slug, date = key.rsplit(":", 1)
+        actual = (actuals_by_date.get(date) or {}).get(slug)
+        if actual is None:
+            unmatched += 1
+            continue
+        proj_fpts   = round(float(proj.get("fpts", 0) or 0), 1)
+        actual_fpts = round(float(actual.get("fpts", 0) or 0), 1)
+        starts.append({
+            "player":      proj.get("name") or _deslug(slug),
+            "slug":        slug,
+            "date":        date,
+            "projFpts":    proj_fpts,
+            "actualFpts":  actual_fpts,
+            "fptsError":   round(proj_fpts - actual_fpts, 1),
+            "actualStats": actual.get("stats", {}),
+            "matchup":     proj.get("matchup", {}),
+            "model":       proj.get("model", {}),
+            "factors":     proj.get("factors", []),
+        })
+
+    summary = {}
+    if starts:
+        abs_errs = [abs(s["fptsError"]) for s in starts]
+        summary["totalStarts"] = len(starts)   # games; key kept for shared UI
+        summary["mae"]      = round(sum(abs_errs) / len(abs_errs), 2)
+        summary["maxError"] = round(max(abs_errs), 1)
+        summary["minError"] = round(min(abs_errs), 1)
+        summary["bias"]     = round(sum(s["fptsError"] for s in starts) / len(starts), 2)
+        if len(starts) >= 2:
+            avg_actual = sum(s["actualFpts"] for s in starts) / len(starts)
+            correct = sum(
+                1 for s in starts
+                if (s["projFpts"] >= avg_actual) == (s["actualFpts"] >= avg_actual)
+            )
+            summary["directionalAccuracy"] = round(correct / len(starts) * 100, 1)
+
+    starts.sort(key=lambda s: s["date"], reverse=True)
+    return {
+        "starts":         starts,
+        "summary":        summary,
+        "kind":           "hitter",
+        "unmatchedCount": unmatched,
+    }
+
+
 class handler(BaseHTTPRequestHandler):
     def do_GET(self):
         qs = parse_qs(urlparse(self.path).query)
@@ -463,12 +571,19 @@ class handler(BaseHTTPRequestHandler):
         except ValueError:
             period = None
         scope  = qs.get("scope", ["roster"])[0]  # "roster" or "all"
+        kind   = qs.get("kind", ["pitcher"])[0]   # "pitcher" or "hitter"
 
         try:
-            payload = get_accuracy_data(season, period, scope=scope)
-            payload["scope"] = scope
+            if kind == "hitter":
+                # Hitters are roster-scoped (proj2h is only written for the
+                # roster) — scope/ESPN overlay don't apply.
+                payload = get_hitter_accuracy_data(season, period)
+            else:
+                payload = get_accuracy_data(season, period, scope=scope)
+                payload["scope"] = scope
+            payload["kind"] = kind
         except Exception as e:
-            payload = {"starts": [], "summary": {}, "error": str(e)}
+            payload = {"starts": [], "summary": {}, "error": str(e), "kind": kind}
 
         body = json.dumps(payload).encode()
         self.send_response(200)
