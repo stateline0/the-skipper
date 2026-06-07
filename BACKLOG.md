@@ -87,6 +87,7 @@ PR #111 fixed the user-visible aggregates for mid-week pickups but deliberately 
     `accuracy.tsx` `?kind=` toggle, hitter-shaped table + `HitterBreakdown`
     (base × factors = proj + actual line), Skipper-only hitter MAE timeline
     (`MaeTimelineChart kind="hitter"`). Pitcher path untouched.
+- [ ] **Starts-only per-start pitcher rates (follow-up to the IP cap, session 35).** Session 35's PR #152 capped relief-inflated per-start IP at 7.0 and proportionally rescaled the line — bounds the swingman/opener blow-up but isn't exact (an opener who really goes ~3 IP still projects at the 7-IP cap). The precise fix is to compute per-start rates from **game logs filtered to `gs==1`** (data we already fetch) instead of season-total ÷ gamesStarted. Touches `per_game_avgs`/`_avgs` + the year blend in both `projection.py` and `cron.py`.
 - [ ] **Pitcher-actuals unification (follow-up to hitter accuracy).** Switch
   roster-scope pitcher actuals from ESPN-box (`cache:daily.actual_stats`,
   name-keyed first-write-wins → two-way Ohtani collision risk, roster-only) to
