@@ -2,6 +2,60 @@
 
 ---
 
+## Session 32 — June 7, 2026 — Forecaster scraper un-broken
+
+Fixed the ESPN Forecaster scraper, dead since ~mid-May, which had flatlined the
+accuracy dashboard's ESPN comparison line (PR #145).
+
+### What shipped
+- **Diagnosis first (rewrote `/api/forecaster_probe`).** A structural probe
+  showed the break wasn't a 403, a JS-hydration switch, or a moved article — it
+  was **HTTP 202 with a ~2KB script-only stub**: an **AWS WAF (CloudFront)**
+  bot challenge served in place of the article. Rather than guess one fix per
+  deploy, rewrote the probe to run a **strategy matrix** in a single request
+  (legacy Chrome / modern Chrome+client-hints / Safari / Googlebot / cookie-warm
+  session) and report, per strategy, whether the **real table** came back.
+- **The matrix verdict:** every Chrome-fingerprinted attempt (incl. a fully
+  consistent modern fingerprint and a cookie-warmed session) got the 202 stub;
+  **plain Safari and Googlebot UAs both returned the real 156KB article** (HTTP
+  200, `inline-table` intact, all sample pitchers present). UA-based rule, not a
+  solvable JS challenge — so a header swap is the entire fix.
+- **The fix (`forecaster.py`).** `fetch_forecaster()` now sends a Safari UA
+  (primary) → Googlebot UA (fallback), detects the WAF stub by body marker
+  (`awsWafCookieDomainList`/`gokuProps`) as well as non-200 status, and returns
+  a specific error (`all UAs blocked — safari: HTTP 202 … [AWS WAF stub]`) that
+  surfaces verbatim in `cache:cron-summary:{date}.espn.error`. Parser unchanged.
+
+### Key learnings this session
+- **Run the experiment matrix where the target is reachable, not where you
+  are.** The sandbox's network allowlist blocks `espn.com` (and the Vercel
+  preview), so no amount of local curl-ing could see the failure. The unlock was
+  to push the *diagnostic itself* — a multi-strategy probe — to the Vercel
+  runtime that can reach ESPN, and read the answer back in one round trip
+  instead of shipping blind header-guesses one deploy at a time.
+- **Identify the bot vendor before theorizing the fix.** "It's a 403 from a
+  stale UA" was the going hypothesis; the actual body (`window.gokuProps`,
+  `awsWafCookieDomainList`, `server: CloudFront`, status 202) named the vendor —
+  **AWS WAF**, not Akamai — and AWS WAF was challenging *Chrome* fingerprints
+  specifically while waving through Safari and Googlebot. The body bytes, not
+  the status code, told the real story.
+- **A "more modern, more complete" fingerprint can be exactly wrong.** The
+  instinct was to send the *most* browser-like request (modern Chrome UA + full
+  `sec-ch-ua`/`sec-fetch-*` client hints + cookie warm-up). That was the one
+  class of request the WAF blocked. A plainer Safari UA — fewer headers — passed.
+- **Pick the durable lever, not just the working one.** Both Safari and
+  Googlebot worked; Safari is primary because a Googlebot UA from a CloudFront/
+  Vercel IP is exactly what a WAF can later revoke via reverse-DNS verification.
+  Googlebot stays as the fallback, and the probe is left in place to re-run the
+  matrix the next time the WAF moves.
+
+### Carried forward
+- **Hitter accuracy** is still the next big chunk (lock `proj2h:` per game,
+  `kind=hitter` MAE series + Pitchers/Hitters toggle, exclude DNP games).
+- **W/L impact sign** fix (review-flagged) remains in the next-up queue.
+
+---
+
 ## Session 31 — June 7, 2026 — Hitters
 
 Expanded The Skipper beyond starting pitchers to a full **hitter** projection

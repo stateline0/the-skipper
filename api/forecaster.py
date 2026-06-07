@@ -65,15 +65,40 @@ FORECASTER_URL = (
     "matchups-daily-weekly-leagues"
 )
 
-HEADERS = {
+# ESPN fronts this article with AWS WAF (via CloudFront). As of June 2026 the
+# WAF serves a ~2KB HTTP-202 "challenge" stub (window.awsWafCookieDomainList /
+# window.gokuProps, no projection table) to Chrome-fingerprinted requests —
+# this includes the old Chrome/123 UA we used to send, a fully-consistent
+# modern Chrome UA + client-hint headers, and even a cookie-warmed session.
+# A plain Safari UA and the Googlebot UA both pass straight through and get the
+# real 156KB article (HTTP 200, table intact). The rule is UA-based, not a JS
+# challenge, so swapping the UA is the whole fix — no headless browser needed.
+#
+# We send Safari (a genuine browser UA the WAF currently trusts) as the primary
+# and fall back to Googlebot if the WAF ever starts challenging Safari too.
+# Verified via the /api/forecaster_probe strategy matrix (June 7 2026); re-run
+# it if this breaks again to see which UA the WAF is currently letting through.
+PRIMARY_HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/123.0.0.0 Safari/537.36"
+        "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15"
     ),
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     "Accept-Language": "en-US,en;q=0.9",
+    "Accept-Encoding": "gzip, deflate",  # no `br` — requests can't decode it without brotli
 }
+
+FALLBACK_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)"
+    ),
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Encoding": "gzip, deflate",
+}
+
+# Substrings that mark the AWS WAF challenge stub (so we treat a 200-with-stub,
+# should the WAF ever stop using 202, the same as an outright block).
+_BOT_WALL_MARKERS = ("awsWafCookieDomainList", "gokuProps")
 
 # ESPN appears to use exactly 1.0 as a placeholder for far-future starts they
 # haven't firmed up yet (observed on dates ~7+ days out). We flag these with
@@ -323,19 +348,46 @@ def parse_forecaster_html(html: str, year: int | None = None) -> dict:
     return {"entries": entries, "date_range": date_range}
 
 
+def _looks_like_bot_wall(html: str) -> bool:
+    """True if the body is the AWS WAF challenge stub rather than the article."""
+    return any(m in html for m in _BOT_WALL_MARKERS)
+
+
+def _fetch_html() -> tuple[str | None, str]:
+    """Fetch the Forecaster HTML, trying the primary UA then the fallback UA to
+    get past the AWS WAF UA-based challenge. Returns (html, note) on success or
+    (None, error_message) describing the failure mode for cron-summary."""
+    attempts = [("safari", PRIMARY_HEADERS), ("googlebot", FALLBACK_HEADERS)]
+    last_err = "no attempts made"
+    for name, headers in attempts:
+        try:
+            r = requests.get(FORECASTER_URL, headers=headers, timeout=15)
+        except Exception as e:
+            last_err = f"{name}: fetch failed: {type(e).__name__}: {e}"
+            continue
+        if r.status_code != 200 or _looks_like_bot_wall(r.text):
+            # 202 (or a 200 carrying the WAF stub) means this UA got challenged.
+            wall = " [AWS WAF stub]" if _looks_like_bot_wall(r.text) else ""
+            last_err = (f"{name}: HTTP {r.status_code}, "
+                        f"{len(r.text)} bytes{wall}")
+            continue
+        return r.text, f"ok via {name} UA"
+    return None, f"all UAs blocked — {last_err}"
+
+
 def fetch_forecaster() -> dict:
     """Fetch the Forecaster page and return parsed entries plus metadata."""
-    try:
-        r = requests.get(FORECASTER_URL, headers=HEADERS, timeout=15)
-    except Exception as e:
-        return {"error": f"fetch failed: {type(e).__name__}: {e}"}
-    if r.status_code != 200:
-        return {"error": f"HTTP {r.status_code}"}
+    html, note = _fetch_html()
+    if html is None:
+        # Surfaced verbatim in cron-summary.espn.error so a future WAF change
+        # is diagnosable without log access — re-run /api/forecaster_probe.
+        return {"error": note}
 
-    parsed = parse_forecaster_html(r.text)
+    parsed = parse_forecaster_html(html)
     fetched_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
     return {
         "fetched_at":  fetched_at,
+        "fetch_note":  note,
         "date_range":  parsed["date_range"],
         "entries":     parsed["entries"],
         "entry_count": len(parsed["entries"]),
