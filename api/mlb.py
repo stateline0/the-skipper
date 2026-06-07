@@ -278,6 +278,32 @@ def fetch_espn_probables(period_start, period_end):
 # Returns { "severino": ["2026-03-27"], ... }
 # ---------------------------------------------------------------------------
 
+def fetch_probable_pitcher_ids(start_date, end_date) -> dict:
+    """{ name_key: mlb_person_id } for every probable starter in the window,
+    from MLB's schedule probablePitcher hydrate (which carries the person id).
+    Covers debut/recalled starters that aren't in the season-stats cache, so
+    opposing-starter handedness resolves for everyone."""
+    try:
+        r = requests.get(
+            "https://statsapi.mlb.com/api/v1/schedule",
+            params={"sportId": 1, "startDate": start_date, "endDate": end_date,
+                    "hydrate": "probablePitcher", "gameType": "R"},
+            timeout=15,
+        )
+        data = r.json()
+    except Exception as e:
+        print(f"[mlb.py] probable pitcher ids fetch failed: {e}")
+        return {}
+    out = {}
+    for de in data.get("dates", []):
+        for g in de.get("games", []):
+            for side in ("away", "home"):
+                p = g.get("teams", {}).get(side, {}).get("probablePitcher")
+                if p and p.get("id") and p.get("fullName"):
+                    out[_strip_accents_mlb(p["fullName"])] = p["id"]
+    return out
+
+
 def fetch_mlb_probables(start_date, end_date):
     try:
         r = requests.get(
