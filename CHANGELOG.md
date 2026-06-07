@@ -51,8 +51,32 @@ Phased across 4 PRs; this entry grows as they land.
   cleanly; older locks fall back to a de-slugged name. Verified end-to-end
   against a mocked KV: DNP excluded, a 0-fer kept, Ohtani's bat tracked
   independently of his arm.
+- **PR 4 — Pitchers/Hitters toggle + hitter MAE on the Accuracy page (PR #150).**
+  The user-visible payoff. `pages/accuracy.tsx` gains a Pitchers/Hitters toggle
+  (`?kind=`); on Hitters it hides the Roster/All scope toggle (hitter locks are
+  roster-only), swaps the table to a hitter shape (matchup `opp`, "Hitter"
+  header, no ESPN column), relabels tiles (Games Tracked), and the expanded row
+  shows a `HitterBreakdown` — the **base × factor-stack = projected** reconciler
+  plus the actual hitting line — instead of the pitcher per-stat grid. The
+  factor analysis + per-stat MAE chart (pitcher-only data) self-hide.
+  `MaeTimelineChart` gains a `kind` prop: Hitters render a **Skipper-only** daily
+  MAE line (no ESPN Forecaster for hitters, no pitcher-model milestone markers).
+  `api/accuracy.py` adds `base` to the hitter start so the reconciler renders.
+  Pitcher path untouched (typechecked; the pre-existing recharts `formatter`
+  type warning is unrelated and ignored via `ignoreBuildErrors`).
+  - **Mobile polish** (same PR, after device review): the new toggle made the
+    header's 4 control groups overflow and clip "Hitters" → "Hitter" (segmented
+    toggles shrank below content width, and `overflow:hidden` for the rounded
+    corners cut the text). Fixed by letting the header + controls **wrap** and
+    giving the toggles/buttons `flexShrink:0` + `whiteSpace:nowrap` (also stops
+    "My Roster"/"All MLB" wrapping to two lines). Summary tiles now use
+    `auto-fit minmax(140px)` so they go **2×2 on phones**, 4-across on desktop;
+    and the hitter chart subtitle grammar ("line shows", not "line show").
 
 ### Notes / carried forward this chunk
+- **Hitter accuracy chunk complete** (PRs #147–#150). The dashboard now tracks
+  hitter projection error end to end; data fills in as `proj2h:`/`acth:`
+  accumulate from Hitters-page loads.
 - Hitter locks + actuals accumulate on **Hitters-page loads** — the warm cron
   (`api/warm.py`) only precomputes the pitcher payload, so a hitter equivalent
   (or a cron-based all-hitter lock/actual) is a possible later add for fuller
@@ -62,8 +86,9 @@ Phased across 4 PRs; this entry grows as they land.
   fixes the roster-scope ESPN-box dependency + the two-way (Ohtani) name
   collision in `cache:daily.actual_stats`, and matches how all-MLB pitchers
   (`actual-all:`) and hitters (`acth:`) already source actuals.
-- Remaining: PR 4 (Pitchers/Hitters toggle + hitter MAE series on the Accuracy
-  page), then the pitcher-actuals unification PR.
+- Remaining (next chunk): the pitcher-actuals unification PR (move roster-scope
+  pitcher actuals onto game-log-by-category, validated vs ESPN; fixes the
+  two-way Ohtani name-collision + adds FA pitcher coverage).
 
 ---
 

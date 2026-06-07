@@ -36,6 +36,10 @@ interface Start {
 
 interface Props {
   starts: Start[]
+  // 'pitcher' (default) shows the Skipper-vs-ESPN comparison + model milestones.
+  // 'hitter' is Skipper-only (no ESPN Forecaster for hitters) and drops the
+  // pitcher-model milestone markers, which don't apply to the hitter model.
+  kind?: 'pitcher' | 'hitter'
 }
 
 // ─── Model-changing milestones ────────────────────────────────────────────────
@@ -116,7 +120,8 @@ function rollingAvg(
 }
 
 // ─── Component ────────────────────────────────────────────────────────────────
-export default function MaeTimelineChart({ starts }: Props) {
+export default function MaeTimelineChart({ starts, kind = 'pitcher' }: Props) {
+  const isHitter = kind === 'hitter'
   const daily = bucketByDate(starts)
 
   // Empty / near-empty states
@@ -158,7 +163,7 @@ export default function MaeTimelineChart({ starts }: Props) {
     espnRolling:    espnRolling[i] != null ? Number(espnRolling[i]!.toFixed(2)) : null,
   }))
 
-  const visibleMilestones = MILESTONES.filter(m =>
+  const visibleMilestones = (isHitter ? [] : MILESTONES).filter(m =>
     m.date >= daily[0].date && m.date <= daily[daily.length - 1].date
   )
 
@@ -177,11 +182,11 @@ export default function MaeTimelineChart({ starts }: Props) {
         letterSpacing: 0.5,
         marginBottom: 4,
       }}>
-        Daily MAE: Skipper vs. ESPN
+        {isHitter ? 'Daily MAE: Skipper hitters' : 'Daily MAE: Skipper vs. ESPN'}
       </div>
       <div style={{ fontSize: 12, color: 'var(--ink-3)', marginBottom: 12 }}>
-        Solid lines show per-day MAE. Dashed lines show a 7-day trailing rolling average.
-        Vertical markers indicate model-changing deploys.
+        Solid line{isHitter ? '' : 's'} show{isHitter ? 's' : ''} per-day MAE. Dashed line{isHitter ? '' : 's'} show{isHitter ? 's' : ''} a 7-day trailing rolling average.
+        {!isHitter && ' Vertical markers indicate model-changing deploys.'}
       </div>
       <ResponsiveContainer width="100%" height={300}>
         <LineChart data={chartData} margin={{ top: 8, right: 20, left: 0, bottom: 8 }}>
@@ -212,15 +217,17 @@ export default function MaeTimelineChart({ starts }: Props) {
             dot={{ r: 3 }}
             connectNulls
           />
-          <Line
-            type="monotone"
-            dataKey="espnMae"
-            name="ESPN (daily)"
-            stroke="#f59e0b"
-            strokeWidth={2}
-            dot={{ r: 3 }}
-            connectNulls
-          />
+          {!isHitter && (
+            <Line
+              type="monotone"
+              dataKey="espnMae"
+              name="ESPN (daily)"
+              stroke="#f59e0b"
+              strokeWidth={2}
+              dot={{ r: 3 }}
+              connectNulls
+            />
+          )}
           <Line
             type="monotone"
             dataKey="skipperRolling"
@@ -231,16 +238,18 @@ export default function MaeTimelineChart({ starts }: Props) {
             dot={false}
             connectNulls
           />
-          <Line
-            type="monotone"
-            dataKey="espnRolling"
-            name="ESPN (7-day)"
-            stroke="#f59e0b"
-            strokeWidth={2}
-            strokeDasharray="5 5"
-            dot={false}
-            connectNulls
-          />
+          {!isHitter && (
+            <Line
+              type="monotone"
+              dataKey="espnRolling"
+              name="ESPN (7-day)"
+              stroke="#f59e0b"
+              strokeWidth={2}
+              strokeDasharray="5 5"
+              dot={false}
+              connectNulls
+            />
+          )}
           {visibleMilestones.map(m => (
             <ReferenceLine
               key={m.date}

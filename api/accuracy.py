@@ -527,6 +527,7 @@ def get_hitter_accuracy_data(season: int, period=None) -> dict:
             "projFpts":    proj_fpts,
             "actualFpts":  actual_fpts,
             "fptsError":   round(proj_fpts - actual_fpts, 1),
+            "base":        proj.get("base"),
             "actualStats": actual.get("stats", {}),
             "matchup":     proj.get("matchup", {}),
             "model":       proj.get("model", {}),
