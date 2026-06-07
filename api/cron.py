@@ -54,6 +54,9 @@ SCORING = {"ip": 3, "so": 1, "h": -1, "bb": -1, "er": -2, "hb": -1, "w": 5, "l":
 IP_THRESHOLD_SP = 50.0
 MIN_STARTS_SP = 3
 STARTER_WIN_SHARE = 0.57
+# See projection.py:IP_PER_START_CAP — caps relief-inflated per-start lines
+# (total inningsPitched ÷ gamesStarted) so swingmen don't project at 39 FPTS.
+IP_PER_START_CAP = 7.0
 DEFAULT_WIN_PROB = 0.5
 
 # Floor below which we treat a date's actuals dict as a partial fetch
@@ -193,15 +196,18 @@ def lock_all_mlb_projections() -> dict:
             if games < MIN_STARTS_SP:
                 return None
             ip = _parse_ip(stat.get("inningsPitched", "0.0")) / games
-            h = int(stat.get("hits", 0)) / games
-            bb = int(stat.get("baseOnBalls", 0)) / games
-            hb = int(stat.get("hitBatsmen", 0)) / games
+            # Scale down a relief-inflated per-start line (see IP_PER_START_CAP).
+            scale = (IP_PER_START_CAP / ip) if ip > IP_PER_START_CAP else 1.0
+            ip *= scale
+            h = int(stat.get("hits", 0)) / games * scale
+            bb = int(stat.get("baseOnBalls", 0)) / games * scale
+            hb = int(stat.get("hitBatsmen", 0)) / games * scale
             return {
-                "ip": ip, "so": int(stat.get("strikeOuts", 0)) / games,
-                "h": h, "bb": bb, "er": int(stat.get("earnedRuns", 0)) / games,
-                "hb": hb, "w": int(stat.get("wins", 0)) / games,
-                "l": int(stat.get("losses", 0)) / games,
-                "sv": int(stat.get("saves", 0)) / games,
+                "ip": ip, "so": int(stat.get("strikeOuts", 0)) / games * scale,
+                "h": h, "bb": bb, "er": int(stat.get("earnedRuns", 0)) / games * scale,
+                "hb": hb, "w": int(stat.get("wins", 0)) / games * scale,
+                "l": int(stat.get("losses", 0)) / games * scale,
+                "sv": int(stat.get("saves", 0)) / games * scale,
                 "batters_faced": ip * 3 + h + bb + hb,
             }
 

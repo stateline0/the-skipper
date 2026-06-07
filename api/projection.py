@@ -40,6 +40,15 @@ IP_THRESHOLD_RP = 20.0
 MIN_STARTS_SP = 3
 MIN_APPEARANCES_RP = 5
 
+# Per-start IP ceiling. Per-start rates are season totals ÷ gamesStarted, but
+# `inningsPitched` includes RELIEF appearances — so a swingman/opener/reliever
+# making a spot start blows up (e.g. 25 relief IP + 2 starts → 18 "IP/start" →
+# ~39 projected FPTS). No real starter averages >7 IP/start, so when the
+# computed per-start IP exceeds this we scale the whole counting line down by
+# the same ratio, restoring a realistic, internally-consistent start line.
+# Pure starters sit well under the cap, so it's a no-op for them.
+IP_PER_START_CAP = 7.0
+
 # Starter win share: probability that the starting pitcher gets the W
 # given the team wins. Historically ~55-60%, trending down as starters
 # pitch fewer innings. 0.57 is a league-wide average.
@@ -88,19 +97,23 @@ def per_game_avgs(stat: dict, games: int, is_rp: bool = False) -> dict:
     if games < min_games:
         return None
     ip = parse_ip(stat.get("inningsPitched", "0.0")) / games
-    h  = int(stat.get("hits",         0)) / games
-    bb = int(stat.get("baseOnBalls",   0)) / games
-    hb = int(stat.get("hitBatsmen",    0)) / games
+    # Scale the whole line down if relief innings inflated the per-start IP
+    # (SP only — RP per-appearance IP is naturally low). See IP_PER_START_CAP.
+    scale = (IP_PER_START_CAP / ip) if (not is_rp and ip > IP_PER_START_CAP) else 1.0
+    ip *= scale
+    h  = int(stat.get("hits",         0)) / games * scale
+    bb = int(stat.get("baseOnBalls",   0)) / games * scale
+    hb = int(stat.get("hitBatsmen",    0)) / games * scale
     return {
         "ip": ip,
-        "so": int(stat.get("strikeOuts", 0)) / games,
+        "so": int(stat.get("strikeOuts", 0)) / games * scale,
         "h":  h,
         "bb": bb,
-        "er": int(stat.get("earnedRuns", 0)) / games,
+        "er": int(stat.get("earnedRuns", 0)) / games * scale,
         "hb": hb,
-        "w":  int(stat.get("wins",       0)) / games,
-        "l":  int(stat.get("losses",     0)) / games,
-        "sv": int(stat.get("saves",      0)) / games,
+        "w":  int(stat.get("wins",       0)) / games * scale,
+        "l":  int(stat.get("losses",     0)) / games * scale,
+        "sv": int(stat.get("saves",      0)) / games * scale,
         "batters_faced": ip * 3 + h + bb + hb,
     }
 

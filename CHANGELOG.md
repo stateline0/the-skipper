@@ -18,13 +18,22 @@ accuracy*, so it's **all-MLB for both kinds — the roster scope is removed**.
   fits one line again (fixes the two-line wrap from session 34). Dead
   roster-scope branches removed.
 
-### Diagnosed, queued (not yet fixed)
-- **Inflated pitcher projections (24.7 / 39.2 / 23.8).** Root cause: per-start
-  rates divide **total `inningsPitched` (starts + relief)** by `gamesStarted`
-  (`cron.py:195`, `projection.py:90`). For swingmen/openers/relievers making a
-  spot start, that inflates per-start IP wildly (e.g. 25 relief IP ÷ 2 starts →
-  12.5 "IP/start"). Hits both the all-MLB and roster pitcher paths; pre-existing
-  (predates this session). Fix needs starts-only stats or a per-start IP clamp.
+### Also fixed
+- **Inflated pitcher projections (24.7 / 39.2 / 23.8) — fixed (PR #152).** Root
+  cause: per-start rates divide **total `inningsPitched` (starts + relief)** by
+  `gamesStarted`. For swingmen/openers/relievers making a spot start, that
+  inflated per-start IP wildly (e.g. 48 IP over 3 GS → 16 "IP/start" → ~33 FPTS).
+  Fix: `IP_PER_START_CAP = 7.0` — when computed per-start IP exceeds it, the
+  **whole counting line is scaled by the same ratio**, restoring a realistic,
+  internally-consistent start (16 → 7 IP, with SO/H/BB/ER scaled to match → ~16
+  base). No real starter averages >7 IP/start, so it's a no-op for true SPs
+  (verified: a 6.4-IP/start ace is unchanged) and RPs. Applied in both the roster
+  (`projection.py`) and all-MLB (`cron.py`) paths. **Forward-only** for locked
+  values; folded into the existing 2026-06-07 `MaeTimelineChart` milestone. A
+  starts-only-from-game-logs rate would be more precise (esp. openers who really
+  go ~3 IP) — logged as a follow-up.
+
+### Still queued
 - **All-MLB hitter coverage** (the real fix for "Hitters is roster-only"): needs
   a cron pass that locks all-MLB hitter projections + actuals like the pitcher
   cron. Blockers found while scoping: `fetch_season_stats_hitting` discards the
