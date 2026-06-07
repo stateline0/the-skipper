@@ -38,35 +38,6 @@ from projection_hitter import (
 )
 
 
-def _hand_probe(pid):
-    """TEMP: dump the raw /people/{id} response for one pitcher id so we can see
-    whether this env serves player bios (and what fields/handedness exist)."""
-    out = {"pid": pid}
-    if not pid:
-        return out
-    try:
-        r = requests.get(
-            f"https://statsapi.mlb.com/api/v1/people/{pid}",
-            headers={"User-Agent": "Mozilla/5.0"}, timeout=10,
-        )
-        out["status"] = r.status_code
-        try:
-            j = r.json()
-            out["topKeys"] = list(j.keys())
-            ppl = j.get("people", [])
-            out["peopleLen"] = len(ppl)
-            if ppl:
-                out["personKeys"] = sorted(ppl[0].keys())
-                out["pitchHand"] = ppl[0].get("pitchHand")
-                out["batSide"] = ppl[0].get("batSide")
-        except Exception as e:
-            out["parseErr"] = str(e)[:160]
-            out["bodyHead"] = r.text[:160]
-    except Exception as e:
-        out["reqErr"] = str(e)[:160]
-    return out
-
-
 def _build_days(name, team, game_dates, schedule, base, hands, splits, overall_ops):
     """Per-day cells with the matchup factor stack. Phase 6 adds a platoon
     factor (batter vs the day's probable-starter hand); later layers append
@@ -342,8 +313,6 @@ def get_hitter_data(team_id: int, week: int) -> dict:
                 opp_ids.add(pid)
     hitter_ids = [(hitting_current.get(nk) or {}).get("_mlbId") for nk in roster_keys]
     hands = load_player_hands(year_int, list(opp_ids) + [i for i in hitter_ids if i])
-    _pitching_n = len(pitching)
-    _ids_n = len(opp_ids) + len([i for i in hitter_ids if i])
     proj, _details = get_projected_hitter_fpts(
         [{"name": h["name"], "team": h["team"], "gameDates": h["gameDates"]} for h in hitters_meta],
         scoring=scoring,
@@ -396,20 +365,6 @@ def get_hitter_data(team_id: int, week: int) -> dict:
 
     return {
         "ok":            True,
-        "_diag":         {  # TEMP platoon diagnostic — remove before merge
-            "handsCount": len(hands),
-            "pitchingCacheSize": _pitching_n,
-            "idsRequested": _ids_n,
-            "handProbe": _hand_probe(next(iter(opp_ids), None)),
-            "sampleHands": dict(list(hands.items())[:4]),
-            "splitsCovered": f"{len(splits)}/{len(roster_keys)}",
-            "sampleSplits": dict(list(splits.items())[:2]),
-            "sampleDays": [
-                {"hitter": h["name"], "date": d["date"], "oppStarter": d.get("oppStarter"),
-                 "oppHand": d.get("oppHand"), "factors": d.get("factors")}
-                for h in roster_hitters[:3] for d in (h.get("days") or [])[:2]
-            ],
-        },
         "teamName":      team_name,
         "weekStart":     week_start,
         "weekEnd":       week_end,
@@ -522,7 +477,8 @@ HITTER_CACHE_TTL = 1800  # 30 min
 #   v15: TEMP handProbe in _diag to inspect raw /people/{id} bio response.
 #   v16: cache handedness BY ID, resolved-only (poisoned id-set caused 0 hands).
 #   v17: fix NameError in fetch_player_hands (_strip_accents_mlb) — the real root cause.
-HITTER_CACHE_VERSION = 17
+#   v18: remove temp _diag block.
+HITTER_CACHE_VERSION = 18
 
 
 def _cache_key(team_id: int, week: int) -> str:
