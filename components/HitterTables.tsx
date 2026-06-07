@@ -291,27 +291,13 @@ function HitterDayCell({ g }: { g: DayGame }) {
   const [open, setOpen] = useState(false)
   if (g.off) return <span style={{ color: 'var(--ink-3)', fontSize: 11 }}>—</span>
   const oppLabel = `${g.home ? '' : '@'}${g.opp}`
-
-  // Played (final) or playing (in_progress) → show actual/live FPTS instead of projection.
   const played = g.status === 'final' || g.status === 'in_progress'
-  if (played && g.actual != null) {
-    const live = g.status === 'in_progress'
-    return (
-      <div style={{ textAlign: 'center' }}>
-        <div style={{ fontSize: 11, fontFamily: 'var(--mono)', fontWeight: 700, color: 'var(--ink)' }}>
-          {oppLabel}
-          {live && <span style={{ fontSize: 8, fontWeight: 700, color: 'var(--red)', marginLeft: 3, letterSpacing: '0.06em' }}>● LIVE</span>}
-        </div>
-        <div style={{ fontSize: 11, fontFamily: 'var(--mono)', fontWeight: 700, color: g.actual > 0 ? 'var(--green)' : g.actual < 0 ? 'var(--red)' : 'var(--ink-3)', marginTop: 1 }}>
-          {g.actual > 0 ? '+' : ''}{g.actual.toFixed(1)}
-        </div>
-      </div>
-    )
-  }
-  // Matchup edge cue: color the projection vs the pre-matchup base.
-  const projColor = g.base === undefined ? 'var(--ink-2)'
-    : g.proj > g.base ? 'var(--green)' : g.proj < g.base ? 'var(--red)' : 'var(--ink-2)'
+  const live = g.status === 'in_progress'
+  const showActual = played && g.actual != null
   const hasDetail = g.base !== undefined
+  // Projection edge arrow vs the pre-matchup base (only shown on projections).
+  const up = g.base !== undefined && g.proj > g.base
+  const down = g.base !== undefined && g.proj < g.base
   return (
     <div
       style={{ position: 'relative', textAlign: 'center', cursor: hasDetail ? 'help' : 'default' }}
@@ -321,15 +307,25 @@ function HitterDayCell({ g }: { g: DayGame }) {
     >
       <div style={{ fontSize: 11, fontFamily: 'var(--mono)', fontWeight: 700, color: 'var(--ink)' }}>
         {oppLabel}
-        {g.oppHand && (
+        {live && <span style={{ fontSize: 8, fontWeight: 700, color: 'var(--red)', marginLeft: 3, letterSpacing: '0.06em' }}>● LIVE</span>}
+        {!showActual && g.oppHand && (
           <span style={{ fontSize: 9, fontWeight: 500, color: g.oppHand === 'L' ? 'var(--amber)' : 'var(--ink-3)', marginLeft: 3 }}>
             {g.oppHand}HP
           </span>
         )}
       </div>
-      <div style={{ fontSize: 10, fontFamily: 'var(--mono)', fontWeight: 500, color: projColor, marginTop: 1 }}>
-        {g.proj.toFixed(1)}
-      </div>
+      {showActual ? (
+        // Actual / live — bold, signed, saturated (the "real" number).
+        <div style={{ fontSize: 12, fontFamily: 'var(--mono)', fontWeight: 700, color: g.actual! > 0 ? 'var(--green)' : g.actual! < 0 ? 'var(--red)' : 'var(--ink-3)', marginTop: 1 }}>
+          {g.actual! > 0 ? '+' : ''}{g.actual!.toFixed(1)}
+        </div>
+      ) : (
+        // Projection — smaller, muted, with the matchup-edge arrow (provisional).
+        <div style={{ fontSize: 10, fontFamily: 'var(--mono)', fontWeight: 500, color: 'var(--ink-3)', marginTop: 1, fontStyle: 'italic' }}>
+          {g.proj.toFixed(1)}
+          {(up || down) && <span style={{ fontStyle: 'normal', marginLeft: 2, color: up ? 'var(--green)' : 'var(--red)' }}>{up ? '↑' : '↓'}</span>}
+        </div>
+      )}
       {open && hasDetail && <DayPopover g={g} oppLabel={oppLabel} />}
     </div>
   )
@@ -364,6 +360,13 @@ function DayPopover({ g, oppLabel }: { g: DayGame; oppLabel: string }) {
       ))}
       <div style={{ borderTop: '1px solid var(--border)', margin: '5px 0' }} />
       {row('Proj', <span style={{ color: 'var(--green)' }}>{g.proj.toFixed(1)}</span>, 'var(--ink)')}
+      {g.actual != null && row(
+        g.status === 'in_progress' ? 'Actual (live)' : 'Actual',
+        <span style={{ color: g.actual > 0 ? 'var(--green)' : g.actual < 0 ? 'var(--red)' : 'var(--ink-3)' }}>
+          {g.actual > 0 ? '+' : ''}{g.actual.toFixed(1)}
+        </span>,
+        'var(--ink)',
+      )}
     </div>
   )
 }

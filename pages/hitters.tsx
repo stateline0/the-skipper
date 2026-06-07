@@ -153,7 +153,7 @@ export default function Hitters() {
         ) : (
           <>
             <div style={{ background: 'var(--green-light)', border: '1px solid rgba(46,196,160,0.35)', borderRadius: 'var(--radius)', padding: '10px 14px', fontSize: 13, color: 'var(--green)', marginBottom: 20 }}>
-              ● <strong>Matchup-aware.</strong> Season rate + Savant de-luck + recent form, with per-day factors: platoon, opposing-starter quality, park &amp; weather. Hover/tap a day for the full breakdown.
+              ● <strong>Matchup-aware.</strong> Season rate + Savant de-luck + recent form, with per-day factors: platoon, opposing-starter quality, park &amp; weather. Played games show <strong>bold actual</strong> points; upcoming show <em>muted projections</em>. Hover/tap any day for the breakdown.
             </div>
 
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 12, marginBottom: 20 }}>
