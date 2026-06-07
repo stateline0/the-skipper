@@ -46,7 +46,7 @@ hitter) — the opposite of the pitcher model's `env_to_pitcher_mult()` inversio
 | 3 | Recent form (weighted last ~15 games, 60/40) | **done** (`compute_recent_form_hitter` + `fetch_game_logs_hitting`, blended into `projPerGame`) |
 | 4 | Park factor (direct, per-game) | planned |
 | 5 | Weather (temp; reuse `get_weather_factor`) | planned |
-| 6 | Platoon (L/R) splits vs the probable starter | planned |
+| 6 | Platoon (L/R) splits vs the probable starter | **done** (`platoon_multiplier` + per-day factor stack; per-day detail popover) |
 | 7 | Opposing-pitcher quality (xERA/K%/xwOBA-against) | planned |
 | 8 | Regressed batter-vs-pitcher history | planned |
 | 9 | PA / lineup-spot volume (beyond pitchers) | planned |

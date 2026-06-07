@@ -12,7 +12,8 @@ from projection_hitter import (
     DEFAULT_HITTER_SCORING, ESPN_HITTING_STAT_IDS,
     parse_hitter_scoring, apply_hitter_formula, per_game_vector,
     blend_vectors, pa_blend_weight, apply_factors, scoring_is_sane,
-    apply_savant_hitter, compute_recent_form_hitter, get_projected_hitter_fpts,
+    apply_savant_hitter, compute_recent_form_hitter, platoon_multiplier,
+    get_projected_hitter_fpts,
 )
 
 
@@ -228,6 +229,23 @@ def test_recent_form_shifts_projection():
     assert blended["Hot Bat"]["recentForm"] is not None
     assert blended["Hot Bat"]["projPerGame"] > base["Hot Bat"]["projPerGame"]
     print(f"✓ recent form shifts projection: {base['Hot Bat']['projPerGame']} → {blended['Hot Bat']['projPerGame']}")
+
+
+def test_platoon_multiplier():
+    # Strong reverse-split vs LHP with a full-season sample → factor > 1 (capped).
+    m = platoon_multiplier(ops_vs_hand=0.950, pa_vs_hand=300, ops_overall=0.800)
+    assert 1.0 < m <= 1.15
+    # Same edge but tiny sample → heavily regressed toward 1.0.
+    m_small = platoon_multiplier(ops_vs_hand=0.950, pa_vs_hand=20, ops_overall=0.800)
+    assert m_small < m and m_small > 1.0
+    # Worse vs hand → factor < 1.
+    assert platoon_multiplier(0.650, 300, 0.800) < 1.0
+    # Missing data → neutral.
+    assert platoon_multiplier(0, 300, 0.800) == 1.0
+    assert platoon_multiplier(0.950, 300, 0) == 1.0
+    # Clamp holds for an extreme split.
+    assert platoon_multiplier(2.000, 600, 0.800) == 1.15
+    print("✓ platoon_multiplier: regressed, directional, clamped, safe no-ops")
 
 
 def test_end_to_end_projection():
