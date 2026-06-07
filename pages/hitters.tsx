@@ -84,12 +84,14 @@ export default function Hitters() {
   const metrics = useMemo(() => {
     const projWk = hitters.reduce((a, h) => a + (h.projFpts || 0), 0)
     const games = Object.values(weeks).reduce((a, w) => a + w.filter(g => !g.off).length, 0)
-    const topG = hitters.reduce((a, h) => Math.max(a, h.projG), 0)
+    const actWk = Object.values(weeks).reduce(
+      (a, w) => a + w.reduce((s, g) => s + (g.actual || 0), 0), 0)
+    const playedAny = Object.values(weeks).some(w => w.some(g => g.actual != null))
     return [
       { label: 'PROJ FPTS / WK', value: projWk.toFixed(1), accent: 'ok' as const },
+      { label: 'ACT FPTS / WK', value: playedAny ? actWk.toFixed(1) : '—' },
       { label: 'HITTERS ROSTERED', value: hitters.length },
       { label: 'GAMES THIS WK', value: games },
-      { label: 'TOP PROJ / G', value: topG.toFixed(1) },
     ]
   }, [hitters, weeks])
 
@@ -151,7 +153,7 @@ export default function Hitters() {
         ) : (
           <>
             <div style={{ background: 'var(--green-light)', border: '1px solid rgba(46,196,160,0.35)', borderRadius: 'var(--radius)', padding: '10px 14px', fontSize: 13, color: 'var(--green)', marginBottom: 20 }}>
-              ● <strong>Matchup-aware.</strong> Season rate + Savant de-luck + recent form, with per-day factors: platoon, opposing-starter quality, park &amp; weather. Hover/tap a day for the full breakdown.
+              ● <strong>Matchup-aware.</strong> Season rate + Savant de-luck + recent form, with per-day factors: platoon, opposing-starter quality, park &amp; weather. Played games show <strong>bold actual</strong> points; upcoming show <em>muted projections</em>. Hover/tap any day for the breakdown.
             </div>
 
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 12, marginBottom: 20 }}>
@@ -178,7 +180,7 @@ export default function Hitters() {
               </div>
 
               {tab === 'schedule'
-                ? <HitterScheduleGrid hitters={hitters} weeks={weeks} weekDates={weekDates} today={today} />
+                ? <HitterScheduleGrid hitters={hitters} weeks={weeks} weekDates={weekDates} today={today} actualsTracked />
                 : <HitterStatsTable hitters={hitters} weeks={weeks} leagueAvg={live?.leagueAvg} />}
             </div>
           </>

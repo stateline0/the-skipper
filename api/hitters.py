@@ -31,17 +31,18 @@ from mlb import get_starts_for_players, MATCHUP_PERIODS, fetch_probable_pitcher_
 from weather import get_weather_factor
 from fetcher import (
     get_headers_and_cookies, get_pro_team_map, load_hitter_stats,
-    load_hitter_game_logs, load_player_hands, load_hitter_splits,
+    load_hitter_game_logs, load_player_hands, load_hitter_splits, get_actual_fpts,
 )
 from kv import cache_get, cache_set
 from projection_hitter import (
     parse_hitter_scoring, get_projected_hitter_fpts, strip_accents,
-    platoon_multiplier, opp_pitcher_multiplier, DEFAULT_HITTER_SCORING, _resolve_points,
+    platoon_multiplier, opp_pitcher_multiplier, actuals_from_logs,
+    DEFAULT_HITTER_SCORING, _resolve_points,
 )
 
 
 def _build_days(name, team, game_dates, schedule, base, hands, splits, overall_ops,
-                opp_savant, league_xwoba, weather_map, today_iso):
+                opp_savant, league_xwoba, weather_map, today_iso, actuals=None):
     """Per-day cells with the matchup factor stack:
       Phase 6 — platoon (batter vs the day's probable-starter hand)
       Phase 7 — opposing-starter quality (their xwOBA-against vs league)
@@ -86,15 +87,18 @@ def _build_days(name, team, game_dates, schedule, base, hands, splits, overall_o
                     label = f"Weather ({round(temp)}°F)" if temp else "Weather"
                     factors.append({"label": label, "mult": round(wf, 3)})
                     mult *= wf
+        av = (actuals.get(name) or {}).get(d) if actuals else None
         days.append({
             "date": d,
             "opp": game.get("opponent", ""),
             "home": game.get("is_home", True),
+            "status": game.get("status", ""),
             "oppStarter": opp_starter.title() if opp_starter else "",
             "oppHand": opp_hand or None,
             "base": round(base, 1),
             "factors": factors,
             "proj": round(base * mult, 1),
+            "actual": round(av, 1) if av is not None else None,
         })
     return days
 
@@ -391,6 +395,38 @@ def get_hitter_data(team_id: int, week: int) -> dict:
         season=year_int, period=week,
     )
 
+    # ── Actual / live FPTS for played + in-progress games ─────────────
+    # Reuses the pitcher actuals path: per-player applied total per scoring
+    # period (cached for completed days, live for today). Roster only — ESPN
+    # only exposes a player's FPTS for days they were rostered.
+    act_dates = [
+        d for d in period_dates
+        if any(g.get("status") in ("final", "in_progress") for g in schedule.get(d, {}).values())
+    ]
+    actual_fpts = {}
+    if act_dates:
+        try:
+            actual_fpts, _s, _b, _mt, _ls = get_actual_fpts(
+                act_dates, set(h["name"] for h in hitters_meta), headers, cookies, team_id
+            )
+        except Exception as e:
+            print(f"[hitters.py] hitter actuals fetch failed: {e}")
+
+    # Validate the by-category game-log scoring against ESPN's applied totals on
+    # the roster (where both exist) — the basis for trusting it for free agents.
+    try:
+        checked = match = 0
+        for h in hitters_meta:
+            la = actuals_from_logs(roster_logs.get(strip_accents(h["name"])), scoring)
+            for d, ev in (actual_fpts.get(h["name"]) or {}).items():
+                checked += 1
+                if abs(la.get(d, 0.0) - ev) <= 0.5:
+                    match += 1
+        if checked:
+            print(f"[hitters.py] actuals validation (game-log vs ESPN): {match}/{checked} match")
+    except Exception as e:
+        print(f"[hitters.py] actuals validation failed: {e}")
+
     # ── Assemble output ───────────────────────────────────────────────
     roster_hitters = []
     for h in hitters_meta:
@@ -403,8 +439,9 @@ def get_hitter_data(team_id: int, week: int) -> dict:
         # Per-day cells with the matchup factor stack (Phase 6 platoon + Phase 7 opp SP).
         days = _build_days(name, h["team"], h["gameDates"], schedule, per_game,
                            hands, splits, overall_ops, pitch_savant, league_xwoba,
-                           weather_map, today_iso)
+                           weather_map, today_iso, actual_fpts)
         proj_week = round(sum(d["proj"] for d in days), 1)
+        act_week = round(sum(d["actual"] for d in days if d.get("actual") is not None), 1)
         roster_hitters.append({
             "name":        name,
             "team":        h["team"],
@@ -412,6 +449,7 @@ def get_hitter_data(team_id: int, week: int) -> dict:
             "rank":        h["rank"],
             "bats":        bats,
             "projFpts":    proj_week,
+            "actualFpts":  act_week,
             "projPerGame": round(per_game, 1),
             "blendWeight": p.get("blendWeight", 0.0),
             "modelType":   p.get("modelType", "stats"),
@@ -495,6 +533,9 @@ def _fetch_fa_hitters(base, headers, cookies, PRO_TEAM_MAP, current_week,
         fa_keys = [strip_accents(h["name"]) for h in meta]
         fa_logs = load_hitter_game_logs(year_int, hitting_current, fa_keys)
         fa_splits = load_hitter_splits(year_int, hitting_current, fa_keys)
+        # FA actuals: computed by category from the MLB game logs (ESPN won't
+        # expose FPTS for unrostered players). Keyed by display name.
+        fa_actuals = {h["name"]: actuals_from_logs(fa_logs.get(strip_accents(h["name"])), scoring) for h in meta}
         proj, _ = get_projected_hitter_fpts(
             [{"name": h["name"], "team": h["team"], "gameDates": h["gameDates"]} for h in meta],
             scoring=scoring, stat_current=hitting_current, stat_previous=hitting_previous,
@@ -512,11 +553,12 @@ def _fetch_fa_hitters(base, headers, cookies, PRO_TEAM_MAP, current_week,
             bats = (hands.get(strip_accents(h["name"])) or {}).get("bats", "")
             days = _build_days(h["name"], h["team"], h["gameDates"], schedule, per_game,
                                hands, fa_splits, overall_ops, pitch_savant, league_xwoba,
-                               weather_map, today_iso)
+                               weather_map, today_iso, fa_actuals)
             out.append({
                 "name": h["name"], "team": h["team"], "pos": h["pos"], "bats": bats,
                 "percentOwned": h["ownPct"],
                 "projFpts": round(sum(d["proj"] for d in days), 1), "projPerGame": round(per_game, 1),
+                "actualFpts": round(sum(d["actual"] for d in days if d.get("actual") is not None), 1),
                 "games": p.get("games", len(h["gameDates"])),
                 "modelType": p.get("modelType", "stats"),
                 "recentForm": p.get("recentForm"),
@@ -554,7 +596,9 @@ HITTER_CACHE_TTL = 1800  # 30 min
 #   v19: Phase 7 — opposing-pitcher quality factor + probable-id starter coverage.
 #   v20: Phase 4/5 — park + weather per-day factors.
 #   v21: gate weather on game status (scheduled), not UTC date (today boundary).
-HITTER_CACHE_VERSION = 21
+#   v22: capture actual/live FPTS per day (roster) — status + actual on day cells.
+#   v23: FA actuals computed from game logs by category (ESPN can't expose them).
+HITTER_CACHE_VERSION = 23
 
 
 def _cache_key(team_id: int, week: int) -> str:

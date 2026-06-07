@@ -41,6 +41,8 @@ export interface DayGame {
   oppStarter?: string
   base?: number                 // pre-matchup per-game base
   factors?: DayFactor[]         // matchup adjustments (platoon, …) for the popover
+  status?: string               // "scheduled" | "in_progress" | "final"
+  actual?: number | null        // actual/live FPTS for played games
 }
 
 export type Weeks = Record<string, DayGame[]>
@@ -83,6 +85,10 @@ function sortVal(h: UIHitter, weeks: Weeks, key: string): number | null {
   const week = weeks[h.name] || []
   switch (key) {
     case 'g':      return week.filter(g => !g.off).length
+    case 'act': {
+      const a = week.filter(g => !g.off && g.actual != null)
+      return a.length ? a.reduce((s, g) => s + (g.actual || 0), 0) : null
+    }
     case 'projWk': return week.reduce((a, g) => a + g.proj, 0)
     case 'projG':  return h.projG
     case 'own':    return h.percentOwned ?? null
@@ -190,8 +196,9 @@ export function PosBadge({ pos }: { pos: string }) {
 
 // ─── Schedule grid ──────────────────────────────────────────────────────────
 
-export function HitterScheduleGrid({ hitters, weeks, weekDates, today, showOwn }: {
-  hitters: UIHitter[]; weeks: Weeks; weekDates: string[]; today: string; showOwn?: boolean
+export function HitterScheduleGrid({ hitters, weeks, weekDates, today, showOwn, actualsTracked }: {
+  hitters: UIHitter[]; weeks: Weeks; weekDates: string[]; today: string
+  showOwn?: boolean; actualsTracked?: boolean
 }) {
   const { sorted, key, dir, onSort } = useSortedHitters(hitters, weeks)
   const headerStyle: React.CSSProperties = {
@@ -233,6 +240,7 @@ export function HitterScheduleGrid({ hitters, weeks, weekDates, today, showOwn }
               )
             })}
             <th onClick={() => onSort('g')} style={{ ...headerStyle, minWidth: 36, cursor: 'pointer', userSelect: 'none', color: key === 'g' ? 'var(--ink)' : 'var(--ink-3)' }}>G{arrow('g')}</th>
+            {actualsTracked && <th onClick={() => onSort('act')} style={{ ...headerStyle, minWidth: 56, cursor: 'pointer', userSelect: 'none', color: key === 'act' ? 'var(--ink)' : 'var(--ink-3)' }}>Act{arrow('act')}</th>}
             <th onClick={() => onSort('projWk')} style={{ ...headerStyle, minWidth: 60, cursor: 'pointer', userSelect: 'none', color: key === 'projWk' ? 'var(--ink)' : 'var(--ink-3)' }}>Proj{arrow('projWk')}</th>
             {showOwn && <th onClick={() => onSort('own')} style={{ ...headerStyle, minWidth: 52, cursor: 'pointer', userSelect: 'none', color: key === 'own' ? 'var(--ink)' : 'var(--ink-3)' }}>Own%{arrow('own')}</th>}
           </tr>
@@ -243,6 +251,8 @@ export function HitterScheduleGrid({ hitters, weeks, weekDates, today, showOwn }
             const isBench = h.pos === 'BN' || h.pos === 'IL'
             const games = week.filter(g => !g.off)
             const projTotal = games.reduce((a, g) => a + g.proj, 0)
+            const actGames = games.filter(g => g.actual != null)
+            const actTotal = actGames.reduce((a, g) => a + (g.actual || 0), 0)
             return (
               <tr key={h.name} style={{ opacity: isBench ? 0.55 : 1 }}>
                 <td style={cellStyle}><PosBadge pos={h.pos} /></td>
@@ -254,10 +264,15 @@ export function HitterScheduleGrid({ hitters, weeks, weekDates, today, showOwn }
                 </td>
                 {week.map(g => (
                   <td key={g.date} style={{ ...cellStyle, background: g.date === today ? 'var(--paper-2)' : 'transparent' }}>
-                    <HitterDayCell g={g} />
+                    <HitterDayCell g={g} actualsTracked={actualsTracked} />
                   </td>
                 ))}
                 <td style={{ ...cellStyle, fontFamily: 'var(--mono)', fontWeight: 700 }}>{games.length}</td>
+                {actualsTracked && (
+                  <td style={{ ...cellStyle, fontFamily: 'var(--mono)', fontWeight: 700, color: actGames.length ? (actTotal >= 0 ? 'var(--green)' : 'var(--red)') : 'var(--ink-3)' }}>
+                    {actGames.length ? actTotal.toFixed(1) : '—'}
+                  </td>
+                )}
                 <td style={{ ...cellStyle, fontFamily: 'var(--mono)', fontWeight: 700, color: 'var(--green)' }}>
                   {projTotal.toFixed(1)}
                 </td>
@@ -275,38 +290,65 @@ export function HitterScheduleGrid({ hitters, weeks, weekDates, today, showOwn }
   )
 }
 
-function HitterDayCell({ g }: { g: DayGame }) {
+function HitterDayCell({ g, actualsTracked }: { g: DayGame; actualsTracked?: boolean }) {
   const [open, setOpen] = useState(false)
   if (g.off) return <span style={{ color: 'var(--ink-3)', fontSize: 11 }}>—</span>
   const oppLabel = `${g.home ? '' : '@'}${g.opp}`
-  // Matchup edge cue: color the projection vs the pre-matchup base.
-  const projColor = g.base === undefined ? 'var(--ink-2)'
-    : g.proj > g.base ? 'var(--green)' : g.proj < g.base ? 'var(--red)' : 'var(--ink-2)'
+  // Only treat games as actual/DNP when actuals are tracked for this view
+  // (rostered hitters). For free agents we have no actuals, so always project.
+  const played = !!actualsTracked && (g.status === 'final' || g.status === 'in_progress')
+  const live = !!actualsTracked && g.status === 'in_progress'
+  const showActual = played && g.actual != null
+  const dnp = !!actualsTracked && g.status === 'final' && g.actual == null   // played, hitter didn't appear
   const hasDetail = g.base !== undefined
+  // Projection edge arrow vs the pre-matchup base (only shown on projections).
+  const up = g.base !== undefined && g.proj > g.base
+  const down = g.base !== undefined && g.proj < g.base
   return (
     <div
-      style={{ position: 'relative', textAlign: 'center', cursor: hasDetail ? 'help' : 'default' }}
+      style={{ position: 'relative', textAlign: 'center', cursor: hasDetail ? 'help' : 'default', opacity: dnp ? 0.6 : 1 }}
       onMouseEnter={() => hasDetail && setOpen(true)}
       onMouseLeave={() => setOpen(false)}
       onClick={() => hasDetail && setOpen(o => !o)}
     >
       <div style={{ fontSize: 11, fontFamily: 'var(--mono)', fontWeight: 700, color: 'var(--ink)' }}>
         {oppLabel}
-        {g.oppHand && (
+        {live && <span style={{ fontSize: 8, fontWeight: 700, color: 'var(--red)', marginLeft: 3, letterSpacing: '0.06em' }}>● LIVE</span>}
+        {!played && g.oppHand && (
           <span style={{ fontSize: 9, fontWeight: 500, color: g.oppHand === 'L' ? 'var(--amber)' : 'var(--ink-3)', marginLeft: 3 }}>
             {g.oppHand}HP
           </span>
         )}
       </div>
-      <div style={{ fontSize: 10, fontFamily: 'var(--mono)', fontWeight: 500, color: projColor, marginTop: 1 }}>
-        {g.proj.toFixed(1)}
-      </div>
-      {open && hasDetail && <DayPopover g={g} oppLabel={oppLabel} />}
+      {showActual ? (
+        // Actual / live — bold, signed, saturated — with the projection beneath
+        // it so projection-vs-actual is visible at a glance.
+        <>
+          <div style={{ fontSize: 12, fontFamily: 'var(--mono)', fontWeight: 700, color: g.actual! > 0 ? 'var(--green)' : g.actual! < 0 ? 'var(--red)' : 'var(--ink-3)', marginTop: 1 }}>
+            {g.actual! > 0 ? '+' : ''}{g.actual!.toFixed(1)}
+          </div>
+          {g.base !== undefined && (
+            <div style={{ fontSize: 8, fontFamily: 'var(--mono)', color: 'var(--ink-3)', marginTop: 0 }}>
+              proj {g.proj.toFixed(1)}
+            </div>
+          )}
+        </>
+      ) : dnp ? (
+        // Game played but hitter didn't appear — no projection shown.
+        <div style={{ fontSize: 9, fontFamily: 'var(--mono)', fontWeight: 600, color: 'var(--ink-3)', marginTop: 1, letterSpacing: '0.04em' }}>DNP</div>
+      ) : (
+        // Projection — smaller, muted, with the matchup-edge arrow (provisional).
+        <div style={{ fontSize: 10, fontFamily: 'var(--mono)', fontWeight: 500, color: 'var(--ink-3)', marginTop: 1, fontStyle: 'italic' }}>
+          {g.proj.toFixed(1)}
+          {(up || down) && <span style={{ fontStyle: 'normal', marginLeft: 2, color: up ? 'var(--green)' : 'var(--red)' }}>{up ? '↑' : '↓'}</span>}
+        </div>
+      )}
+      {open && hasDetail && <DayPopover g={g} oppLabel={oppLabel} dnp={dnp} />}
     </div>
   )
 }
 
-function DayPopover({ g, oppLabel }: { g: DayGame; oppLabel: string }) {
+function DayPopover({ g, oppLabel, dnp }: { g: DayGame; oppLabel: string; dnp?: boolean }) {
   const row = (label: React.ReactNode, value: React.ReactNode, color?: string) => (
     <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, padding: '1px 0', color: color || 'var(--ink-2)' }}>
       <span>{label}</span><span style={{ fontWeight: 700 }}>{value}</span>
@@ -335,6 +377,14 @@ function DayPopover({ g, oppLabel }: { g: DayGame; oppLabel: string }) {
       ))}
       <div style={{ borderTop: '1px solid var(--border)', margin: '5px 0' }} />
       {row('Proj', <span style={{ color: 'var(--green)' }}>{g.proj.toFixed(1)}</span>, 'var(--ink)')}
+      {dnp && row('Result', <span style={{ color: 'var(--ink-3)' }}>Did not play</span>, 'var(--ink)')}
+      {g.actual != null && row(
+        g.status === 'in_progress' ? 'Actual (live)' : 'Actual',
+        <span style={{ color: g.actual > 0 ? 'var(--green)' : g.actual < 0 ? 'var(--red)' : 'var(--ink-3)' }}>
+          {g.actual > 0 ? '+' : ''}{g.actual.toFixed(1)}
+        </span>,
+        'var(--ink)',
+      )}
     </div>
   )
 }
@@ -423,7 +473,8 @@ export function hitterFromPayload(h: any, dates: string[]): { hitter: UIHitter; 
     const d = byDate[date]
     return d
       ? { date, off: false, opp: d.opp, home: d.home, proj: d.proj,
-          oppHand: d.oppHand ?? null, oppStarter: d.oppStarter, base: d.base, factors: d.factors }
+          oppHand: d.oppHand ?? null, oppStarter: d.oppStarter, base: d.base, factors: d.factors,
+          status: d.status, actual: d.actual ?? null }
       : { date, off: true, opp: '', home: false, proj: 0 }
   })
   const s = h.seasonStats || {}

@@ -481,7 +481,7 @@ function FAHitters({ period }: { period: number | null }) {
           </div>
         </div>
         {tab === 'schedule'
-          ? <HitterScheduleGrid hitters={hitters} weeks={weeks} weekDates={weekDates} today={today} showOwn />
+          ? <HitterScheduleGrid hitters={hitters} weeks={weeks} weekDates={weekDates} today={today} showOwn actualsTracked />
           : <HitterStatsTable hitters={hitters} weeks={weeks} showOwn leagueAvg={data?.leagueAvg} />}
       </div>
     </>
