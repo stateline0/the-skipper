@@ -147,7 +147,7 @@ export default function AccuracyPage() {
       <div style={{ maxWidth: 960, margin: '0 auto', padding: '32px 20px' }}>
 
         {/* Header */}
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 28 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 16, flexWrap: 'wrap', marginBottom: 28 }}>
           <div>
             <h1 style={{ fontSize: 22, fontWeight: 700, letterSpacing: '-0.03em', margin: 0, marginBottom: 6 }}>
               Model Accuracy
@@ -158,17 +158,17 @@ export default function AccuracyPage() {
                 : 'All-time projected vs actual per-stat breakdown — every locked start, every period'}
             </p>
           </div>
-          <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+          <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
             {/* Pitchers / Hitters toggle */}
             <div style={{
-              display: 'flex', borderRadius: 6, overflow: 'hidden',
+              display: 'flex', borderRadius: 6, overflow: 'hidden', flexShrink: 0,
               border: '1px solid var(--border-strong)',
             }}>
               <button
                 onClick={() => setKind('pitcher')}
                 style={{
                   padding: '6px 12px', fontSize: 12, border: 'none', cursor: 'pointer',
-                  fontFamily: 'var(--mono)',
+                  fontFamily: 'var(--mono)', whiteSpace: 'nowrap',
                   background: !isHitter ? 'var(--ink)' : 'transparent',
                   color: !isHitter ? 'var(--paper)' : 'var(--ink-3)',
                 }}
@@ -179,7 +179,7 @@ export default function AccuracyPage() {
                 onClick={() => setKind('hitter')}
                 style={{
                   padding: '6px 12px', fontSize: 12, border: 'none', cursor: 'pointer',
-                  fontFamily: 'var(--mono)', borderLeft: '1px solid var(--border-strong)',
+                  fontFamily: 'var(--mono)', borderLeft: '1px solid var(--border-strong)', whiteSpace: 'nowrap',
                   background: isHitter ? 'var(--ink)' : 'transparent',
                   color: isHitter ? 'var(--paper)' : 'var(--ink-3)',
                 }}
@@ -190,14 +190,14 @@ export default function AccuracyPage() {
             {/* Roster / All MLB scope — pitchers only (hitter locks are roster-scoped) */}
             {!isHitter && (
             <div style={{
-              display: 'flex', borderRadius: 6, overflow: 'hidden',
+              display: 'flex', borderRadius: 6, overflow: 'hidden', flexShrink: 0,
               border: '1px solid var(--border-strong)',
             }}>
               <button
                 onClick={() => setScope('roster')}
                 style={{
                   padding: '6px 12px', fontSize: 12, border: 'none', cursor: 'pointer',
-                  fontFamily: 'var(--mono)',
+                  fontFamily: 'var(--mono)', whiteSpace: 'nowrap',
                   background: scope === 'roster' ? 'var(--ink)' : 'transparent',
                   color: scope === 'roster' ? 'var(--paper)' : 'var(--ink-3)',
                 }}
@@ -208,7 +208,7 @@ export default function AccuracyPage() {
                 onClick={() => setScope('all')}
                 style={{
                   padding: '6px 12px', fontSize: 12, border: 'none', cursor: 'pointer',
-                  fontFamily: 'var(--mono)', borderLeft: '1px solid var(--border-strong)',
+                  fontFamily: 'var(--mono)', borderLeft: '1px solid var(--border-strong)', whiteSpace: 'nowrap',
                   background: scope === 'all' ? 'var(--ink)' : 'transparent',
                   color: scope === 'all' ? 'var(--paper)' : 'var(--ink-3)',
                 }}
@@ -225,7 +225,7 @@ export default function AccuracyPage() {
                 border: '1.5px solid var(--border-strong)', background: 'transparent',
                 cursor: loading ? 'not-allowed' : 'pointer',
                 color: 'var(--ink)', opacity: loading ? 0.5 : 1,
-                fontFamily: 'var(--sans)',
+                fontFamily: 'var(--sans)', flexShrink: 0, whiteSpace: 'nowrap',
               }}
             >
               {loading ? 'Refreshing...' : '↻ Refresh'}
@@ -236,6 +236,7 @@ export default function AccuracyPage() {
                 padding: '6px 14px', fontSize: 13, borderRadius: 6,
                 border: '1px solid var(--paper-3)', background: 'var(--paper)',
                 cursor: 'pointer', color: 'var(--ink-2)',
+                flexShrink: 0, whiteSpace: 'nowrap',
               }}
             >
               ← Pitchers
@@ -294,8 +295,8 @@ export default function AccuracyPage() {
               ? <MaeTimelineChart starts={starts} kind="hitter" />
               : scope === 'all' && <MaeTimelineChart starts={starts} />}
 
-            {/* Summary tiles */}
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 24 }}>
+            {/* Summary tiles — auto-fit wraps to 2×2 on phones, 4-across on desktop */}
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 12, marginBottom: 24 }}>
               <SummaryTile label={isHitter ? 'GAMES TRACKED' : 'STARTS TRACKED'} value={summary.totalStarts ?? 0} />
               <SummaryTile label="MEAN ABS ERROR" value={`${summary.mae ?? 0} pts`} />
               <SummaryTile label="DIRECTION ACC" value={summary.directionalAccuracy ? `${summary.directionalAccuracy}%` : '—'} />

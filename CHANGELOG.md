@@ -64,6 +64,14 @@ Phased across 4 PRs; this entry grows as they land.
   `api/accuracy.py` adds `base` to the hitter start so the reconciler renders.
   Pitcher path untouched (typechecked; the pre-existing recharts `formatter`
   type warning is unrelated and ignored via `ignoreBuildErrors`).
+  - **Mobile polish** (same PR, after device review): the new toggle made the
+    header's 4 control groups overflow and clip "Hitters" → "Hitter" (segmented
+    toggles shrank below content width, and `overflow:hidden` for the rounded
+    corners cut the text). Fixed by letting the header + controls **wrap** and
+    giving the toggles/buttons `flexShrink:0` + `whiteSpace:nowrap` (also stops
+    "My Roster"/"All MLB" wrapping to two lines). Summary tiles now use
+    `auto-fit minmax(140px)` so they go **2×2 on phones**, 4-across on desktop;
+    and the hitter chart subtitle grammar ("line shows", not "line show").
 
 ### Notes / carried forward this chunk
 - **Hitter accuracy chunk complete** (PRs #147–#150). The dashboard now tracks

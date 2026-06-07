@@ -185,7 +185,7 @@ export default function MaeTimelineChart({ starts, kind = 'pitcher' }: Props) {
         {isHitter ? 'Daily MAE: Skipper hitters' : 'Daily MAE: Skipper vs. ESPN'}
       </div>
       <div style={{ fontSize: 12, color: 'var(--ink-3)', marginBottom: 12 }}>
-        Solid line{isHitter ? '' : 's'} show per-day MAE. Dashed line{isHitter ? '' : 's'} show a 7-day trailing rolling average.
+        Solid line{isHitter ? '' : 's'} show{isHitter ? 's' : ''} per-day MAE. Dashed line{isHitter ? '' : 's'} show{isHitter ? 's' : ''} a 7-day trailing rolling average.
         {!isHitter && ' Vertical markers indicate model-changing deploys.'}
       </div>
       <ResponsiveContainer width="100%" height={300}>
