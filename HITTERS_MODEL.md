@@ -56,34 +56,56 @@ hitter) — the opposite of the pitcher model's `env_to_pitcher_mult()` inversio
 `proj2h:{season}:{period}:{slug}:{date}`; a hitter warm-cron precompute mirrors
 `api/warm.py`; `pages/hitters.tsx` swaps mock data for the real model.
 
-## What landed in this PR (Phases 0–1)
+## Shipped to date (PRs #132–#143)
 
-- `api/projection_hitter.py` — the stat-vector core:
-  - `STAT_KEYS`, `DEFAULT_HITTER_SCORING`, `ESPN_HITTING_STAT_IDS`
-  - `parse_hitter_scoring(msettings)` — Phase 0 scoring detection (safe default)
-  - `per_game_vector`, `blend_vectors`, `pa_blend_weight` — Phase 1 baseline
-  - `apply_hitter_formula` — vector → FPTS
-  - `apply_factors(vector, per_stat, scalar)` — identity hook so Phases 2–10
-    slot in without reshaping the pipeline
-  - `get_projected_hitter_fpts(...)` — baseline entry point
-- `api/test_projection_hitter.py` — 11 pure-Python tests (no network) covering
-  singles derivation, the scoring dot product (incl. no double-count with "h"),
-  the PA ramp, year blend, factor application, and end-to-end projection.
+The model is **fully matchup-aware**, end-to-end, with actual/live tracking.
 
-**Wire-in (this PR):**
-- `api/fetcher.py` — `fetch_season_stats_hitting()` (`group=hitting`) +
-  `load_hitter_stats()` caching `cache:mlb-stats-hitting:{year}`.
-- `api/hitters.py` — new endpoint: parses hitter roster entries from the ESPN
-  response (slots 0–12), reads scoring from `mSettings`, derives each hitter's
-  game days from the shared schedule, runs the baseline model, returns
-  `rosterHitters` with per-day cells + a season line. Cached like `/api/espn`.
-- `pages/hitters.tsx` — fetches `/api/hitters`; renders real roster/schedule/
-  projections in the Schedule/Stats tabs, falling back to the mock wireframe
-  when no hitters are returned (banner shows which mode is active).
+**Core model — `api/projection_hitter.py`**
+- Stat-vector core: `STAT_KEYS`, `apply_hitter_formula`, `per_game_vector`,
+  `blend_vectors`, `pa_blend_weight`, `apply_factors`.
+- Scoring: `DEFAULT_HITTER_SCORING` (verified TB-based) + `parse_hitter_scoring`
+  (reads `mSettings` with a sanity-check fallback). `ESPN_HITTING_STAT_IDS`
+  confirmed against the live league via `?debug=scoring`.
+- Phase 2 de-luck: `apply_savant_hitter` (xBA/xSLG).
+- Phase 3 recent form: `compute_recent_form_hitter` / `score_game_log`
+  (60/40 season/recent).
+- Phase 6 platoon: `platoon_multiplier`. Phase 7 opp-SP: `opp_pitcher_multiplier`.
+- `get_projected_hitter_fpts(...)` — full entry point; `actuals_from_logs`
+  scores game logs by category (the FA-actuals source).
+- `api/test_projection_hitter.py` — 22 pure-Python tests.
 
-Phase 1 projections are flat per game (no matchup context yet), so the grid
-shows real opponents with the same per-game value each day. Live verification
-runs on the Vercel preview, since this sandbox can't reach ESPN/MLB.
+**Data — `api/fetcher.py` / `api/mlb.py` / `api/savant.py`**
+- `fetch_season_stats_hitting`, `load_hitter_stats`, `load_hitter_game_logs`,
+  `load_hitter_splits`, `load_player_hands` (by-ID via `/people/{id}`),
+  `fetch_expected_stats_batter`, `fetch_statcast_stats_batter`,
+  `fetch_probable_pitcher_ids`, `get_park_factor`/`get_weather_factor` (direct).
+
+**Endpoint — `api/hitters.py`**
+- Parses hitter roster (slots 0–12), derives game days from the shared
+  schedule, runs the model, applies the **per-day matchup stack** (platoon →
+  opp-SP → park → weather) in `_build_days`, and captures **actual/live FPTS**
+  (ESPN applied total for roster; game-log-by-category for FAs, validated vs
+  ESPN). Returns `rosterHitters` + `freeAgentHitters` with per-day cells,
+  `factors[]`, `actual`/`status`, season line, and `advanced` block. Cache v23.
+  Debug endpoints: `?debug=scoring|savant|platoon`.
+
+**Frontend — `pages/hitters.tsx`, `pages/free-agents.tsx`,
+`components/HitterTables.tsx`**
+- Hitters page (real data, matchup banner) + FA Pitchers/Hitters toggle.
+- Sortable Schedule/Stats tables; advanced Savant columns with league avgs.
+- Per-day **detail popover** (`Base → factors → Proj → Actual`); cells show
+  bold **actual** + muted `proj` for played games, projection + edge arrow for
+  upcoming, `DNP` for missed; `● LIVE` for in-progress. `Act`/`Proj` totals.
+
+### Not yet built
+- **Phase 8** regressed BvP, **Phase 9** PA/lineup volume, **Phase 10** per-stat
+  park + wind-for-HR (the "beyond pitchers" extras).
+- **Hitter accuracy** (next): lock `proj2h:` per game, stand up the separate
+  `kind=hitter` MAE series + Pitchers/Hitters toggle on `pages/accuracy.tsx`,
+  **excluding DNP games**. Actuals are already captured + validated, so this is
+  the natural next chunk.
+- **Live freshness:** live totals refresh on the ~30-min payload cache; a
+  fresh-on-gameday refresh (like the pitcher page) would make them real-time.
 
 ## Accuracy (separate from pitchers)
 
