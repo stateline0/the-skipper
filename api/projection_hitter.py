@@ -335,24 +335,30 @@ def apply_savant_hitter(vector: dict, savant_row: dict) -> dict:
     return adjusted
 
 
-def score_game_log(g: dict, scoring: dict) -> float:
-    """Fantasy points for a single hitting game-log entry, by category — the
-    actual-FPTS analog of the projection's scoring. Works for any player
-    (rostered or free agent), so it's the source for FA actuals that ESPN
-    won't expose."""
+def _game_log_vector(g: dict) -> dict:
+    """The scoring-ready counting-stat vector for one hitting game-log entry
+    (singles/TB derived from the hit breakdown). Shared by the FPTS scorer and
+    the per-stat actuals path so both stay in lockstep."""
     h   = g.get("h", 0)
     dbl = g.get("2b", 0)
     tpl = g.get("3b", 0)
     hr  = g.get("hr", 0)
     singles = max(0, h - dbl - tpl - hr)
-    vec = {
+    return {
         "h": h, "1b": singles, "2b": dbl, "3b": tpl, "hr": hr,
         "tb": singles + 2 * dbl + 3 * tpl + 4 * hr,
         "r": g.get("r", 0), "rbi": g.get("rbi", 0), "bb": g.get("bb", 0),
         "hbp": g.get("hbp", 0), "sb": g.get("sb", 0), "cs": g.get("cs", 0),
         "so": g.get("so", 0), "ab": g.get("ab", 0), "pa": g.get("pa", 0),
     }
-    return round(apply_hitter_formula(vec, scoring), 1)
+
+
+def score_game_log(g: dict, scoring: dict) -> float:
+    """Fantasy points for a single hitting game-log entry, by category — the
+    actual-FPTS analog of the projection's scoring. Works for any player
+    (rostered or free agent), so it's the source for FA actuals that ESPN
+    won't expose."""
+    return round(apply_hitter_formula(_game_log_vector(g), scoring), 1)
 
 
 def actuals_from_logs(logs: list, scoring: dict) -> dict:
@@ -364,6 +370,28 @@ def actuals_from_logs(logs: list, scoring: dict) -> dict:
             continue
         by_date[d] = round(by_date.get(d, 0.0) + score_game_log(g, scoring), 1)
     return by_date
+
+
+def actuals_with_stats_from_logs(logs: list, scoring: dict) -> dict:
+    """{ date: {"fpts": float, "stats": {counting-stat vector}} } from a hitter's
+    game logs (doubleheaders summed). The accuracy dashboard's per-game hitter
+    actuals source: a date present here means the hitter PLAYED that day, so
+    DNP games — which have no log entry — are excluded for free.
+
+    `fpts` sums each game's rounded score (matching `actuals_from_logs`); `stats`
+    sums the raw counting vector so the locked projection's stat fields can be
+    diffed per category."""
+    out = {}
+    for g in logs or []:
+        d = g.get("date")
+        if not d:
+            continue
+        vec = _game_log_vector(g)
+        cur = out.setdefault(d, {"fpts": 0.0, "stats": {}})
+        cur["fpts"] = round(cur["fpts"] + round(apply_hitter_formula(vec, scoring), 1), 1)
+        for k, v in vec.items():
+            cur["stats"][k] = round(cur["stats"].get(k, 0) + v, 2)
+    return out
 
 
 def compute_recent_form_hitter(games: list, scoring: dict,

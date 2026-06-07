@@ -72,7 +72,11 @@ PR #111 fixed the user-visible aggregates for mid-week pickups but deliberately 
     "scheduled"`), storing fpts + base + factor stack + matchup + model. Locks
     on Hitters-page loads (the warm cron only covers pitchers); pre-fetches the
     period's locks once so reloads don't re-write. No user-visible change.
-  - [ ] PR 2 — hitter per-game actuals queryable by date for accuracy.
+  - [x] **PR 2 — per-game hitter actuals queryable by date (PR #148).**
+    `actuals_with_stats_from_logs()` (game-log-scored, DNP-clean: a log entry =
+    played) → `acth:{date}` → `{slug: {fpts, stats}}`, written read-merge-write
+    from the Hitters page. `cache:daily.actual_stats` is pitcher-shaped, so
+    hitters need this dedicated source.
   - [ ] PR 3 — `kind=hitter` in `/api/accuracy` (hitter stat keys, exclude DNP).
   - [ ] PR 4 — Pitchers/Hitters toggle + hitter MAE series on the Accuracy page.
 - [ ] **Phase 8–10** — regressed BvP, PA/lineup-spot volume, per-stat park +
