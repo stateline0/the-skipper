@@ -275,6 +275,25 @@ def platoon_multiplier(ops_vs_hand: float, pa_vs_hand: float, ops_overall: float
     return round(max(lo, min(hi, factor)), 3)
 
 
+# ── Phase 7: opposing-pitcher quality multiplier ───────────────────────
+OPP_PITCHER_DAMPEN = 0.7        # the base already carries the hitter's own talent
+OPP_PITCHER_CLAMP = (0.88, 1.12)
+
+
+def opp_pitcher_multiplier(opp_xwoba: float, league_xwoba: float) -> float:
+    """Per-game factor for the opposing starter's quality, from their expected
+    wOBA-against relative to league average. xwOBA-against > league = the pitcher
+    allows more than average = good for the hitter (factor > 1); an ace (low
+    xwOBA-against) suppresses (factor < 1). Dampened (the base already reflects
+    the hitter's talent) and clamped. Returns 1.0 when data is missing."""
+    if not opp_xwoba or not league_xwoba or league_xwoba <= 0:
+        return 1.0
+    raw = opp_xwoba / league_xwoba
+    factor = 1.0 + (raw - 1.0) * OPP_PITCHER_DAMPEN
+    lo, hi = OPP_PITCHER_CLAMP
+    return round(max(lo, min(hi, factor)), 3)
+
+
 def apply_factors(vector: dict, per_stat: dict = None, scalar: float = 1.0) -> dict:
     """Apply per-stat multipliers and a scalar to a stat vector.
 

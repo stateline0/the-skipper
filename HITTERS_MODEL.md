@@ -47,7 +47,7 @@ hitter) — the opposite of the pitcher model's `env_to_pitcher_mult()` inversio
 | 4 | Park factor (direct, per-game) | planned |
 | 5 | Weather (temp; reuse `get_weather_factor`) | planned |
 | 6 | Platoon (L/R) splits vs the probable starter | **done** (`platoon_multiplier` + per-day factor stack; per-day detail popover) |
-| 7 | Opposing-pitcher quality (xERA/K%/xwOBA-against) | planned |
+| 7 | Opposing-pitcher quality (xwOBA-against) | **done** (`opp_pitcher_multiplier` vs league avg; + `fetch_probable_pitcher_ids` → 100% starter-id/handedness coverage) |
 | 8 | Regressed batter-vs-pitcher history | planned |
 | 9 | PA / lineup-spot volume (beyond pitchers) | planned |
 | 10 | Per-stat park + wind-for-HR (beyond pitchers) | planned |

@@ -13,7 +13,7 @@ from projection_hitter import (
     parse_hitter_scoring, apply_hitter_formula, per_game_vector,
     blend_vectors, pa_blend_weight, apply_factors, scoring_is_sane,
     apply_savant_hitter, compute_recent_form_hitter, platoon_multiplier,
-    get_projected_hitter_fpts,
+    opp_pitcher_multiplier, get_projected_hitter_fpts,
 )
 
 
@@ -246,6 +246,24 @@ def test_platoon_multiplier():
     # Clamp holds for an extreme split.
     assert platoon_multiplier(2.000, 600, 0.800) == 1.15
     print("✓ platoon_multiplier: regressed, directional, clamped, safe no-ops")
+
+
+def test_opp_pitcher_multiplier():
+    lg = 0.315
+    # Ace (low xwOBA-against) suppresses the hitter; dampened + clamped.
+    ace = opp_pitcher_multiplier(0.270, lg)
+    assert 0.88 <= ace < 1.0
+    # Weak starter (high xwOBA-against) boosts.
+    weak = opp_pitcher_multiplier(0.360, lg)
+    assert 1.0 < weak <= 1.12
+    # League-average starter → ~neutral.
+    assert opp_pitcher_multiplier(lg, lg) == 1.0
+    # Missing data → neutral.
+    assert opp_pitcher_multiplier(0, lg) == 1.0
+    assert opp_pitcher_multiplier(0.270, 0) == 1.0
+    # Extreme → clamp holds.
+    assert opp_pitcher_multiplier(0.500, lg) == 1.12
+    print("✓ opp_pitcher_multiplier: directional (ace↓ / weak↑), dampened, clamped, safe")
 
 
 def test_end_to_end_projection():

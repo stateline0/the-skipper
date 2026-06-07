@@ -26,7 +26,7 @@ from urllib.parse import urlparse, parse_qs
 from datetime import datetime, timedelta, timezone
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__)))
-from mlb import get_starts_for_players, MATCHUP_PERIODS
+from mlb import get_starts_for_players, MATCHUP_PERIODS, fetch_probable_pitcher_ids
 from fetcher import (
     get_headers_and_cookies, get_pro_team_map, load_hitter_stats,
     load_hitter_game_logs, load_player_hands, load_hitter_splits,
@@ -34,20 +34,23 @@ from fetcher import (
 from kv import cache_get, cache_set
 from projection_hitter import (
     parse_hitter_scoring, get_projected_hitter_fpts, strip_accents,
-    platoon_multiplier, DEFAULT_HITTER_SCORING, _resolve_points,
+    platoon_multiplier, opp_pitcher_multiplier, DEFAULT_HITTER_SCORING, _resolve_points,
 )
 
 
-def _build_days(name, team, game_dates, schedule, base, hands, splits, overall_ops):
-    """Per-day cells with the matchup factor stack. Phase 6 adds a platoon
-    factor (batter vs the day's probable-starter hand); later layers append
-    more entries to `factors`. day proj = base × Π(factors). Each factor is
-    {label, mult} so the frontend popover lists Base → factors → Proj."""
+def _build_days(name, team, game_dates, schedule, base, hands, splits, overall_ops,
+                opp_savant, league_xwoba):
+    """Per-day cells with the matchup factor stack:
+      Phase 6 — platoon (batter vs the day's probable-starter hand)
+      Phase 7 — opposing-starter quality (their xwOBA-against vs league)
+    day proj = base × Π(factors); each factor is {label, mult} so the frontend
+    popover lists Base → factors → Proj."""
     days = []
     for d in game_dates:
         game = schedule.get(d, {}).get(team, {})
         opp_starter = (game.get("opp_starter") or "").strip()
-        opp_hand = (hands.get(strip_accents(opp_starter)) or {}).get("throws", "") if opp_starter else ""
+        opp_key = strip_accents(opp_starter) if opp_starter else ""
+        opp_hand = (hands.get(opp_key) or {}).get("throws", "") if opp_key else ""
         if opp_hand not in ("L", "R"):
             opp_hand = ""
         factors = []
@@ -58,6 +61,12 @@ def _build_days(name, team, game_dates, schedule, base, hands, splits, overall_o
             if pm != 1.0:
                 factors.append({"label": f"Platoon (v{opp_hand}HP)", "mult": pm})
                 mult *= pm
+        if opp_key and league_xwoba:
+            ox = (opp_savant.get(opp_key) or {}).get("xwoba")
+            qm = opp_pitcher_multiplier(ox, league_xwoba)
+            if qm != 1.0:
+                factors.append({"label": "Opp SP quality", "mult": qm})
+                mult *= qm
         days.append({
             "date": d,
             "opp": game.get("opponent", ""),
@@ -297,22 +306,36 @@ def get_hitter_data(team_id: int, week: int) -> dict:
     roster_logs = load_hitter_game_logs(year_int, hitting_current, roster_keys)
     splits = load_hitter_splits(year_int, hitting_current, roster_keys)    # Phase 6
 
-    # Phase 6 handedness: opposing-starter IDs (mapped from the schedule's
-    # opp_starter names via the cached pitching stats) + rostered hitter IDs.
+    # Phase 6/7 handedness: opposing-starter IDs from the MLB probables feed
+    # (covers debut/recalled starters) with a fallback to the cached pitching
+    # stats, plus rostered hitter IDs.
     pitching = {}
     try:
         pitching = cache_get(f"cache:mlb-stats:{year_int}") or {}
     except Exception:
         pass
+    probable_ids = fetch_probable_pitcher_ids(mp["start"], mp["end"])  # Phase 7 coverage
     opp_ids = set()
     for d in period_dates:
         for tm in schedule.get(d, {}).values():
             nm = (tm.get("opp_starter") or "").strip()
-            pid = (pitching.get(strip_accents(nm)) or {}).get("_mlbId") if nm else None
+            if not nm:
+                continue
+            k = strip_accents(nm)
+            pid = probable_ids.get(k) or (pitching.get(k) or {}).get("_mlbId")
             if pid:
                 opp_ids.add(pid)
     hitter_ids = [(hitting_current.get(nk) or {}).get("_mlbId") for nk in roster_keys]
     hands = load_player_hands(year_int, list(opp_ids) + [i for i in hitter_ids if i])
+
+    # Phase 7: opposing-pitcher quality — Savant pitcher xwOBA-against + league avg.
+    pitch_savant = {}
+    try:
+        pitch_savant = cache_get(f"cache:savant:{year_int}") or {}
+    except Exception:
+        pass
+    _xw = [v.get("xwoba", 0) for v in pitch_savant.values() if isinstance(v, dict) and v.get("xwoba")]
+    league_xwoba = round(sum(_xw) / len(_xw), 3) if _xw else None
     proj, _details = get_projected_hitter_fpts(
         [{"name": h["name"], "team": h["team"], "gameDates": h["gameDates"]} for h in hitters_meta],
         scoring=scoring,
@@ -333,8 +356,9 @@ def get_hitter_data(team_id: int, week: int) -> dict:
         season = _season_line(hitting_current.get(strip_accents(name), {}))
         overall_ops = (season["obp"] + season["slg"]) if season else None
         bats = (hands.get(strip_accents(name)) or {}).get("bats") or h["bats"]
-        # Per-day cells with the matchup factor stack (Phase 6: platoon).
-        days = _build_days(name, h["team"], h["gameDates"], schedule, per_game, hands, splits, overall_ops)
+        # Per-day cells with the matchup factor stack (Phase 6 platoon + Phase 7 opp SP).
+        days = _build_days(name, h["team"], h["gameDates"], schedule, per_game,
+                           hands, splits, overall_ops, pitch_savant, league_xwoba)
         proj_week = round(sum(d["proj"] for d in days), 1)
         roster_hitters.append({
             "name":        name,
@@ -360,7 +384,8 @@ def get_hitter_data(team_id: int, week: int) -> dict:
     free_agent_hitters = _fetch_fa_hitters(
         base, headers, cookies, PRO_TEAM_MAP, data.get("scoringPeriodId", week),
         schedule, period_dates, scoring, hitting_current, hitting_previous,
-        savant_current, savant_previous, savant_statcast, hands, year_int, week,
+        savant_current, savant_previous, savant_statcast, hands,
+        pitch_savant, league_xwoba, year_int, week,
     )
 
     return {
@@ -381,7 +406,7 @@ def get_hitter_data(team_id: int, week: int) -> dict:
 def _fetch_fa_hitters(base, headers, cookies, PRO_TEAM_MAP, current_week,
                       schedule, period_dates, scoring, hitting_current,
                       hitting_previous, savant_current, savant_previous,
-                      savant_statcast, hands, year_int, week):
+                      savant_statcast, hands, pitch_savant, league_xwoba, year_int, week):
     """Top available free-agent hitters by ownership %, projected with the same
     model as the roster. Mirrors the SP free-agent fetch in espn.py, filtered to
     hitter slots. Returns [] on any failure (FA hitters are non-critical)."""
@@ -439,7 +464,8 @@ def _fetch_fa_hitters(base, headers, cookies, PRO_TEAM_MAP, current_week,
             season = _season_line(hitting_current.get(strip_accents(h["name"]), {}))
             overall_ops = (season["obp"] + season["slg"]) if season else None
             bats = (hands.get(strip_accents(h["name"])) or {}).get("bats", "")
-            days = _build_days(h["name"], h["team"], h["gameDates"], schedule, per_game, hands, fa_splits, overall_ops)
+            days = _build_days(h["name"], h["team"], h["gameDates"], schedule, per_game,
+                               hands, fa_splits, overall_ops, pitch_savant, league_xwoba)
             out.append({
                 "name": h["name"], "team": h["team"], "pos": h["pos"], "bats": bats,
                 "percentOwned": h["ownPct"],
@@ -478,7 +504,8 @@ HITTER_CACHE_TTL = 1800  # 30 min
 #   v16: cache handedness BY ID, resolved-only (poisoned id-set caused 0 hands).
 #   v17: fix NameError in fetch_player_hands (_strip_accents_mlb) — the real root cause.
 #   v18: remove temp _diag block.
-HITTER_CACHE_VERSION = 18
+#   v19: Phase 7 — opposing-pitcher quality factor + probable-id starter coverage.
+HITTER_CACHE_VERSION = 19
 
 
 def _cache_key(team_id: int, week: int) -> str:
