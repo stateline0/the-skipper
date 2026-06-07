@@ -23,14 +23,29 @@ Phased across 4 PRs; this entry grows as they land.
     `fpts` + `base` + the factor stack + `matchup` + `model`. Pre-fetches the
     period's existing locks once so page reloads don't re-issue NX writes (or
     spam the "Locked" log). No user-visible change.
+- **PR 2 — per-game hitter actuals queryable by date (PR #148).** The actuals
+  side of the comparison, captured so `/api/accuracy` (PR 3) can diff locks
+  against them.
+  - `api/projection_hitter.py` — factored the counting-stat vector out of
+    `score_game_log` into `_game_log_vector`, and added
+    `actuals_with_stats_from_logs()` → `{date: {fpts, stats}}`. Because game logs
+    only contain *completed* games, a date present means the hitter **played** —
+    so **DNP games (no log entry) are excluded for free**, and a 0-fer (played,
+    low/negative score) is correctly kept. `fpts` matches the existing
+    `actuals_from_logs`; doubleheaders sum.
+  - `api/hitters.py` — writes `acth:{date}` → `{slug: {fpts, stats}}` from the
+    validated game-log scoring for this period's played dates, **read-merge-write**
+    so loads for different rosters don't clobber each other. Pitcher
+    `cache:daily.actual_stats` is pitcher-shaped (ip/so/er/w/l), so hitters need
+    this dedicated, roster-independent source. No user-visible change.
 
 ### Notes / carried forward this chunk
-- Hitter locks accumulate on **Hitters-page loads** — the warm cron
+- Hitter locks + actuals accumulate on **Hitters-page loads** — the warm cron
   (`api/warm.py`) only precomputes the pitcher payload, so a hitter equivalent
-  (or a cron-based all-hitter lock) is a possible later add for fuller coverage.
-- Remaining: PR 2 (per-game actuals queryable by date), PR 3 (`kind=hitter` in
-  `/api/accuracy`, hitter stat keys, exclude DNP), PR 4 (Pitchers/Hitters toggle
-  + hitter MAE series on the Accuracy page).
+  (or a cron-based all-hitter lock/actual) is a possible later add for fuller
+  coverage.
+- Remaining: PR 3 (`kind=hitter` in `/api/accuracy`, hitter stat keys, exclude
+  DNP), PR 4 (Pitchers/Hitters toggle + hitter MAE series on the Accuracy page).
 
 ---
 

@@ -41,6 +41,7 @@ from kv import (
 from projection_hitter import (
     parse_hitter_scoring, get_projected_hitter_fpts, strip_accents,
     platoon_multiplier, opp_pitcher_multiplier, actuals_from_logs,
+    actuals_with_stats_from_logs,
     DEFAULT_HITTER_SCORING, _resolve_points,
 )
 
@@ -465,6 +466,34 @@ def get_hitter_data(team_id: int, week: int) -> dict:
             print(f"[hitters.py] actuals validation (game-log vs ESPN): {match}/{checked} match")
     except Exception as e:
         print(f"[hitters.py] actuals validation failed: {e}")
+
+    # ── Persist per-game hitter actuals for the accuracy dashboard ─────
+    # Game-log-scored (the validated source above), keyed acth:{date} →
+    # {slug: {fpts, stats}}. A date present here means the hitter PLAYED that
+    # day, so DNP games (no log entry) are excluded for free — the proj2h lock
+    # gets matched against this in /api/accuracy. Scoped to this period's
+    # played dates so we don't rewrite the whole season on each load; read-
+    # merge-write so loads for different rosters don't clobber each other.
+    period_set = set(period_dates)
+    acth_by_date: dict = {}
+    for h in hitters_meta:
+        logs = roster_logs.get(strip_accents(h["name"]))
+        if not logs:
+            continue
+        for d, ev in actuals_with_stats_from_logs(logs, scoring).items():
+            if d in period_set and d <= today_iso:
+                acth_by_date.setdefault(d, {})[_hitter_slug(h["name"])] = ev
+    acth_written = 0
+    for d, players in acth_by_date.items():
+        key = f"acth:{d}"
+        existing = cache_get(key) or {}
+        merged = {**existing, **players}
+        if merged != existing:
+            cache_set(key, merged)          # permanent, like proj2h
+            acth_written += len(players)
+    if acth_written:
+        print(f"[hitters.py] Wrote {acth_written} hitter actual(s) "
+              f"across {len(acth_by_date)} date(s)")
 
     # ── Assemble output ───────────────────────────────────────────────
     # Pre-fetch this period's locked hitter projections once so the per-day
