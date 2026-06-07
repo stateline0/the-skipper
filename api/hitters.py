@@ -78,7 +78,7 @@ def _build_days(name, team, game_dates, schedule, base, hands, splits, overall_o
             if pf != 1.0:
                 factors.append({"label": f"Park ({park_team})", "mult": round(pf, 3)})
                 mult *= pf
-            if d >= today_iso:
+            if game.get("status") == "scheduled":   # unplayed → forecast applies
                 wx = weather_map.get((park_team, d))
                 wf = wx.get("factor", 1.0) if wx else 1.0
                 if wf and wf != 1.0:
@@ -362,10 +362,11 @@ def get_hitter_data(team_id: int, week: int) -> dict:
     today_iso = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     wx_targets = set()
     for d in period_dates:
-        if d < today_iso:
-            continue
         for tm_abbrev, g in schedule.get(d, {}).items():
-            if g.get("is_home"):
+            # Gate on game status ("scheduled" = not yet played) rather than a
+            # UTC date compare, so tonight's local games (already UTC-tomorrow)
+            # still get a forecast.
+            if g.get("is_home") and g.get("status") == "scheduled":
                 wx_targets.add((tm_abbrev, d))
     weather_map = {}
     if wx_targets:
@@ -552,7 +553,8 @@ HITTER_CACHE_TTL = 1800  # 30 min
 #   v18: remove temp _diag block.
 #   v19: Phase 7 — opposing-pitcher quality factor + probable-id starter coverage.
 #   v20: Phase 4/5 — park + weather per-day factors.
-HITTER_CACHE_VERSION = 20
+#   v21: gate weather on game status (scheduled), not UTC date (today boundary).
+HITTER_CACHE_VERSION = 21
 
 
 def _cache_key(team_id: int, week: int) -> str:
