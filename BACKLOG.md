@@ -57,9 +57,20 @@ PR #111 fixed the user-visible aggregates for mid-week pickups but deliberately 
 - [ ] Alert when top-50 prospect + 40-man roster + corresponding MLB spot opening
 - [ ] 12-24 hour edge over league competitors
 
-### Hitter nudge engine
-- [ ] Lighter-weight than pitcher optimizer — "this waiver wire guy is outperforming your current 2B"
-- [ ] Not a full streamer optimizer, more of a watchlist with performance alerts
+### Hitters (session 31 — PRs #132–#143)
+- [x] ~~Full matchup-aware hitter projection model + live Hitters page~~ — see
+  `HITTERS_MODEL.md` (Phases 0–7 shipped: baseline, Savant de-luck, recent form,
+  platoon, opp-SP quality, park, weather; per-day popover; actual/live tracking
+  for roster + FA).
+- [ ] **Hitter accuracy** (next) — lock `proj2h:` per game, `kind=hitter` MAE
+  series + Pitchers/Hitters toggle on the Accuracy page, excluding DNP games.
+- [ ] **Phase 8–10** — regressed BvP, PA/lineup-spot volume, per-stat park +
+  wind-for-HR.
+- [ ] **Hitter nudge engine** — "this waiver guy is outperforming your current
+  2B." Now buildable on the hitter model + FA actuals: a watchlist/alert, not a
+  full optimizer.
+- [ ] **Live freshness** — hitter live totals are ~30-min cached; add a
+  fresh-on-gameday refresh like the pitcher page.
 
 ### Dropped streamers refinement
 - [x] ~~Pull locked projections from KV for dropped players' past starts~~

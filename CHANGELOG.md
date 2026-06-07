@@ -2,6 +2,60 @@
 
 ---
 
+## Session 31 — June 7, 2026 — Hitters
+
+Expanded The Skipper beyond starting pitchers to a full **hitter** projection
+model, built to mirror the pitcher model and reuse its data/infra. Twelve PRs
+(#132–#143), each shipped and verified on the Vercel preview. Roadmap +
+architecture live in `HITTERS_MODEL.md`.
+
+### What shipped
+- **Wireframe → live model** (#132–#135): mock Hitters page → Phase 0–1
+  baseline (`api/projection_hitter.py`, stat-vector core) → `/api/hitters`
+  wire-in → dynamic `mSettings` scoring (verified Total-Bases config).
+- **Model layers** (#136, #139–#142): Phase 2 Savant de-luck (xBA/xSLG),
+  Phase 3 recent form, Phase 6 platoon splits, Phase 7 opposing-pitcher quality,
+  Phases 4–5 park + weather. Per-day **detail popover** with the factor stack.
+- **Surfacing** (#137–#138, #143): FA Pitchers/Hitters toggle, sortable tables,
+  advanced Savant columns with league averages, "My Team" → "Pitchers" rename,
+  weekly matchup dropdown, and actual/live FPTS with projection-vs-actual.
+
+### Key learnings this session
+- **In this environment, MLB Stats serves stats but not player bios.** Every
+  bulk/bio endpoint for handedness returned empty (`/sports/1/players`,
+  `/people?personIds`, even `/people/{id}` *via the threaded worker*) — but a
+  one-pitcher *probe* of `/people/{id}` returned `pitchHand` fine. The probe
+  isolated the real bug: the worker called `strip_accents()`, which doesn't
+  exist in `mlb.py` (it's `_strip_accents_mlb`), so every lookup threw silently
+  and returned `None`. A direct probe that bypasses the suspect code path is the
+  fastest way to separate "data unavailable" from "my code is broken."
+- **A cache that records failures as 'done' poisons retries.** An early
+  handedness attempt wrote all IDs into a `fetched` set even though the fetch
+  resolved nothing, so the later *working* path never retried. Cache **resolved
+  results keyed by id**, not "we tried these ids."
+- **Gate on game status, not a UTC date.** Weather skipped tonight's local games
+  because they're already "tomorrow" in UTC. `status == "scheduled"` is the
+  timezone-independent signal for "not yet played."
+- **"No actual" means different things for roster vs FA.** ESPN only exposes a
+  rostered player's FPTS, so a free agent's missing actual is *unknown*, not
+  *DNP*. Inferring DNP from `final + no actual` is only valid where actuals are
+  tracked. FA actuals instead come from MLB game logs scored **by category**
+  (validated against ESPN on the roster).
+- **Embed the diagnostic where the reviewer already looks.** When `?debug=`
+  wasn't taking effect for the reviewer, dropping a temporary `_diag` block as
+  the 2nd key of the normal payload got the data back in one round trip.
+
+### Carried forward
+- **Hitter accuracy** is the next chunk: lock `proj2h:` per game, stand up the
+  `kind=hitter` MAE series + Pitchers/Hitters toggle on the Accuracy page,
+  excluding DNP games. Actuals are captured + validated, so the input exists.
+- Phases 8–10 (regressed BvP, PA/lineup volume, per-stat park + wind-for-HR)
+  remain as the "beyond pitchers" extras.
+- Live hitter totals are ~30-min cached; a fresh-on-gameday refresh would make
+  them real-time.
+
+---
+
 ## Session 30 — June 6, 2026
 
 A long build session that cleared the entire "Stats view tab — follow-ups"

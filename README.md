@@ -1,6 +1,9 @@
 # The Skipper
 
-Your fantasy baseball analyst — starting with SP starts optimization, built to expand.
+Your fantasy baseball analyst. Started with SP starts optimization; now also
+projects **hitters** with a full matchup-aware model (Savant de-luck, recent
+form, platoon, opposing-pitcher quality, park & weather) plus actual/live
+tracking. See `HITTERS_MODEL.md` for the hitter model's design + roadmap.
 
 ## Stack
 
@@ -13,11 +16,17 @@ Your fantasy baseball analyst — starting with SP starts optimization, built to
 ```
 the-skipper/
 ├── api/
-│   ├── espn.py          # Python: fetches roster + free agents from ESPN
-│   └── analyze.py       # Python: calls Anthropic API for recommendations
+│   ├── espn.py             # Python: pitcher roster + free agents from ESPN
+│   ├── hitters.py          # Python: hitter roster/FA + matchup-aware projections
+│   ├── projection.py       # Pitcher projection model
+│   ├── projection_hitter.py# Hitter projection model (stat-vector + factors)
+│   └── analyze.py          # Python: calls Anthropic API for recommendations
 ├── pages/
 │   ├── _app.tsx
-│   └── index.tsx        # Main UI
+│   ├── my-team.tsx         # Pitchers
+│   ├── hitters.tsx         # Hitters
+│   ├── free-agents.tsx     # FA Pitchers/Hitters toggle
+│   └── index.tsx           # Main UI
 ├── styles/
 │   └── globals.css
 ├── requirements.txt     # Python deps (espn-api, anthropic, requests)
