@@ -38,14 +38,32 @@ Phased across 4 PRs; this entry grows as they land.
     so loads for different rosters don't clobber each other. Pitcher
     `cache:daily.actual_stats` is pitcher-shaped (ip/so/er/w/l), so hitters need
     this dedicated, roster-independent source. No user-visible change.
+- **PR 3 — `kind=hitter` in `/api/accuracy` (PR #149).** Wires the two halves
+  together. New `get_hitter_accuracy_data()` matches `proj2h:` locks against
+  `acth:` actuals by shared slug+date and returns FPTS MAE / max / min / bias /
+  directional accuracy. A locked game with **no `acth:` entry = DNP** (or
+  actuals not captured yet) → counted in `unmatchedCount` and excluded from MAE.
+  Deliberately simpler than the pitcher path: no roster filter (proj2h is
+  roster-only, so no FA leak), no factor analysis (FPTS-centric model — nothing
+  per-stat to counterfactual), no ESPN overlay (Forecaster is pitchers only).
+  Handler dispatches on `?kind=pitcher|hitter` (default pitcher → existing path
+  untouched). Also added `name` to the proj2h lock breakdown so rows label
+  cleanly; older locks fall back to a de-slugged name. Verified end-to-end
+  against a mocked KV: DNP excluded, a 0-fer kept, Ohtani's bat tracked
+  independently of his arm.
 
 ### Notes / carried forward this chunk
 - Hitter locks + actuals accumulate on **Hitters-page loads** — the warm cron
   (`api/warm.py`) only precomputes the pitcher payload, so a hitter equivalent
   (or a cron-based all-hitter lock/actual) is a possible later add for fuller
   coverage.
-- Remaining: PR 3 (`kind=hitter` in `/api/accuracy`, hitter stat keys, exclude
-  DNP), PR 4 (Pitchers/Hitters toggle + hitter MAE series on the Accuracy page).
+- Decided (with the owner) to **finish the hitter chunk, then unify pitcher
+  actuals onto game-log-by-category** (validated vs ESPN) as a follow-up — it
+  fixes the roster-scope ESPN-box dependency + the two-way (Ohtani) name
+  collision in `cache:daily.actual_stats`, and matches how all-MLB pitchers
+  (`actual-all:`) and hitters (`acth:`) already source actuals.
+- Remaining: PR 4 (Pitchers/Hitters toggle + hitter MAE series on the Accuracy
+  page), then the pitcher-actuals unification PR.
 
 ---
 

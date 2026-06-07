@@ -128,6 +128,7 @@ def _lock_started_days(season, period, name, days, model, today_iso, existing):
         if not date or date > today_iso or date in have:
             continue
         set_locked_hitter_projection(season, period, name, date, {
+            "name":    name,
             "fpts":    d["proj"],
             "base":    d["base"],
             "factors": d["factors"],

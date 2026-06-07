@@ -77,8 +77,19 @@ PR #111 fixed the user-visible aggregates for mid-week pickups but deliberately 
     played) → `acth:{date}` → `{slug: {fpts, stats}}`, written read-merge-write
     from the Hitters page. `cache:daily.actual_stats` is pitcher-shaped, so
     hitters need this dedicated source.
-  - [ ] PR 3 — `kind=hitter` in `/api/accuracy` (hitter stat keys, exclude DNP).
+  - [x] **PR 3 — `kind=hitter` in `/api/accuracy` (PR #149).**
+    `get_hitter_accuracy_data()` matches `proj2h:` ↔ `acth:` by slug+date →
+    FPTS MAE/max/min/bias/directional; no `acth:` entry = DNP → excluded
+    (`unmatchedCount`). No roster filter / factor analysis / ESPN overlay.
+    `?kind=` dispatch; pitcher path untouched. Added `name` to the proj2h lock.
   - [ ] PR 4 — Pitchers/Hitters toggle + hitter MAE series on the Accuracy page.
+- [ ] **Pitcher-actuals unification (follow-up to hitter accuracy).** Switch
+  roster-scope pitcher actuals from ESPN-box (`cache:daily.actual_stats`,
+  name-keyed first-write-wins → two-way Ohtani collision risk, roster-only) to
+  game-log-by-category (like `actual-all:` already does and `acth:` does for
+  hitters), validated vs ESPN's applied total. Fixes the collision + adds FA
+  pitcher coverage. Forward-only; add a `MaeTimelineChart` marker if the MAE
+  baseline shifts.
 - [ ] **Phase 8–10** — regressed BvP, PA/lineup-spot volume, per-stat park +
   wind-for-HR.
 - [ ] **Hitter nudge engine** — "this waiver guy is outperforming your current
