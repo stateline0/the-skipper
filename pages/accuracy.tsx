@@ -118,21 +118,24 @@ export default function AccuracyPage() {
   const router = useRouter()
   const [data, setData] = useState<AccuracyData | null>(null)
   const [loading, setLoading] = useState(true)
-  const [scope, setScope] = useState<'roster' | 'all'>('roster')
+  // The dashboard tracks overall model accuracy, so it's always all-MLB —
+  // there's no "my roster" scope (the model's error on one fantasy team isn't
+  // meaningful). `scope` is fixed to "all" for the pitcher path; hitters ignore
+  // it entirely (proj2h is its own source).
+  const scope: 'roster' | 'all' = 'all'
   const [kind, setKind] = useState<'pitcher' | 'hitter'>('pitcher')
   const [expandedRow, setExpandedRow] = useState<string | null>(null)
 
   const fetchData = () => {
     setLoading(true)
     // No period param → backend aggregates across all 22 periods (all-time view).
-    // kind=hitter is roster-only (proj2h is roster-scoped), so scope is ignored there.
     fetch(`/api/accuracy?season=2026&scope=${scope}&kind=${kind}`)
       .then(r => r.json())
       .then(d => { setData(d); setLoading(false) })
       .catch(() => setLoading(false))
   }
 
-  useEffect(() => { fetchData() }, [scope, kind])
+  useEffect(() => { fetchData() }, [kind])
 
   const isHitter = kind === 'hitter'
 
@@ -187,36 +190,6 @@ export default function AccuracyPage() {
                 Hitters
               </button>
             </div>
-            {/* Roster / All MLB scope — pitchers only (hitter locks are roster-scoped) */}
-            {!isHitter && (
-            <div style={{
-              display: 'flex', borderRadius: 6, overflow: 'hidden', flexShrink: 0,
-              border: '1px solid var(--border-strong)',
-            }}>
-              <button
-                onClick={() => setScope('roster')}
-                style={{
-                  padding: '6px 12px', fontSize: 12, border: 'none', cursor: 'pointer',
-                  fontFamily: 'var(--mono)', whiteSpace: 'nowrap',
-                  background: scope === 'roster' ? 'var(--ink)' : 'transparent',
-                  color: scope === 'roster' ? 'var(--paper)' : 'var(--ink-3)',
-                }}
-              >
-                My Roster
-              </button>
-              <button
-                onClick={() => setScope('all')}
-                style={{
-                  padding: '6px 12px', fontSize: 12, border: 'none', cursor: 'pointer',
-                  fontFamily: 'var(--mono)', borderLeft: '1px solid var(--border-strong)', whiteSpace: 'nowrap',
-                  background: scope === 'all' ? 'var(--ink)' : 'transparent',
-                  color: scope === 'all' ? 'var(--paper)' : 'var(--ink-3)',
-                }}
-              >
-                All MLB
-              </button>
-            </div>
-            )}
             <button
               onClick={fetchData}
               disabled={loading}
@@ -467,23 +440,13 @@ export default function AccuracyPage() {
               </table>
             </div>
 
-            {(data?.unmatchedCount || data?.filteredNonRoster) ? (
+            {data?.unmatchedCount ? (
               <div style={{
                 fontSize: 12, color: 'var(--ink-3)', marginTop: 16, textAlign: 'center',
                 fontFamily: 'var(--mono)',
               }}>
-                {data?.unmatchedCount ? (
-                  <div>
-                    {data.unmatchedCount} projected {isHitter ? 'game' : 'start'}{data.unmatchedCount > 1 ? 's' : ''} without
-                    matching actuals ({isHitter ? 'DNP or games not yet completed' : 'games not yet completed'})
-                  </div>
-                ) : null}
-                {scope === 'roster' && data?.filteredNonRoster ? (
-                  <div style={{ marginTop: 4 }}>
-                    {data.filteredNonRoster} projected start{data.filteredNonRoster > 1 ? 's' : ''} excluded
-                    (pitcher not on your roster that day)
-                  </div>
-                ) : null}
+                {data.unmatchedCount} projected {isHitter ? 'game' : 'start'}{data.unmatchedCount > 1 ? 's' : ''} without
+                matching actuals ({isHitter ? 'DNP or games not yet completed' : 'games not yet completed'})
               </div>
             ) : null}
           </>

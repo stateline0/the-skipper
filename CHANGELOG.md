@@ -2,6 +2,38 @@
 
 ---
 
+## Session 35 — June 7, 2026 — Accuracy: all-MLB only (drop roster scope)
+
+Post-merge device review of the hitter accuracy dashboard surfaced three things
+(owner feedback): the new toggle made the header wrap to two lines; the Hitters
+tab only showed the owner's roster; and some all-MLB pitcher projections looked
+broken (24.7 / 39.2 / 23.8). Decisions: the dashboard tracks *overall model
+accuracy*, so it's **all-MLB for both kinds — the roster scope is removed**.
+
+### What shipped
+- **Accuracy page — removed the My Roster/All MLB toggle (PR #151).** `scope` is
+  now fixed to `all` (pitchers read the whole-MLB `proj2all:`/`actual-all:`
+  data; hitters read `proj2h:`). Pitchers therefore default to all-MLB instead
+  of the owner's roster, and dropping the 4th control group means the header
+  fits one line again (fixes the two-line wrap from session 34). Dead
+  roster-scope branches removed.
+
+### Diagnosed, queued (not yet fixed)
+- **Inflated pitcher projections (24.7 / 39.2 / 23.8).** Root cause: per-start
+  rates divide **total `inningsPitched` (starts + relief)** by `gamesStarted`
+  (`cron.py:195`, `projection.py:90`). For swingmen/openers/relievers making a
+  spot start, that inflates per-start IP wildly (e.g. 25 relief IP ÷ 2 starts →
+  12.5 "IP/start"). Hits both the all-MLB and roster pitcher paths; pre-existing
+  (predates this session). Fix needs starts-only stats or a per-start IP clamp.
+- **All-MLB hitter coverage** (the real fix for "Hitters is roster-only"): needs
+  a cron pass that locks all-MLB hitter projections + actuals like the pitcher
+  cron. Blockers found while scoping: `fetch_season_stats_hitting` discards the
+  split's team (no hitter→team map to know who plays today), and
+  `fetch_game_logs_hitting` is per-player ("not all of MLB" by design) — so it's
+  a substantial, hard-to-test cron addition. Being scoped with the owner.
+
+---
+
 ## Session 34 — June 7, 2026 — Hitter accuracy buildout
 
 Began the hitter accuracy chunk carried forward from session 31 — mirroring the
