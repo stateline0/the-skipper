@@ -84,12 +84,14 @@ export default function Hitters() {
   const metrics = useMemo(() => {
     const projWk = hitters.reduce((a, h) => a + (h.projFpts || 0), 0)
     const games = Object.values(weeks).reduce((a, w) => a + w.filter(g => !g.off).length, 0)
-    const topG = hitters.reduce((a, h) => Math.max(a, h.projG), 0)
+    const actWk = Object.values(weeks).reduce(
+      (a, w) => a + w.reduce((s, g) => s + (g.actual || 0), 0), 0)
+    const playedAny = Object.values(weeks).some(w => w.some(g => g.actual != null))
     return [
       { label: 'PROJ FPTS / WK', value: projWk.toFixed(1), accent: 'ok' as const },
+      { label: 'ACT FPTS / WK', value: playedAny ? actWk.toFixed(1) : '—' },
       { label: 'HITTERS ROSTERED', value: hitters.length },
       { label: 'GAMES THIS WK', value: games },
-      { label: 'TOP PROJ / G', value: topG.toFixed(1) },
     ]
   }, [hitters, weeks])
 

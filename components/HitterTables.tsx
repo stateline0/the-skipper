@@ -41,6 +41,8 @@ export interface DayGame {
   oppStarter?: string
   base?: number                 // pre-matchup per-game base
   factors?: DayFactor[]         // matchup adjustments (platoon, …) for the popover
+  status?: string               // "scheduled" | "in_progress" | "final"
+  actual?: number | null        // actual/live FPTS for played games
 }
 
 export type Weeks = Record<string, DayGame[]>
@@ -83,6 +85,10 @@ function sortVal(h: UIHitter, weeks: Weeks, key: string): number | null {
   const week = weeks[h.name] || []
   switch (key) {
     case 'g':      return week.filter(g => !g.off).length
+    case 'act': {
+      const a = week.filter(g => !g.off && g.actual != null)
+      return a.length ? a.reduce((s, g) => s + (g.actual || 0), 0) : null
+    }
     case 'projWk': return week.reduce((a, g) => a + g.proj, 0)
     case 'projG':  return h.projG
     case 'own':    return h.percentOwned ?? null
@@ -233,6 +239,7 @@ export function HitterScheduleGrid({ hitters, weeks, weekDates, today, showOwn }
               )
             })}
             <th onClick={() => onSort('g')} style={{ ...headerStyle, minWidth: 36, cursor: 'pointer', userSelect: 'none', color: key === 'g' ? 'var(--ink)' : 'var(--ink-3)' }}>G{arrow('g')}</th>
+            <th onClick={() => onSort('act')} style={{ ...headerStyle, minWidth: 56, cursor: 'pointer', userSelect: 'none', color: key === 'act' ? 'var(--ink)' : 'var(--ink-3)' }}>Act{arrow('act')}</th>
             <th onClick={() => onSort('projWk')} style={{ ...headerStyle, minWidth: 60, cursor: 'pointer', userSelect: 'none', color: key === 'projWk' ? 'var(--ink)' : 'var(--ink-3)' }}>Proj{arrow('projWk')}</th>
             {showOwn && <th onClick={() => onSort('own')} style={{ ...headerStyle, minWidth: 52, cursor: 'pointer', userSelect: 'none', color: key === 'own' ? 'var(--ink)' : 'var(--ink-3)' }}>Own%{arrow('own')}</th>}
           </tr>
@@ -243,6 +250,8 @@ export function HitterScheduleGrid({ hitters, weeks, weekDates, today, showOwn }
             const isBench = h.pos === 'BN' || h.pos === 'IL'
             const games = week.filter(g => !g.off)
             const projTotal = games.reduce((a, g) => a + g.proj, 0)
+            const actGames = games.filter(g => g.actual != null)
+            const actTotal = actGames.reduce((a, g) => a + (g.actual || 0), 0)
             return (
               <tr key={h.name} style={{ opacity: isBench ? 0.55 : 1 }}>
                 <td style={cellStyle}><PosBadge pos={h.pos} /></td>
@@ -258,6 +267,9 @@ export function HitterScheduleGrid({ hitters, weeks, weekDates, today, showOwn }
                   </td>
                 ))}
                 <td style={{ ...cellStyle, fontFamily: 'var(--mono)', fontWeight: 700 }}>{games.length}</td>
+                <td style={{ ...cellStyle, fontFamily: 'var(--mono)', fontWeight: 700, color: actGames.length ? (actTotal >= 0 ? 'var(--green)' : 'var(--red)') : 'var(--ink-3)' }}>
+                  {actGames.length ? actTotal.toFixed(1) : '—'}
+                </td>
                 <td style={{ ...cellStyle, fontFamily: 'var(--mono)', fontWeight: 700, color: 'var(--green)' }}>
                   {projTotal.toFixed(1)}
                 </td>
@@ -279,6 +291,23 @@ function HitterDayCell({ g }: { g: DayGame }) {
   const [open, setOpen] = useState(false)
   if (g.off) return <span style={{ color: 'var(--ink-3)', fontSize: 11 }}>—</span>
   const oppLabel = `${g.home ? '' : '@'}${g.opp}`
+
+  // Played (final) or playing (in_progress) → show actual/live FPTS instead of projection.
+  const played = g.status === 'final' || g.status === 'in_progress'
+  if (played && g.actual != null) {
+    const live = g.status === 'in_progress'
+    return (
+      <div style={{ textAlign: 'center' }}>
+        <div style={{ fontSize: 11, fontFamily: 'var(--mono)', fontWeight: 700, color: 'var(--ink)' }}>
+          {oppLabel}
+          {live && <span style={{ fontSize: 8, fontWeight: 700, color: 'var(--red)', marginLeft: 3, letterSpacing: '0.06em' }}>● LIVE</span>}
+        </div>
+        <div style={{ fontSize: 11, fontFamily: 'var(--mono)', fontWeight: 700, color: g.actual > 0 ? 'var(--green)' : g.actual < 0 ? 'var(--red)' : 'var(--ink-3)', marginTop: 1 }}>
+          {g.actual > 0 ? '+' : ''}{g.actual.toFixed(1)}
+        </div>
+      </div>
+    )
+  }
   // Matchup edge cue: color the projection vs the pre-matchup base.
   const projColor = g.base === undefined ? 'var(--ink-2)'
     : g.proj > g.base ? 'var(--green)' : g.proj < g.base ? 'var(--red)' : 'var(--ink-2)'
@@ -423,7 +452,8 @@ export function hitterFromPayload(h: any, dates: string[]): { hitter: UIHitter; 
     const d = byDate[date]
     return d
       ? { date, off: false, opp: d.opp, home: d.home, proj: d.proj,
-          oppHand: d.oppHand ?? null, oppStarter: d.oppStarter, base: d.base, factors: d.factors }
+          oppHand: d.oppHand ?? null, oppStarter: d.oppStarter, base: d.base, factors: d.factors,
+          status: d.status, actual: d.actual ?? null }
       : { date, off: true, opp: '', home: false, proj: 0 }
   })
   const s = h.seasonStats || {}
