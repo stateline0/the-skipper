@@ -27,6 +27,19 @@ data behind them so the position filter is actually useful.
   ignored. The filter already splits composite positions on `/`, so multi-pos
   players match each of their positions.
 
+### Follow-ups (same PR)
+- **Three-tab Free Agents:** the Pitchers / Hitters toggle became
+  **SPs / RPs / Batters**. SPs keep the start-based schedule + stats card; RPs
+  get a dedicated card built on `StatsTable` with a start-free column subset
+  (`RP_COLUMNS` — no Starts/Form/Pace), since relievers have no scheduled
+  starts. The position dropdown now only shows on the Batters tab (SP/RP are
+  their own tabs); the name search applies everywhere.
+- **Position pills on the sub-line.** `components/HitterTables.tsx` drops the
+  dedicated Pos column; positions now render as separate compact colored pills
+  on the name's `team · handedness` sub-line (new `PosTags`; multi-position like
+  `2B/SS` shows as distinct `2B` `SS` pills). Applies to both the rostered My
+  Hitters tables and the Free Agents Batters tab.
+
 ---
 
 ## Session 36 — June 7, 2026 — All-MLB hitter accuracy (cron)

@@ -1,7 +1,7 @@
 import Head from 'next/head'
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import ScheduleGrid from '../components/ScheduleGrid'
-import StatsTable, { SeasonStats, SavantExpected } from '../components/StatsTable'
+import StatsTable, { PITCHER_COLUMNS, SeasonStats, SavantExpected } from '../components/StatsTable'
 import {
   UIHitter, Weeks, buildDateRange, todayISO, hitterFromPayload,
   HitterScheduleGrid, HitterStatsTable,
@@ -13,6 +13,12 @@ const CACHE_VERSION = 8 // bump this whenever the API response shape changes
 // pos may be composite (e.g. "2B/SS"), so matching splits on "/". UTIL is a
 // lineup slot (any position can fill it), not a real position, so it's excluded.
 const HITTER_POSITIONS = ['C', '1B', '2B', '3B', 'SS', 'OF', 'DH']
+
+// The RP tab reuses the pitcher StatsTable but drops start-based columns
+// (Starts, Form sparkline, season Pace) that are meaningless for relievers.
+const RP_COLUMN_KEYS = ['name', 'team', 'percentOwned', 'era', 'k9', 'bb9',
+  'xera', 'xwoba', 'wobaDiff', 'luck', 'barrelPct', 'whiffPct', 'projFpts', 'actFpts']
+const RP_COLUMNS = PITCHER_COLUMNS.filter(c => RP_COLUMN_KEYS.includes(c.key))
 
 interface FreeSP {
   name: string; team: string; slot: string; injuryStatus: string
@@ -52,12 +58,12 @@ export default function FreeAgents() {
   const [sortCol, setSortCol]           = useState<string>('percentOwned')
   const [sortDir, setSortDir]           = useState<'asc' | 'desc'>('desc')
   const [activeTab, setActiveTab]       = useState<'schedule' | 'stats'>('schedule')
-  const [mode, setMode]                 = useState<'pitchers' | 'hitters'>('pitchers')
+  const [mode, setMode]                 = useState<'sp' | 'rp' | 'batters'>('sp')
   const [nameQuery, setNameQuery]       = useState('')
   const [posFilter, setPosFilter]       = useState('')
 
-  // A position filter set for one mode is meaningless in the other (SP/RP vs
-  // C/1B/OF…), so reset it on mode switch. The name search carries over fine.
+  // The position filter only applies to the Batters tab; clear it when leaving
+  // (or on any tab switch) so it never silently hides rows elsewhere.
   useEffect(() => { setPosFilter('') }, [mode])
 
   useEffect(() => {
@@ -159,29 +165,20 @@ function handleSort(col: string) {
     }
   }
 
-  // Position options for the pitcher dropdown, derived from what's loaded
-  // (typically SP / RP). Hitter options are a fixed canonical list since that
-  // data lives in the FAHitters child.
-  const pitcherPositions = useMemo(() => {
-    const set = new Set<string>()
-    freeSPs.forEach(p => { if (p.slot) set.add(p.slot) })
-    return Array.from(set).sort()
-  }, [freeSPs])
-  const positionOptions = mode === 'pitchers' ? pitcherPositions : HITTER_POSITIONS
+  // The position dropdown only applies to the Batters tab (SPs/RPs are their
+  // own tabs now), so its options are always the canonical hitter list.
+  const positionOptions = HITTER_POSITIONS
 
-  // Name + position filtering happens before sorting so both the Schedule and
-  // Stats tabs (which share sortedFreeSPs) stay in sync.
-  const filteredFreeSPs = useMemo(() => {
+  // Pitchers are filtered by name only; the SP/RP split is handled by the tab.
+  const nameMatches = useCallback((n: string) => {
     const q = nameQuery.trim().toLowerCase()
-    return freeSPs.filter(p => {
-      const nameMatch = !q || p.name.toLowerCase().includes(q)
-      const posMatch = !posFilter || p.slot === posFilter
-      return nameMatch && posMatch
-    })
-  }, [freeSPs, nameQuery, posFilter])
+    return !q || n.toLowerCase().includes(q)
+  }, [nameQuery])
+  const spList = useMemo(() => freeSPs.filter(p => p.slot === 'SP' && nameMatches(p.name)), [freeSPs, nameMatches])
+  const rpList = useMemo(() => freeSPs.filter(p => p.slot === 'RP' && nameMatches(p.name)), [freeSPs, nameMatches])
 
-  const sortedFreeSPs = useMemo(() => {
-    const sorted = [...filteredFreeSPs]
+  const sortedSPs = useMemo(() => {
+    const sorted = [...spList]
     sorted.sort((a, b) => {
       let aVal: number
       let bVal: number
@@ -215,7 +212,7 @@ function handleSort(col: string) {
       return sortDir === 'desc' ? bVal - aVal : aVal - bVal
     })
     return sorted
-  }, [filteredFreeSPs, sortCol, sortDir, fptsPerStart, actualFpts, projectionDetails])
+  }, [spList, sortCol, sortDir, fptsPerStart, actualFpts, projectionDetails])
 
   return (
     <>
@@ -231,21 +228,24 @@ function handleSort(col: string) {
           <div>
             <h1 style={{ fontSize: 22, fontWeight: 700, letterSpacing: '-0.03em', margin: 0, marginBottom: 6 }}>Free Agents</h1>
             <p style={{ fontSize: 13, color: 'var(--ink-3)', margin: 0 }}>
-              {mode === 'pitchers'
-                ? 'Available pitchers — check the ones to include in your analysis'
+              {mode === 'sp'
+                ? 'Available starting pitchers — check the ones to include in your analysis'
+                : mode === 'rp'
+                ? 'Available relievers by ownership and projection'
                 : 'Available hitters — projected with the hitter model'}
             </p>
-            {mode === 'pitchers' && computedAt && (
+            {mode !== 'batters' && computedAt && (
               <div style={{ fontSize: 12, color: 'var(--ink-3)', opacity: 0.7, marginTop: 2, whiteSpace: 'nowrap' }}>
                 Updated {relativeTime(computedAt)}{loading ? ' · refreshing…' : ''}
               </div>
             )}
           </div>
           <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
-            {/* Pitchers / Hitters toggle */}
+            {/* SPs / RPs / Batters toggle */}
             <div style={{ display: 'flex', gap: 2, background: 'var(--paper-2)', padding: 3, borderRadius: 8 }}>
-              {(['pitchers', 'hitters'] as const).map(m => {
+              {(['sp', 'rp', 'batters'] as const).map(m => {
                 const active = mode === m
+                const label = m === 'sp' ? 'SPs' : m === 'rp' ? 'RPs' : 'Batters'
                 return (
                   <button key={m} onClick={() => setMode(m)} style={{
                     fontFamily: 'var(--sans)', fontSize: 12, fontWeight: 600, padding: '5px 14px',
@@ -253,7 +253,7 @@ function handleSort(col: string) {
                     background: active ? 'var(--white)' : 'transparent',
                     color: active ? 'var(--ink)' : 'var(--ink-3)',
                     boxShadow: active ? 'var(--shadow)' : 'none', transition: 'all 0.15s',
-                  }}>{m === 'pitchers' ? 'Pitchers' : 'Hitters'}</button>
+                  }}>{label}</button>
                 )
               })}
             </div>
@@ -281,7 +281,7 @@ function handleSort(col: string) {
                 })}
               </select>
             )}
-            {mode === 'pitchers' && (
+            {mode !== 'batters' && (
               <button onClick={() => fetchFreeAgents(true)} disabled={loading} style={{
                 fontFamily: 'var(--sans)', fontSize: 13, fontWeight: 600,
                 padding: '9px 18px', borderRadius: 'var(--radius)',
@@ -296,7 +296,7 @@ function handleSort(col: string) {
           </div>
         </div>
 
-        {/* Name search + position filter — applies to both pitchers and hitters. */}
+        {/* Name search (all tabs) + position filter (Batters only). */}
         <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginBottom: 16, flexWrap: 'wrap' }}>
           <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
             <span style={{ position: 'absolute', left: 12, fontSize: 13, color: 'var(--ink-3)', pointerEvents: 'none' }}>⌕</span>
@@ -304,7 +304,7 @@ function handleSort(col: string) {
               type="text"
               value={nameQuery}
               onChange={e => setNameQuery(e.target.value)}
-              placeholder={mode === 'pitchers' ? 'Search pitchers…' : 'Search hitters…'}
+              placeholder={mode === 'batters' ? 'Search hitters…' : 'Search pitchers…'}
               style={{
                 fontFamily: 'var(--sans)', fontSize: 13, padding: '8px 12px 8px 30px',
                 borderRadius: 'var(--radius)', border: '1.5px solid var(--border-strong)',
@@ -312,18 +312,20 @@ function handleSort(col: string) {
               }}
             />
           </div>
-          <select
-            value={posFilter}
-            onChange={e => setPosFilter(e.target.value)}
-            style={{
-              fontFamily: 'var(--mono)', fontSize: 12, padding: '8px 12px',
-              borderRadius: 'var(--radius)', border: '1.5px solid var(--border-strong)',
-              background: 'var(--white)', color: 'var(--ink)', cursor: 'pointer', outline: 'none',
-            }}
-          >
-            <option value="">All positions</option>
-            {positionOptions.map(p => <option key={p} value={p}>{p}</option>)}
-          </select>
+          {mode === 'batters' && (
+            <select
+              value={posFilter}
+              onChange={e => setPosFilter(e.target.value)}
+              style={{
+                fontFamily: 'var(--mono)', fontSize: 12, padding: '8px 12px',
+                borderRadius: 'var(--radius)', border: '1.5px solid var(--border-strong)',
+                background: 'var(--white)', color: 'var(--ink)', cursor: 'pointer', outline: 'none',
+              }}
+            >
+              <option value="">All positions</option>
+              {positionOptions.map(p => <option key={p} value={p}>{p}</option>)}
+            </select>
+          )}
           {(nameQuery || posFilter) && (
             <button
               onClick={() => { setNameQuery(''); setPosFilter('') }}
@@ -336,9 +338,9 @@ function handleSort(col: string) {
           )}
         </div>
 
-        {mode === 'hitters' && <FAHitters period={selectedPeriod} nameQuery={nameQuery} posFilter={posFilter} />}
+        {mode === 'batters' && <FAHitters period={selectedPeriod} nameQuery={nameQuery} posFilter={posFilter} />}
 
-        {mode === 'pitchers' && (<>
+        {mode !== 'batters' && (<>
         {error && (
           <div style={{
             background: 'var(--red-light)', border: '1px solid var(--red)',
@@ -364,14 +366,14 @@ function handleSort(col: string) {
               cursor: 'pointer', border: 'none', background: '#E2E4E8', color: '#0F1114',
             }}>Load free agents →</button>
           </div>
-        ) : (
+        ) : mode === 'sp' ? (
           <>
             <div style={{
               background: 'var(--blue-light)', border: '1px solid rgba(26,95,168,0.2)',
               borderRadius: 'var(--radius)', padding: '10px 14px',
               fontSize: 13, color: 'var(--blue)', marginBottom: 16,
             }}>
-              Top available pitchers by ownership %.
+              Top available starting pitchers by ownership %.
             </div>
 
             <div style={{
@@ -387,7 +389,7 @@ function handleSort(col: string) {
                   fontSize: 10, fontFamily: 'var(--mono)', fontWeight: 500,
                   letterSpacing: '0.1em', color: 'var(--ink-3)',
                   textTransform: 'uppercase',
-                }}>Available pitchers</div>
+                }}>Available starting pitchers</div>
 
                 {/* Tab toggle — mirrors the My Team card (Schedule / Stats). */}
                 <div style={{
@@ -418,13 +420,13 @@ function handleSort(col: string) {
                 </div>
               </div>
 
-              {sortedFreeSPs.length === 0 ? (
+              {sortedSPs.length === 0 ? (
                 <div style={{ padding: '28px 12px', textAlign: 'center', fontSize: 13, color: 'var(--ink-3)' }}>
-                  No pitchers match your filters.
+                  No starting pitchers match your filters.
                 </div>
               ) : activeTab === 'schedule' ? (
               <ScheduleGrid
-                pitchers={sortedFreeSPs}
+                pitchers={sortedSPs}
                 schedule={schedule}
                 matchupDates={matchupDates}
                 actualFpts={actualFpts}
@@ -456,9 +458,47 @@ function handleSort(col: string) {
               />
               ) : (
                 <StatsTable
-                  pitchers={sortedFreeSPs}
+                  pitchers={sortedSPs}
                   fptsPerStart={fptsPerStart}
                   actualFpts={actualFpts}
+                />
+              )}
+            </div>
+          </>
+        ) : (
+          <>
+            <div style={{
+              background: 'var(--blue-light)', border: '1px solid rgba(26,95,168,0.2)',
+              borderRadius: 'var(--radius)', padding: '10px 14px',
+              fontSize: 13, color: 'var(--blue)', marginBottom: 16,
+            }}>
+              Top available relievers by ownership %. Relievers have no scheduled
+              starts, so they're ranked by projection and recent stats.
+            </div>
+
+            <div style={{
+              background: 'var(--white)', border: '1px solid var(--border)',
+              borderRadius: 'var(--radius-lg)', padding: '20px 24px',
+              boxShadow: 'var(--shadow)', marginBottom: 16,
+            }}>
+              <div style={{
+                fontSize: 10, fontFamily: 'var(--mono)', fontWeight: 500,
+                letterSpacing: '0.1em', color: 'var(--ink-3)',
+                textTransform: 'uppercase', marginBottom: 12,
+              }}>Available relievers</div>
+
+              {rpList.length === 0 ? (
+                <div style={{ padding: '28px 12px', textAlign: 'center', fontSize: 13, color: 'var(--ink-3)' }}>
+                  No relievers match your filters.
+                </div>
+              ) : (
+                <StatsTable
+                  pitchers={rpList}
+                  columns={RP_COLUMNS}
+                  fptsPerStart={fptsPerStart}
+                  actualFpts={actualFpts}
+                  defaultSortCol="projFpts"
+                  defaultSortDir="desc"
                 />
               )}
             </div>
