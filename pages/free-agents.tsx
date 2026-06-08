@@ -28,6 +28,14 @@ interface FreeSP {
   fptsHistory?: number[] | null
 }
 
+// A free-agent pitcher belongs in the SPs (start-based) view if ESPN lists them
+// as SP-eligible OR they have a projected start this period — e.g. an RP-only
+// arm making a spot start. Everyone else (relievers with no scheduled start)
+// goes to the RPs view.
+function isStarterView(p: FreeSP): boolean {
+  return p.slot === 'SP' || (p.startDates?.length ?? 0) > 0
+}
+
 interface MatchupPeriod {
   period: number; label: string; start: string; end: string; limit: number
 }
@@ -169,13 +177,14 @@ function handleSort(col: string) {
   // own tabs now), so its options are always the canonical hitter list.
   const positionOptions = HITTER_POSITIONS
 
-  // Pitchers are filtered by name only; the SP/RP split is handled by the tab.
+  // Pitchers are filtered by name only; the SP/RP split is by isStarterView
+  // (slot or a projected spot start), so a spot-starting reliever shows in SPs.
   const nameMatches = useCallback((n: string) => {
     const q = nameQuery.trim().toLowerCase()
     return !q || n.toLowerCase().includes(q)
   }, [nameQuery])
-  const spList = useMemo(() => freeSPs.filter(p => p.slot === 'SP' && nameMatches(p.name)), [freeSPs, nameMatches])
-  const rpList = useMemo(() => freeSPs.filter(p => p.slot === 'RP' && nameMatches(p.name)), [freeSPs, nameMatches])
+  const spList = useMemo(() => freeSPs.filter(p => isStarterView(p) && nameMatches(p.name)), [freeSPs, nameMatches])
+  const rpList = useMemo(() => freeSPs.filter(p => !isStarterView(p) && nameMatches(p.name)), [freeSPs, nameMatches])
 
   const sortedSPs = useMemo(() => {
     const sorted = [...spList]
