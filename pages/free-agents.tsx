@@ -7,11 +7,12 @@ import {
   HitterScheduleGrid, HitterStatsTable,
 } from '../components/HitterTables'
 
-const CACHE_VERSION = 7 // bump this whenever the API response shape changes
+const CACHE_VERSION = 8 // bump this whenever the API response shape changes
 
 // Canonical hitter positions for the Free Agents position filter. A hitter's
-// pos may be composite (e.g. "2B/SS"), so matching splits on "/".
-const HITTER_POSITIONS = ['C', '1B', '2B', '3B', 'SS', 'OF', 'DH', 'UTIL']
+// pos may be composite (e.g. "2B/SS"), so matching splits on "/". UTIL is a
+// lineup slot (any position can fill it), not a real position, so it's excluded.
+const HITTER_POSITIONS = ['C', '1B', '2B', '3B', 'SS', 'OF', 'DH']
 
 interface FreeSP {
   name: string; team: string; slot: string; injuryStatus: string
@@ -231,7 +232,7 @@ function handleSort(col: string) {
             <h1 style={{ fontSize: 22, fontWeight: 700, letterSpacing: '-0.03em', margin: 0, marginBottom: 6 }}>Free Agents</h1>
             <p style={{ fontSize: 13, color: 'var(--ink-3)', margin: 0 }}>
               {mode === 'pitchers'
-                ? 'Available SPs — check the ones to include in your analysis'
+                ? 'Available pitchers — check the ones to include in your analysis'
                 : 'Available hitters — projected with the hitter model'}
             </p>
             {mode === 'pitchers' && computedAt && (
@@ -370,7 +371,7 @@ function handleSort(col: string) {
               borderRadius: 'var(--radius)', padding: '10px 14px',
               fontSize: 13, color: 'var(--blue)', marginBottom: 16,
             }}>
-              Top available SPs by ownership %.
+              Top available pitchers by ownership %.
             </div>
 
             <div style={{
@@ -386,7 +387,7 @@ function handleSort(col: string) {
                   fontSize: 10, fontFamily: 'var(--mono)', fontWeight: 500,
                   letterSpacing: '0.1em', color: 'var(--ink-3)',
                   textTransform: 'uppercase',
-                }}>Available starting pitchers</div>
+                }}>Available pitchers</div>
 
                 {/* Tab toggle — mirrors the My Team card (Schedule / Stats). */}
                 <div style={{

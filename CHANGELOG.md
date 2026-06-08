@@ -2,6 +2,33 @@
 
 ---
 
+## Session 37 — June 8, 2026 — Free Agents filters + RP & multi-position (PR #156)
+
+Added name-search and position filters to the Free Agents page, and widened the
+data behind them so the position filter is actually useful.
+
+### What shipped
+- **Filter bar** on `pages/free-agents.tsx` (name search + position dropdown +
+  Clear), working in both Pitchers and Hitters modes. Filtering runs before
+  the existing sort so the Schedule and Stats tabs stay in sync, with a
+  "no matches" empty state. Position options come from the loaded pitcher
+  slots, or a canonical hitter list (`C, 1B, 2B, 3B, SS, OF, DH`). UTIL is a
+  lineup slot, not a position, so it's excluded. The position filter resets on
+  mode switch; the name query carries over.
+- **Relief pitchers in the free-agent pool.** `api/espn.py` previously fetched
+  SP-eligible free agents only (`filterSlotIds: [14]`). Now requests `[14, 15]`
+  and keeps any SP- or RP-eligible pitcher, and emits a `slot` field (`SP`/`RP`)
+  per free agent so the schedule grid badge and the position filter work. The
+  projection pipeline already handled `is_rp`, so no projection changes were
+  needed.
+- **Multi-position eligibility for free-agent hitters.** New
+  `_eligible_positions()` in `api/hitters.py` joins all eligible fielding
+  positions (e.g. `1B/OF`); DH is only used when no fielding slot applies, UTIL
+  ignored. The filter already splits composite positions on `/`, so multi-pos
+  players match each of their positions.
+
+---
+
 ## Session 36 — June 7, 2026 — All-MLB hitter accuracy (cron)
 
 Closed the last gap from session 34/35: the Accuracy Hitters tab was roster-only

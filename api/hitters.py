@@ -172,6 +172,27 @@ def _eligible_label(eligible: set) -> str:
     return "UTIL"
 
 
+def _eligible_positions(eligible: set) -> str:
+    """All eligible defensive positions from eligibleSlots, joined by '/'
+    (e.g. '1B/OF'), so the UI can show and filter multi-position eligibility.
+
+    DH (11) is appended only when no fielding position applies — nearly every
+    hitter is DH-eligible, so listing it everywhere would just be noise. UTIL
+    (12) is a lineup slot, not a position, and is ignored. OF subtypes (LF/CF/
+    RF) collapse to a single 'OF'."""
+    out = []
+    for sid, label in ((0, "C"), (1, "1B"), (2, "2B"), (3, "3B"), (4, "SS")):
+        if sid in eligible:
+            out.append(label)
+    if eligible & {5, 8, 9, 10}:
+        out.append("OF")
+    if out:
+        return "/".join(out)
+    if 11 in eligible:
+        return "DH"
+    return "UTIL"
+
+
 def hitter_slot(slot_id: int, eligible: set, injured: bool):
     """Return (label, sort_rank) for a hitter from their lineupSlotId.
 
@@ -611,7 +632,7 @@ def _fetch_fa_hitters(base, headers, cookies, PRO_TEAM_MAP, current_week,
             own = round(float(player.get("ownership", {}).get("percentOwned", 0) or 0), 1)
             meta.append({
                 "name": name, "team": team_abbrev,
-                "pos": _eligible_label(eligible), "ownPct": own,
+                "pos": _eligible_positions(eligible), "ownPct": own,
                 "gameDates": [d for d in period_dates if team_abbrev and team_abbrev in schedule.get(d, {})],
             })
 

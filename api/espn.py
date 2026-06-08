@@ -497,7 +497,7 @@ def get_league_data(team_id: int, week: int) -> dict:
     xff_fa = json.dumps({
         "players": {
             "filterStatus": {"value": ["FREEAGENT", "WAIVERS"]},
-            "filterSlotIds": {"value": [14]},
+            "filterSlotIds": {"value": [14, 15]},  # 14=SP, 15=RP — include relievers
             "limit": 100,
             "sortPercOwned": {"sortPriority": 1, "sortAsc": False},
             "filterStatsForCurrentSeasonScoringPeriodId": {"value": [current_week]},
@@ -521,7 +521,7 @@ def get_league_data(team_id: int, week: int) -> dict:
             if not player.get("fullName"):
                 continue
             eligible_slots = set(player.get("eligibleSlots", []))
-            if 14 not in eligible_slots:
+            if not eligible_slots & {14, 15}:   # keep SP- or RP-eligible pitchers only
                 continue
             fa_names.append(player["fullName"])
             fa_players_raw.append(p)
@@ -578,6 +578,8 @@ def get_league_data(team_id: int, week: int) -> dict:
             pro_team_id  = player.get("proTeamId", 0)
             team_abbrev  = PRO_TEAM_MAP.get(pro_team_id, str(pro_team_id))
             raw_inj      = player.get("injuryStatus", "ACTIVE")
+            fa_eligible  = set(player.get("eligibleSlots", []))
+            fa_slot      = "SP" if 14 in fa_eligible else ("RP" if 15 in fa_eligible else "P")
             pitcher_data = fa_starts_map.get(fa_name, {"starts": 0, "startDates": []})
 
             # Stats-tab payloads — same shape as the rostered loop above.
@@ -593,6 +595,7 @@ def get_league_data(team_id: int, week: int) -> dict:
             free_agents.append({
                 "name":           fa_name,
                 "team":           team_abbrev,
+                "slot":           fa_slot,
                 "injuryStatus":   inj_label_map.get(raw_inj, raw_inj),
                 "percentOwned":   round(player.get("ownership", {}).get("percentOwned", 0), 1),
                 "projFpts":       fa_proj_fpts.get(fa_name, 0.0),
