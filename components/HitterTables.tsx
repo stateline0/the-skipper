@@ -172,25 +172,37 @@ function SortTh({ label, col, sortKey, sortDir, onSort, align = 'center', minWid
 
 // ─── Badge ──────────────────────────────────────────────────────────────────
 
-export function PosBadge({ pos }: { pos: string }) {
-  const styles: Record<string, React.CSSProperties> = {
-    C:    { background: 'var(--amber-light)', color: 'var(--amber)' },
-    UTIL: { background: 'var(--green-light)', color: 'var(--green)' },
-    DH:   { background: 'var(--green-light)', color: 'var(--green)' },
-    BN:   { background: 'var(--paper-2)',     color: 'var(--ink-3)' },
-    IL:   { background: 'var(--red-light)',   color: 'var(--red)' },
-  }
-  const infield = ['1B', '2B', '3B', 'SS', '2B/SS', '1B/3B']
-  const style = styles[pos]
-    || (infield.includes(pos) ? { background: 'var(--blue-light)', color: 'var(--blue)' }
+const POS_STYLE: Record<string, React.CSSProperties> = {
+  C:    { background: 'var(--amber-light)', color: 'var(--amber)' },
+  UTIL: { background: 'var(--green-light)', color: 'var(--green)' },
+  DH:   { background: 'var(--green-light)', color: 'var(--green)' },
+  BN:   { background: 'var(--paper-2)',     color: 'var(--ink-3)' },
+  IL:   { background: 'var(--red-light)',   color: 'var(--red)' },
+}
+const INFIELD = ['1B', '2B', '3B', 'SS', '2B/SS', '1B/3B']
+
+function posColor(pos: string): React.CSSProperties {
+  return POS_STYLE[pos]
+    || (INFIELD.includes(pos) ? { background: 'var(--blue-light)', color: 'var(--blue)' }
     : pos === 'OF' ? { background: 'var(--green-light)', color: 'var(--green)' }
     : { background: 'var(--paper-2)', color: 'var(--ink-3)' })
+}
+
+// Multi-position eligibility as separate compact pills (e.g. "1B/OF" → 1B OF),
+// shown on the hitter name sub-line in place of a dedicated Pos column.
+export function PosTags({ pos }: { pos: string }) {
+  const parts = pos.split('/').map(s => s.trim()).filter(Boolean)
+  if (parts.length === 0) return null
   return (
-    <span style={{
-      display: 'inline-block', fontSize: 11, fontWeight: 600, fontFamily: 'var(--mono)',
-      padding: '2px 8px', borderRadius: 99, letterSpacing: '0.04em',
-      whiteSpace: 'nowrap', minWidth: 44, textAlign: 'center', ...style,
-    }}>{pos}</span>
+    <span style={{ display: 'inline-flex', gap: 3, flexWrap: 'wrap', verticalAlign: 'middle' }}>
+      {parts.map((p, i) => (
+        <span key={i} style={{
+          display: 'inline-block', fontSize: 9, fontWeight: 700, fontFamily: 'var(--mono)',
+          padding: '1px 5px', borderRadius: 99, letterSpacing: '0.03em',
+          whiteSpace: 'nowrap', ...posColor(p),
+        }}>{p}</span>
+      ))}
+    </span>
   )
 }
 
@@ -216,8 +228,7 @@ export function HitterScheduleGrid({ hitters, weeks, weekDates, today, showOwn, 
       <table style={{ borderCollapse: 'collapse', width: '100%' }}>
         <thead>
           <tr>
-            <th style={{ ...headerStyle, minWidth: 50 }}>Pos</th>
-            <th onClick={() => onSort('name')} style={{ ...headerStyle, textAlign: 'left', paddingLeft: 10, minWidth: 150, cursor: 'pointer', userSelect: 'none', color: key === 'name' ? 'var(--ink)' : 'var(--ink-3)' }}>
+            <th onClick={() => onSort('name')} style={{ ...headerStyle, textAlign: 'left', paddingLeft: 10, minWidth: 170, cursor: 'pointer', userSelect: 'none', color: key === 'name' ? 'var(--ink)' : 'var(--ink-3)' }}>
               Hitter{arrow('name')}
             </th>
             {weekDates.map(date => {
@@ -255,11 +266,13 @@ export function HitterScheduleGrid({ hitters, weeks, weekDates, today, showOwn, 
             const actTotal = actGames.reduce((a, g) => a + (g.actual || 0), 0)
             return (
               <tr key={h.name} style={{ opacity: isBench ? 0.55 : 1 }}>
-                <td style={cellStyle}><PosBadge pos={h.pos} /></td>
                 <td style={{ ...cellStyle, textAlign: 'left', paddingLeft: 10 }}>
                   <div style={{ fontWeight: 600 }}>{h.name}</div>
-                  <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--ink-3)' }}>
-                    {h.team}{h.bats ? ` · ${h.bats}HB` : ''}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 5, flexWrap: 'wrap', marginTop: 2 }}>
+                    <PosTags pos={h.pos} />
+                    <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--ink-3)' }}>
+                      {h.team}{h.bats ? ` · ${h.bats}HB` : ''}
+                    </span>
                   </div>
                 </td>
                 {week.map(g => (
@@ -410,7 +423,6 @@ export function HitterStatsTable({ hitters, weeks, showOwn, leagueAvg }: {
       <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
         <thead>
           <tr>
-            <th style={{ padding: '8px 10px', fontSize: 10, fontFamily: 'var(--mono)', fontWeight: 500, letterSpacing: '0.04em', color: 'var(--ink-3)', textTransform: 'uppercase', borderBottom: '1px solid var(--border)' }}>Pos</th>
             {th('Hitter', 'name', 'left')}
             {th('AVG / OBP / SLG', 'ops', 'left', 'Sorted by OPS (OBP + SLG)')}
             {th('HR', 'hr')}
@@ -436,11 +448,13 @@ export function HitterStatsTable({ hitters, weeks, showOwn, leagueAvg }: {
             const adv = h.adv || {}
             return (
               <tr key={h.name} style={{ opacity: isBench ? 0.55 : 1 }}>
-                <td style={cellStyle}><PosBadge pos={h.pos} /></td>
                 <td style={cellStyle}>
                   <div style={{ fontWeight: 600 }}>{h.name}</div>
-                  <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--ink-3)' }}>
-                    {h.team}{h.bats ? ` · ${h.bats}HB` : ''}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 5, flexWrap: 'wrap', marginTop: 2 }}>
+                    <PosTags pos={h.pos} />
+                    <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--ink-3)' }}>
+                      {h.team}{h.bats ? ` · ${h.bats}HB` : ''}
+                    </span>
                   </div>
                 </td>
                 <td style={{ ...cellStyle, fontFamily: 'var(--mono)' }}>{hasLine ? slash(h) : '—'}</td>
