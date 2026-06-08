@@ -100,22 +100,36 @@ The model is **fully matchup-aware**, end-to-end, with actual/live tracking.
 ### Not yet built
 - **Phase 8** regressed BvP, **Phase 9** PA/lineup volume, **Phase 10** per-stat
   park + wind-for-HR (the "beyond pitchers" extras).
-- **Hitter accuracy** (next): lock `proj2h:` per game, stand up the separate
-  `kind=hitter` MAE series + Pitchers/Hitters toggle on `pages/accuracy.tsx`,
-  **excluding DNP games**. Actuals are already captured + validated, so this is
-  the natural next chunk.
+- **All-MLB hitter coverage** (the one accuracy gap): hitter locks/actuals are
+  written only from the Hitters page, so the dashboard covers the owner's roster,
+  not all MLB. The fix is a cron pass mirroring the pitcher all-MLB lock.
+  Blockers found while scoping (session 35): `fetch_season_stats_hitting`
+  discards each split's team (no hitter→team map to know who plays today), and
+  `fetch_game_logs_hitting` is per-player ("not all of MLB"). See BACKLOG.
 - **Live freshness:** live totals refresh on the ~30-min payload cache; a
   fresh-on-gameday refresh (like the pitcher page) would make them real-time.
 
-## Accuracy (separate from pitchers)
+## Accuracy (separate from pitchers) — SHIPPED (session 34, PRs #147–#150)
 
 The hitter model gets its **own** MAE series — never blended into the pitcher
-numbers — via a `kind=hitter` path in `api/accuracy.py` that reads `proj2h:`
-locks, uses the hitter stat list, and computes counterfactuals for the hitter
-factor stack. **No ESPN head-to-head overlay** for hitters: there's no
-`projection-espn:` hitter feed to compare against, so the hitter view shows
-model-vs-actual MAE only. A Pitchers/Hitters toggle on `pages/accuracy.tsx`
-swaps the page between the two.
+numbers. Pipeline:
+- **`proj2h:{season}:{period}:{slug}:{date}`** — per-game projection frozen at
+  game start (`status != "scheduled"`, the timezone-independent "game began"
+  signal), NX. Stores `fpts` + `base` + the factor stack + `matchup` + `model` +
+  `name`. (kv.py `set_locked_hitter_projection` / `get_all_locked_hitter_projections`.)
+- **`acth:{date}` = `{slug: {fpts, stats}}`** — actuals from the validated
+  game-log scoring (`actuals_with_stats_from_logs`). A game-log row means the
+  hitter **played**, so **DNP games are excluded for free** (a 0-fer is kept; a
+  no-show has no row). Written read-merge-write.
+- **`kind=hitter`** path in `api/accuracy.py` (`get_hitter_accuracy_data`) matches
+  `proj2h:` ↔ `acth:` by slug+date → FPTS MAE / max / min / bias / directional.
+  Deliberately simpler than pitchers: **no factor counterfactuals** (the model is
+  FPTS-centric — no per-stat projection to ablate), **no ESPN overlay** (no
+  `projection-espn:` hitter feed), and **no roster filter** (the Accuracy page is
+  all-MLB-only as of session 35).
+- **Frontend:** a Pitchers/Hitters toggle on `pages/accuracy.tsx`; Hitters render
+  a Skipper-only MAE timeline (`MaeTimelineChart kind="hitter"`) and an expandable
+  per-game `base × factors = proj` reconciler + actual line.
 
 ## Data risks to validate (Phase-0 spikes)
 

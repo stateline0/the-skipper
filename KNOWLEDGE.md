@@ -179,6 +179,7 @@ https://statsapi.mlb.com
 - Endpoint: `/api/v1/stats?stats=season&playerPool=all&group=pitching&season=YYYY&gameType=R&limit=1000`
 - IP stored as string e.g. `"34.2"` meaning 34 innings + 2 outs = 34.667 actual innings
 - Player names may use accented characters (e.g., "Edwin Díaz") — normalize with `strip_accents()` before matching against ESPN names
+- ⚠️ **Per-start rates: `inningsPitched` is TOTAL (starts + relief), so dividing by `gamesStarted` inflates swingmen/openers (session 35).** `inningsPitched` counts every appearance, but the SP per-start denominator is `gamesStarted` — so a reliever/opener making a spot start blows up (e.g. 48 IP over 3 GS → 16 "IP/start" → ~39 projected FPTS, observed on the all-MLB accuracy view with blank opponents). Stopgap: `IP_PER_START_CAP = 7.0` in `projection.py`/`cron.py` scales the whole counting line down proportionally when per-start IP exceeds the cap (no real SP averages >7). The exact fix is starts-only rates from game logs (`gs==1`) — backlogged. The hitting fetch (`fetch_season_stats_hitting`) also **drops the split's `team`** (the pitching fetch keeps it), so there's no hitter→team map — the blocker for an all-MLB hitter cron.
 
 ### Team stats — date-range splits
 `Confidence: 8/10 · Last assessed: April 18, 2026`
@@ -234,7 +235,23 @@ https://site.api.espn.com/apis/site/v2/sports/baseball/mlb/scoreboard?dates=YYYY
 ---
 
 ## ESPN Forecaster (HTML scraping)
-`Confidence: 9/10 · Last assessed: April 18, 2026`
+`Confidence: 9/10 · Last assessed: June 7, 2026`
+
+> **Bot wall — use a Safari or Googlebot UA, NOT Chrome (session 32).** As of
+> June 2026 ESPN fronts this article with **AWS WAF** (CloudFront). It serves a
+> ~2KB **HTTP-202** challenge stub (`window.awsWafCookieDomainList` /
+> `window.gokuProps`, no `inline-table`) to **Chrome-fingerprinted** requests —
+> including a fully-consistent modern Chrome UA + `sec-ch-ua` client hints, and
+> even a cookie-warmed session. A **plain Safari UA** and the **Googlebot UA**
+> both pass straight through to the real ~156KB article. It's a UA rule, not a JS
+> challenge, so no headless browser is needed. `api/forecaster.py` now sends
+> Safari (primary) → Googlebot (fallback) and detects the stub by body marker
+> (`_BOT_WALL_MARKERS`) as well as non-200 status. `api/forecaster_probe.py` is a
+> strategy-matrix diagnostic — re-run it (`/api/forecaster_probe`) if this breaks
+> again to see which UA the WAF currently lets through. **Lesson: the "most
+> browser-like" request (modern Chrome + client hints) was the one that got
+> blocked; a plainer UA won.** External break (no code changed) that flatlined
+> the accuracy dashboard's ESPN line for ~3 weeks before it was caught.
 
 ### Source URL
 
@@ -460,7 +477,7 @@ cache:weather:{park}:{date}     → JSON dict of weather factor + temp/wind (3hr
 cache:daily:{date}              → JSON dict {fpts, saves, bench, my_team} for all league pitchers
 cache:cron-summary:{date}       → JSON dict — full result of the day's cron run (60-day TTL). Written by handler regardless of MLB/ESPN lock outcome. Includes gameLogStats with per-outcome counters (with_data/empty/http_errors/exceptions). Use this as the post-hoc debugger when Vercel's 1hr log retention has rolled past.
 Cache TTL strategy
-Key patternTTLRationalecache:savant:2025PermanentLast year's data is finalcache:savant:202624 hoursUpdates daily during seasoncache:mlb-stats:2025PermanentLast year's data is finalcache:mlb-stats:202624 hoursUpdates daily during seasoncache:game-logs:202624 hoursNew games happen dailycache:team-woba:202624 hoursStores blended season+recent factor; recent window shifts dailycache:team-win-data:202624 hoursPythagorean model data updates dailycache:weather:{park}:{date}3 hoursForecasts update throughout day as game time approachescache:daily:2026-04-06PermanentCompleted day's stats never changecache:daily:{today}Never cachedGames may be in progressproj:*PermanentWrite-once, never overwritten (NX flag)proj2:*PermanentV2 rich projection locks (roster pitchers)proj2all:*PermanentV2 projection locks (all MLB starters, from cron)actual-all:*PermanentAll-MLB actuals from game logs (from cron)
+Key patternTTLRationalecache:savant:2025PermanentLast year's data is finalcache:savant:202624 hoursUpdates daily during seasoncache:mlb-stats:2025PermanentLast year's data is finalcache:mlb-stats:202624 hoursUpdates daily during seasoncache:game-logs:202624 hoursNew games happen dailycache:team-woba:202624 hoursStores blended season+recent factor; recent window shifts dailycache:team-win-data:202624 hoursPythagorean model data updates dailycache:weather:{park}:{date}3 hoursForecasts update throughout day as game time approachescache:daily:2026-04-06PermanentCompleted day's stats never changecache:daily:{today}Never cachedGames may be in progressproj:*PermanentWrite-once, never overwritten (NX flag)proj2:*PermanentV2 rich projection locks (roster pitchers)proj2all:*PermanentV2 projection locks (all MLB starters, from cron)actual-all:*PermanentAll-MLB actuals from game logs (from cron)proj2h:{season}:{period}:{slug}:{date}PermanentPer-game HITTER projection locks, frozen at game start (NX). Written from the Hitters page (roster only — all-MLB cron pending). kv.py set_locked_hitter_projection.acth:{date}PermanentPer-game HITTER actuals {slug:{fpts,stats}} from validated game-log scoring (DNP-clean: a log row = played). Written read-merge-write from the Hitters page.
 Performance impact
 
 Uncached request: ~4.5s (fetches Savant, MLB Stats, and daily FPTS from external APIs)
@@ -602,13 +619,17 @@ Uses `position: fixed` to escape `overflow: auto` table containers
 `projectionDetails` and `faProjectionDetails` added to API response from `get_projected_fpts()`
 
 Accuracy tracking dashboard
-`Confidence: 9/10 · Last assessed: April 12, 2026`
+`Confidence: 9/10 · Last assessed: June 7, 2026`
 
 `api/accuracy.py` endpoint reads `proj2:` keys and `cache:daily:` actual_stats, matches by player slug.
 `pages/accuracy.tsx` displays summary tiles, per-stat MAE bar chart, and expandable per-start comparisons.
 Period selector allows viewing any matchup period.
 
 Matching logic: proj2 keys use slugs, actual_stats uses full names. Matching done by slugifying actual names.
+
+**`?kind=pitcher|hitter` (session 34).** `kind=hitter` routes to `get_hitter_accuracy_data()` — matches `proj2h:` ↔ `acth:` by slug+date, returns FPTS MAE only (no factor counterfactuals: the hitter model is FPTS-centric; no ESPN overlay: no hitter Forecaster feed). A locked game with no `acth:` entry = DNP → counted in `unmatchedCount`, excluded from MAE. Pitcher path is untouched by `kind`.
+
+**All-MLB only (session 35).** The dashboard tracks *overall* model accuracy, so the My Roster/All MLB scope toggle was removed — pitchers always read `proj2all:`/`actual-all:` (whole MLB). Hitters read `proj2h:`, which is currently roster-sourced (the page locks it); whole-MLB hitter coverage needs the cron pass (blocked on the hitter→team map — see Season stats).
 
 Limitations:
 - Only league-rostered pitchers have actual stats (free agents not in `mRoster` data)
