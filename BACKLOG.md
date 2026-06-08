@@ -87,6 +87,15 @@ PR #111 fixed the user-visible aggregates for mid-week pickups but deliberately 
     `accuracy.tsx` `?kind=` toggle, hitter-shaped table + `HitterBreakdown`
     (base × factors = proj + actual line), Skipper-only hitter MAE timeline
     (`MaeTimelineChart kind="hitter"`). Pitcher path untouched.
+  - [x] **All-MLB hitter coverage (PR #154, session 36).** `cron.py`
+    `lock_all_mlb_hitter_projections()` locks baseline `proj2h:` + writes `acth:`
+    for every hitter whose team plays today (team resolved via `_teamId` →
+    `MLB_TEAM_ID_TO_ABBREV`). Bounded to today's hitters; isolated/last in the
+    cron. Forward-only; validated by logic+compile, confirm live via
+    `cache:cron-summary:{date}.hitter`.
+  - [ ] **Follow-up:** unify roster-page vs cron proj2h scoring/value (page locks
+    factor-adjusted, cron locks baseline; NX first-write-wins on the small
+    overlap). Also consider all-MLB matchup factors + a starts-only follow-up.
 - [ ] **Starts-only per-start pitcher rates (follow-up to the IP cap, session 35).** Session 35's PR #152 capped relief-inflated per-start IP at 7.0 and proportionally rescaled the line — bounds the swingman/opener blow-up but isn't exact (an opener who really goes ~3 IP still projects at the 7-IP cap). The precise fix is to compute per-start rates from **game logs filtered to `gs==1`** (data we already fetch) instead of season-total ÷ gamesStarted. Touches `per_game_avgs`/`_avgs` + the year blend in both `projection.py` and `cron.py`.
 - [ ] **Pitcher-actuals unification (follow-up to hitter accuracy).** Switch
   roster-scope pitcher actuals from ESPN-box (`cache:daily.actual_stats`,

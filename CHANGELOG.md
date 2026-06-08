@@ -2,6 +2,49 @@
 
 ---
 
+## Session 36 — June 7, 2026 — All-MLB hitter accuracy (cron)
+
+Closed the last gap from session 34/35: the Accuracy Hitters tab was roster-only
+because `proj2h:`/`acth:` were written solely by the Hitters page. Added the
+hitter analogue of the pitcher all-MLB cron so the dashboard covers **every** MLB
+hitter, not just the owner's roster (PR #154).
+
+### What shipped
+- **`cron.py` → `lock_all_mlb_hitter_projections()`**, called last in the cron
+  handler and fully isolated (try/except) so its heavier game-log fetch can't
+  affect the pitcher/ESPN locks. Each day it:
+  - resolves **who plays today** from the schedule's team abbrevs;
+  - locks a per-game **baseline** projection (season rate + recent-form blend,
+    no per-day matchup factor stack) under `proj2h:` for every hitter on a team
+    playing today (NX, frozen pre-game);
+  - scores those hitters' **game logs** into `acth:{date}` actuals for the
+    period's completed dates (read-merge-write + `ACTUALS_FLOOR`).
+  - Result lands in `cache:cron-summary:{date}.hitter` (`teamsToday`,
+    `hittersToday`, `locked`, `actualsStored`).
+- **The team-mapping blocker is solved by capturing `_teamId`** in
+  `fetch_season_stats_hitting` (the split exposes `team.id`) and mapping through
+  the existing `MLB_TEAM_ID_TO_ABBREV` (verified 30-team map, same abbrevs the
+  schedule uses). Bounded to today's hitters (~250-350) so the per-player
+  game-log fan-out stays within the cron budget; the hitting game-log cache is
+  invalidated first so actuals include yesterday's games.
+
+### Notes / risks
+- **Scoring** uses the verified league default (total-bases) — proj + actual use
+  the same dict, so each is internally consistent. The Hitters page still locks
+  roster hitters with its factor-adjusted value; for the small roster overlap,
+  whichever path writes first wins (NX). Minor; a unification is a possible
+  follow-up.
+- **Forward-only** (locks freeze from the next cron on); all-MLB history
+  accumulates going forward, not retroactively.
+- **Validated by logic + compile** (team-id→abbrev filter, output/return keying,
+  doubleheader/DNP actuals), **not yet live** — the cron only runs on Vercel.
+  Confirm via a manual `/api/cron` trigger → `cache:cron-summary:{date}.hitter`.
+- **Runtime:** the hitter pass adds ~300 game-log fetches to the daily cron; it
+  runs last and isolated. If it ever pushes the 120s budget, split it into its
+  own cron endpoint.
+
+---
+
 ## Session 35 — June 7, 2026 — Accuracy: all-MLB only (drop roster scope)
 
 Post-merge device review of the hitter accuracy dashboard surfaced three things

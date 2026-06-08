@@ -100,12 +100,11 @@ The model is **fully matchup-aware**, end-to-end, with actual/live tracking.
 ### Not yet built
 - **Phase 8** regressed BvP, **Phase 9** PA/lineup volume, **Phase 10** per-stat
   park + wind-for-HR (the "beyond pitchers" extras).
-- **All-MLB hitter coverage** (the one accuracy gap): hitter locks/actuals are
-  written only from the Hitters page, so the dashboard covers the owner's roster,
-  not all MLB. The fix is a cron pass mirroring the pitcher all-MLB lock.
-  Blockers found while scoping (session 35): `fetch_season_stats_hitting`
-  discards each split's team (no hitter→team map to know who plays today), and
-  `fetch_game_logs_hitting` is per-player ("not all of MLB"). See BACKLOG.
+- ~~**All-MLB hitter coverage**~~ — **shipped (session 36, PR #154):** the cron
+  `lock_all_mlb_hitter_projections()` locks baseline `proj2h:` + writes `acth:`
+  for every hitter whose team plays today. The team→abbrev gap was solved by
+  capturing `_teamId` in `fetch_season_stats_hitting` and mapping through
+  `MLB_TEAM_ID_TO_ABBREV`; the game-log fan-out is bounded to today's hitters.
 - **Live freshness:** live totals refresh on the ~30-min payload cache; a
   fresh-on-gameday refresh (like the pitcher page) would make them real-time.
 
