@@ -198,6 +198,7 @@ def fetch_season_stats_hitting(yr: int) -> dict:
                 continue
             stat = dict(s.get("stat", {}))  # shallow copy so we don't mutate upstream
             stat["_mlbId"] = player.get("id")
+            stat["_teamId"] = s.get("team", {}).get("id")  # for MLB_TEAM_ID_TO_ABBREV (all-MLB hitter cron)
             result[strip_accents(full_name)] = stat
         return result
     except Exception as e:

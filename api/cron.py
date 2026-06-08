@@ -27,12 +27,21 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__)))
 
 from mlb import (
     fetch_espn_probables, fetch_mlb_probables, build_pitcher_starts,
-    MATCHUP_PERIODS, get_park_factor,
+    MATCHUP_PERIODS, get_park_factor, MLB_TEAM_ID_TO_ABBREV,
     compute_matchup_win_prob, compute_recent_form_fpts,
 )
-from fetcher import load_cached_data, strip_accents
+from fetcher import (
+    load_cached_data, strip_accents,
+    fetch_season_stats_hitting, load_hitter_stats, fetch_game_logs_hitting,
+)
+from projection_hitter import (
+    get_projected_hitter_fpts, actuals_with_stats_from_logs, DEFAULT_HITTER_SCORING,
+)
 from forecaster import fetch_forecaster
-from kv import cache_get, cache_set
+from kv import (
+    cache_get, cache_set,
+    set_locked_hitter_projection, get_all_locked_hitter_projections,
+)
 
 try:
     from upstash_redis import Redis
@@ -648,6 +657,150 @@ def lock_espn_projections() -> dict:
     return summary
 
 
+# ── All-MLB hitter projection locking + actuals ──────────────────────
+#
+# The hitter analogue of lock_all_mlb_projections(). Every hitter whose team
+# plays today gets a per-game BASELINE projection (season rate + recent form,
+# no per-day matchup factor stack) locked under proj2h:, and their game logs are
+# scored into acth: actuals for completed dates. This gives the Accuracy
+# dashboard whole-MLB hitter coverage instead of just the owner's roster (which
+# the Hitters page locks). Bounded to hitters playing today (~250-350) so the
+# per-player game-log fetch stays within the cron budget.
+#
+# "Who plays today" is resolved via the season hitting stats' team id (captured
+# as `_teamId` in fetch_season_stats_hitting) → MLB_TEAM_ID_TO_ABBREV → the
+# schedule's team abbreviations. Scoring is the verified league default
+# (total-bases); proj + actual use the same dict, so each is internally
+# consistent regardless of the page's parsed scoring.
+
+def lock_all_mlb_hitter_projections() -> dict:
+    """Lock today's all-MLB hitter projections and store game-log actuals."""
+    if not KV_AVAILABLE or _redis is None:
+        return {"ok": False, "error": "KV not available"}
+
+    today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    year_int = int(os.environ.get("ESPN_SEASON", "2026"))
+    period_num, mp = get_current_period()
+    if not mp:
+        return {"ok": False, "error": f"No matchup period for {today_str}"}
+
+    # Which teams play today
+    try:
+        _espn, schedule = fetch_espn_probables(today_str, today_str)
+    except Exception as e:
+        return {"ok": False, "error": f"schedule fetch failed: {type(e).__name__}: {e}"}
+    teams_today = set((schedule.get(today_str) or {}).keys())
+    if not teams_today:
+        return {"ok": True, "date": today_str, "message": "No games today",
+                "locked": 0, "actualsStored": 0}
+
+    # Current-year hitting stats fetched directly so `_teamId` is fresh (the
+    # cached blob may predate the field); savant + previous year from cache.
+    hitting_current = fetch_season_stats_hitting(year_int)
+    if not hitting_current:
+        return {"ok": False, "error": "no current-year hitting stats"}
+    hit = load_hitter_stats(year_int)
+    hitting_previous = hit.get("hitting_previous", {})
+    savant_current   = hit.get("savant_batter_current", {})
+    savant_previous  = hit.get("savant_batter_previous", {})
+
+    # Hitters whose team plays today
+    hitters_today = {}   # name_key → team abbrev
+    for name_key, stat in hitting_current.items():
+        abbrev = MLB_TEAM_ID_TO_ABBREV.get(stat.get("_teamId"))
+        if abbrev and abbrev in teams_today:
+            hitters_today[name_key] = abbrev
+    if not hitters_today:
+        return {"ok": True, "date": today_str, "teamsToday": len(teams_today),
+                "message": "No hitters mapped to today's teams",
+                "locked": 0, "actualsStored": 0}
+
+    # Game logs (bounded to today's hitters) — recent-form blend + actuals.
+    # Invalidate the hitting game-log cache first so actuals include yesterday's
+    # games (same staleness-trap fix as the pitcher pass).
+    try:
+        _redis.delete(f"cache:game-logs-hitting:{year_int}")
+    except Exception as e:
+        print(f"[cron.py] hitter game-log cache invalidation failed (continuing): {e}")
+    subset = {k: hitting_current[k] for k in hitters_today}
+    try:
+        game_logs = fetch_game_logs_hitting(year_int, subset)
+    except Exception as e:
+        print(f"[cron.py] hitter game-log fetch failed (continuing w/o): {e}")
+        game_logs = {}
+
+    scoring = DEFAULT_HITTER_SCORING
+
+    # Project (per-game baseline; recent form applied where logs exist)
+    hitters_list = [{"name": k, "team": v, "gameDates": [today_str]}
+                    for k, v in hitters_today.items()]
+    try:
+        proj, _ = get_projected_hitter_fpts(
+            hitters_list, scoring=scoring,
+            stat_current=hitting_current, stat_previous=hitting_previous,
+            savant_current=savant_current, savant_previous=savant_previous,
+            game_logs=game_logs, season=year_int, period=period_num,
+        )
+    except Exception as e:
+        return {"ok": False, "error": f"projection failed: {type(e).__name__}: {e}"}
+
+    # Lock proj2h (NX, frozen pre-game) — skip any already locked today
+    existing = get_all_locked_hitter_projections(year_int, period_num)
+    locked = 0
+    for name_key, p in proj.items():
+        slug = _make_slug(name_key)
+        if today_str in (existing.get(slug) or {}):
+            continue
+        per_game = round(p.get("projPerGame", 0.0), 1)
+        set_locked_hitter_projection(year_int, period_num, name_key, today_str, {
+            "name":    name_key.title(),
+            "fpts":    per_game,
+            "base":    per_game,
+            "factors": [],   # all-MLB baseline carries no per-day factor stack
+            "matchup": {"opp": hitters_today[name_key], "isHome": None},
+            "model": {
+                "type":        p.get("modelType", "stats"),
+                "blendWeight": p.get("blendWeight", 0.0),
+                "recentForm":  p.get("recentForm"),
+                "allMlb":      True,
+            },
+        })
+        locked += 1
+
+    # Actuals from game logs → acth:{date} (this period's completed dates only),
+    # read-merge-write with a floor check so a partial fetch isn't locked in.
+    period_start = mp.get("start", "")
+    by_date = {}
+    for name_key, logs in game_logs.items():
+        slug = _make_slug(name_key)
+        for d, ev in actuals_with_stats_from_logs(logs, scoring).items():
+            if period_start <= d < today_str:
+                by_date.setdefault(d, {})[slug] = ev
+    actuals_stored = 0
+    for d, players in by_date.items():
+        if len(players) < ACTUALS_FLOOR:
+            continue
+        key = f"acth:{d}"
+        existing_a = cache_get(key) or {}
+        merged = {**existing_a, **players}
+        if merged != existing_a:
+            cache_set(key, merged)
+            actuals_stored += len(players)
+
+    summary = {
+        "ok": True, "date": today_str, "period": period_num,
+        "teamsToday":    len(teams_today),
+        "hittersToday":  len(hitters_today),
+        "locked":        locked,
+        "actualsStored": actuals_stored,
+        "actualsDates":  len(by_date),
+    }
+    print(f"[cron.py] All-MLB hitter lock done: {locked} locked, "
+          f"{actuals_stored} actuals across {len(by_date)} dates "
+          f"({len(hitters_today)} hitters on {len(teams_today)} teams today)")
+    return summary
+
+
 class handler(BaseHTTPRequestHandler):
     def do_GET(self):
         # ── Verify CRON_SECRET ────────────────────────────────────────
@@ -675,10 +828,20 @@ class handler(BaseHTTPRequestHandler):
             espn_result = {"ok": False, "error": str(e)}
             print(f"[cron.py] ESPN lock error: {e}")
 
+        # All-MLB hitters — runs last and is fully isolated so a failure here
+        # (it's the heaviest pass: a per-player game-log fetch) can never affect
+        # the pitcher/ESPN results, which are already locked incrementally above.
+        try:
+            hitter_result = lock_all_mlb_hitter_projections()
+        except Exception as e:
+            hitter_result = {"ok": False, "error": str(e)}
+            print(f"[cron.py] Hitter lock error: {e}")
+
         result = {
             "ok": bool(mlb_result.get("ok")) and bool(espn_result.get("ok")),
             "mlb": mlb_result,
             "espn": espn_result,
+            "hitter": hitter_result,
         }
 
         # Persist this run's outcomes to KV. Vercel Hobby retains logs
