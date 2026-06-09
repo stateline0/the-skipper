@@ -27,6 +27,7 @@ export interface SeasonStats {
   era: number
   k9: number
   bb9: number
+  sv?: number                // season saves (relievers)
   ip: number
   gs: number
   seasonFptsToDate?: number  // season-to-date FPTS from season totals (backend)
@@ -63,6 +64,10 @@ export interface Pitcher {
 export interface StatsTableContext {
   fptsPerStart: Record<string, number>
   actualFpts: Record<string, Record<string, number>>
+  // Per-pitcher projection breakdown (api/espn.py faProjectionDetails). Feeds
+  // the Proj FPTS tooltip — especially useful for relievers, where it explains
+  // appearances assumed and which season the projection leans on.
+  projectionDetails?: Record<string, any>
   // Opens a tap-to-show popover anchored at the tapped element. Set by the
   // table so cell renderers can surface their detail on touch (where the
   // native hover `title` never fires). Undefined in the sort-only context.
@@ -508,14 +513,59 @@ export const PITCHER_COLUMNS: PitcherColumn[] = [
   {
     key: 'projFpts', label: 'Proj FPTS', minWidth: 84,
     sortValue: (p) => p.projFpts ?? 0,
-    render: (p) => (
-      <span style={{
-        fontFamily: 'var(--mono)', fontWeight: 700,
-        color: (p.projFpts ?? 0) > 0 ? 'var(--green)' : 'var(--ink-3)',
-      }}>
-        {(p.projFpts ?? 0).toFixed(1)}
-      </span>
-    ),
+    render: (p, ctx) => {
+      const v = p.projFpts ?? 0
+      const valueEl = (
+        <span style={{
+          fontFamily: 'var(--mono)', fontWeight: 700,
+          color: v > 0 ? 'var(--green)' : 'var(--ink-3)',
+        }}>
+          {v.toFixed(1)}
+        </span>
+      )
+      const d = ctx.projectionDetails?.[p.name]
+      if (!d) return valueEl
+      // blendWeight is the fraction of the projection on the current season;
+      // a tiny value means it leans on last season (small current-year sample).
+      const yr = typeof d.blendWeight === 'number' ? d.blendWeight : 1
+      const basis = yr >= 0.85 ? 'this season'
+        : yr <= 0.15 ? 'last season'
+        : `a blend (${Math.round(yr * 100)}% this season)`
+      const rp = d.rp
+      const popover = (
+        <div>
+          <div style={{ fontWeight: 700, marginBottom: 4 }}>Projection · {v.toFixed(1)} FPTS</div>
+          {rp ? (
+            <>
+              <div>{Number(rp.perAppearance).toFixed(1)} FPTS/appearance × {rp.appearances} appearances</div>
+              <div style={{ marginTop: 3 }}>Based on {basis} stats.</div>
+              {rp.regressed && (
+                <div style={{ marginTop: 3, color: 'var(--ink-3)' }}>
+                  Small sample — regressed toward a league-average reliever.
+                </div>
+              )}
+            </>
+          ) : (
+            <>
+              <div>Base {Number(d.adjustedBase ?? d.seasonBase ?? 0).toFixed(1)} FPTS/start · {d.modelType} model</div>
+              <div style={{ marginTop: 3 }}>Based on {basis} stats.</div>
+            </>
+          )}
+        </div>
+      )
+      return (
+        <span
+          title="Projection detail"
+          onClick={ctx.openInfo ? (e) => ctx.openInfo!(popover, e) : undefined}
+          style={{
+            cursor: ctx.openInfo ? 'pointer' : 'default',
+            borderBottom: ctx.openInfo ? '1px dotted var(--ink-3)' : 'none',
+          }}
+        >
+          {valueEl}
+        </span>
+      )
+    },
   },
   {
     key: 'actFpts', label: 'Act FPTS', minWidth: 84,
@@ -569,6 +619,19 @@ export const PITCHER_COLUMNS: PitcherColumn[] = [
 PITCHER_COLUMNS.find(c => c.key === 'fptsPerStart')!.sortValue =
   (p, ctx) => ctx.fptsPerStart[p.name] ?? 0
 
+// Saves column — deliberately NOT in the default (SP) set, since starters
+// rarely save. The Free Agents RP view includes it explicitly, as saves are a
+// key part of reliever scoring.
+export const SV_COLUMN: PitcherColumn = {
+  key: 'sv', label: 'SV', minWidth: 48,
+  sortValue: (p) => p.seasonStats?.sv ?? NaN,
+  render: (p) => (
+    <NumOrDash value={p.seasonStats?.sv} render={(v) => (
+      <span style={{ fontFamily: 'var(--mono)', fontWeight: 700 }}>{v}</span>
+    )} />
+  ),
+}
+
 // ─── Main component ───────────────────────────────────────────────────────────
 
 interface Props {
@@ -576,6 +639,7 @@ interface Props {
   columns?: PitcherColumn[]
   fptsPerStart?: Record<string, number>
   actualFpts?: Record<string, Record<string, number>>
+  projectionDetails?: Record<string, any>
   defaultSortCol?: string
   defaultSortDir?: 'asc' | 'desc'
 }
@@ -585,6 +649,7 @@ export default function StatsTable({
   columns = PITCHER_COLUMNS,
   fptsPerStart = {},
   actualFpts = {},
+  projectionDetails = {},
   defaultSortCol = 'projFpts',
   defaultSortDir = 'desc',
 }: Props) {
@@ -652,7 +717,7 @@ export default function StatsTable({
     return list
   }, [pitchers, sortCol, sortDir, columns, fptsPerStart, actualFpts])
 
-  const ctx: StatsTableContext = { fptsPerStart, actualFpts, openInfo }
+  const ctx: StatsTableContext = { fptsPerStart, actualFpts, projectionDetails, openInfo }
 
   // ── Styles ──
   const headerBase: React.CSSProperties = {

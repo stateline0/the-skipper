@@ -77,6 +77,7 @@ def _build_season_stats(stat_dict: dict) -> dict | None:
         "era": _safe_float(stat_dict.get("era", 0)),
         "k9":  round(so / ip * 9, 2),
         "bb9": round(bb / ip * 9, 2),
+        "sv":  int(sv),
         "ip":  round(ip, 1),
         "gs":  int(stat_dict.get("gamesStarted", 0)),
         "seasonFptsToDate": round(season_fpts, 1),

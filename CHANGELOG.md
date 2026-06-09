@@ -18,6 +18,17 @@ Follow-ups to the Free Agents work (session 37 / PR #156).
 - **Refresh button polish.** The Free Agents Refresh button was oversized and
   text-labelled; it's now an icon-only `↻` sized to match the period selector
   and toggle controls (with a `Refresh` tooltip/aria-label).
+- **RP table: Saves column + projection tooltip.** Added a **SV** column to the
+  reliever view (`_build_season_stats` now returns `sv`; new exported
+  `SV_COLUMN`). The **Proj FPTS** cell is now click/hover for a breakdown
+  (`projectionDetails` threaded into `StatsTable`) — for relievers it shows
+  FPTS/appearance × appearances and which season the projection leans on, which
+  explains cases like a great-2025 / tiny-2026-sample arm projecting high while
+  its current-season line looks ugly.
+- **Note on blank advanced stats:** xERA/xwOBA/Brl%/Whiff% are **current-season
+  (2026) only** and render em-dash when a pitcher has no 2026 Savant footprint
+  yet (small sample / hasn't pitched) — not a bug; the projection tooltip now
+  surfaces that such players are projected off last season.
 
 ---
 

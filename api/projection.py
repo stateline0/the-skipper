@@ -321,6 +321,7 @@ def get_projected_fpts(player_starts: list, team_woba_factors: dict = None,
         # negative W/L impact even when favored — see BACKLOG / session 32.
         start_dates = player_info.get("startDates", [])
         per_start_details = []
+        rp_detail = None
         if not is_rp and start_dates:
             # Base FPTS excluding W/L (those are applied per-start), scaled by
             # the recent-form ratio so recent performance feeds the per start.
@@ -435,6 +436,13 @@ def get_projected_fpts(player_starts: list, team_woba_factors: dict = None,
                 fpts_per_game * reliability + RP_BASELINE_FPTS_PER_APP * (1.0 - reliability))
             projected = round(fpts_per_game * projected_appearances, 1)
             avg_factor = 1.0
+            rp_detail = {
+                "perAppearance":  round(fpts_per_game, 1),
+                "appearances":    projected_appearances,
+                "thisYearWeight": round(this_year_weight, 2),
+                "reliability":    round(reliability, 2),
+                "regressed":      reliability < 1.0,
+            }
         else:
             projected = round(fpts_per_game * projected_starts, 1)
             avg_factor = 1.0
@@ -451,6 +459,7 @@ def get_projected_fpts(player_starts: list, team_woba_factors: dict = None,
             "recentForm":   round(recent_form_fpts, 1) if recent_form_fpts is not None else None,
             "adjustedBase": adjusted_base,
             "starts":       per_start_details,
+            "rp":           rp_detail,
             "total":        projected,
         }
 
