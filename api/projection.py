@@ -40,6 +40,16 @@ IP_THRESHOLD_RP = 20.0
 MIN_STARTS_SP = 3
 MIN_APPEARANCES_RP = 5
 
+# ── Reliever (RP) projection knobs ────────────────────────────────────
+# A reliever's week is projected as (FPTS per appearance × appearances). We
+# assume a modest, realistic appearance count and regress small samples toward
+# a league-average reliever, so a handful of appearances (or one blow-up)
+# can't drive the projection to absurd highs or lows. The weekly total is
+# floored at 0 — a rosterable reliever shouldn't be projected to lose points.
+RP_APPEARANCES_PER_WEEK = 3
+RP_FULL_SAMPLE = 30                 # appearances at which the rate is fully trusted
+RP_BASELINE_FPTS_PER_APP = 2.0      # ~league-average reliever FPTS per appearance
+
 # Per-start IP ceiling. Per-start rates are season totals ÷ gamesStarted, but
 # `inningsPitched` includes RELIEF appearances — so a swingman/opener/reliever
 # making a spot start blows up (e.g. 25 relief IP + 2 starts → 18 "IP/start" →
@@ -415,7 +425,14 @@ def get_projected_fpts(player_starts: list, team_woba_factors: dict = None,
             avg_factor = round(adjusted_total / (fpts_per_game * len(start_dates)), 3) if start_dates and fpts_per_game else 1.0
         elif is_rp:
             days_in_period = player_info.get("days_in_period", 7)
-            projected_appearances = round(days_in_period / 7 * 4)
+            projected_appearances = round(days_in_period / 7 * RP_APPEARANCES_PER_WEEK)
+            # Regress small-sample relievers toward a league-average reliever so a
+            # few appearances (or one blow-up) can't dominate. Reliability scales
+            # with the season's appearance count behind the rate we're using.
+            rp_games = gs_26 if avgs_26 is not None else gs_25
+            reliability = min(1.0, rp_games / RP_FULL_SAMPLE) if rp_games else 0.0
+            fpts_per_game = max(0.0,
+                fpts_per_game * reliability + RP_BASELINE_FPTS_PER_APP * (1.0 - reliability))
             projected = round(fpts_per_game * projected_appearances, 1)
             avg_factor = 1.0
         else:

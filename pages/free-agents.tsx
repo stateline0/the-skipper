@@ -291,15 +291,16 @@ function handleSort(col: string) {
               </select>
             )}
             {mode !== 'batters' && (
-              <button onClick={() => fetchFreeAgents(true)} disabled={loading} style={{
-                fontFamily: 'var(--sans)', fontSize: 13, fontWeight: 600,
-                padding: '9px 18px', borderRadius: 'var(--radius)',
+              <button onClick={() => fetchFreeAgents(true)} disabled={loading}
+                title="Refresh" aria-label="Refresh" style={{
+                fontFamily: 'var(--sans)', fontSize: 14, fontWeight: 600,
+                padding: '8px 12px', borderRadius: 'var(--radius)',
                 cursor: loading ? 'not-allowed' : 'pointer',
                 border: '1.5px solid var(--border-strong)',
-                background: 'transparent', color: 'var(--ink)',
-                opacity: loading ? 0.5 : 1,
+                background: 'var(--white)', color: 'var(--ink)',
+                lineHeight: 1, opacity: loading ? 0.5 : 1,
               }}>
-                {loading ? 'Refreshing...' : '↻ Refresh'}
+                ↻
               </button>
             )}
           </div>

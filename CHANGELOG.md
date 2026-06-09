@@ -2,6 +2,25 @@
 
 ---
 
+## Session 38 — June 9, 2026 — Reliever projection realism + Refresh button polish
+
+Follow-ups to the Free Agents work (session 37 / PR #156).
+
+### What shipped
+- **Sane reliever (RP) projections.** Free-agent reliever weeks were computed as
+  `FPTS/appearance × 4`, which produced absurd values — deeply negative
+  blow-ups (e.g. −17) from small samples and inflated highs near 20. Now
+  (`api/projection.py`): assume a realistic **3 appearances/week**, **regress
+  small-sample relievers toward a league-average reliever** (`RP_FULL_SAMPLE`,
+  `RP_BASELINE_FPTS_PER_APP`) so one blow-up or hot streak can't dominate, and
+  **floor the weekly total at 0**. Result compresses to realistic values
+  (bad ≈ 2–3, average ≈ 6, elite closers ≈ 15).
+- **Refresh button polish.** The Free Agents Refresh button was oversized and
+  text-labelled; it's now an icon-only `↻` sized to match the period selector
+  and toggle controls (with a `Refresh` tooltip/aria-label).
+
+---
+
 ## Session 37 — June 8, 2026 — Free Agents filters + RP & multi-position (PR #156)
 
 Added name-search and position filters to the Free Agents page, and widened the
