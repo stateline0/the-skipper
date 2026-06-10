@@ -2,6 +2,9 @@ import Head from 'next/head'
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { useRouter } from 'next/router'
 import ScheduleGrid from '../components/ScheduleGrid'
+import StatsTable, { PITCHER_COLUMNS, PitcherColumn, SeasonStats, SavantExpected } from '../components/StatsTable'
+
+type FaTab = 'schedule' | 'stats'
 
 const CACHE_VERSION = 4 // bump this whenever the API response shape changes
 
@@ -9,6 +12,9 @@ interface FreeSP {
   name: string; team: string; slot: string; injuryStatus: string
   percentOwned: number; projFpts: number; projBlend?: number; starts: number
   opps?: string; checked: boolean; startDates?: any[]
+  // Stats-tab payloads attached by the backend (api/espn.py). Carried through
+  // the `...p` spread in fetchFreeAgents so the Stats lens can read them.
+  seasonStats?: SeasonStats | null; savantExpected?: SavantExpected | null
 }
 
 interface MatchupPeriod {
@@ -30,6 +36,11 @@ export default function FreeAgents() {
   const [liveStats, setLiveStats]       = useState<Record<string, any>>({})
   const [sortCol, setSortCol]           = useState<string>('percentOwned')
   const [sortDir, setSortDir]           = useState<'asc' | 'desc'>('desc')
+
+  // Tab toggle for the SP section: schedule grid (default) vs. a stats-only
+  // lens on the same pitchers. Component state only — re-picked per visit,
+  // mirroring the My Team pattern.
+  const [activeTab, setActiveTab]       = useState<FaTab>('schedule')
 
   useEffect(() => {
     fetch('/api/config')
@@ -180,11 +191,39 @@ function handleSort(col: string) {
   function toggleCheck(index: number) {
     // index refers to sortedFreeSPs position — look up by name to find position in freeSPs
     const name = sortedFreeSPs[index]?.name
-    const updated = freeSPs.map(p => p.name === name ? { ...p, checked: !p.checked } : p)
-    setFreeSPs(updated)
-    const cached = JSON.parse(sessionStorage.getItem('skipper_free_agents') || '{}')
-    sessionStorage.setItem('skipper_free_agents', JSON.stringify({ ...cached, freeSPs: updated }))
+    toggleCheckByName(name)
   }
+
+  // Toggle a pitcher's checked state by name. Used by the Stats lens, whose
+  // StatsTable sorts internally and so can't hand back a freeSPs index.
+  // Functional setState keeps it correct regardless of stale closures.
+  function toggleCheckByName(name?: string) {
+    if (!name) return
+    setFreeSPs(prev => {
+      const updated = prev.map(p => p.name === name ? { ...p, checked: !p.checked } : p)
+      const cached = JSON.parse(sessionStorage.getItem('skipper_free_agents') || '{}')
+      sessionStorage.setItem('skipper_free_agents', JSON.stringify({ ...cached, freeSPs: updated }))
+      return updated
+    })
+  }
+
+  // Stats-lens columns: a checkbox prefix (FA's core interaction — keeps the
+  // Stats view as useful for selecting pitchers as the schedule view) followed
+  // by the shared PITCHER_COLUMNS. The checkbox column is unsortable.
+  const statsColumns: PitcherColumn[] = useMemo(() => [
+    {
+      key: 'check', label: '', minWidth: 32,
+      render: (p) => (
+        <input
+          type="checkbox"
+          checked={(p as FreeSP).checked || false}
+          onClick={e => e.stopPropagation()}
+          onChange={() => toggleCheckByName(p.name)}
+        />
+      ),
+    },
+    ...PITCHER_COLUMNS,
+  ], [])
 
   const selectedCount = freeSPs.filter(p => p.checked).length
 
@@ -283,46 +322,95 @@ function handleSort(col: string) {
               borderRadius: 'var(--radius-lg)', padding: '20px 24px',
               boxShadow: 'var(--shadow)', marginBottom: 16,
             }}>
-              <ScheduleGrid
-                pitchers={sortedFreeSPs}
-                schedule={schedule}
-                matchupDates={matchupDates}
-                actualFpts={actualFpts}
-                fptsPerStart={fptsPerStart}
-                projectionDetails={projectionDetails}
-                liveStats={liveStats}
-                sortCol={sortCol}
-                sortDir={sortDir}
-                onSortChange={handleSort}
-                prefixHeaders={<th style={{ padding: '8px 6px', fontSize: 10, fontFamily: 'var(--mono)', fontWeight: 500, color: 'var(--ink-3)', borderBottom: '1px solid var(--border)', minWidth: 32 }}></th>}
-                suffixHeaders={
-                  <th
-                    onClick={() => handleSort('percentOwned')}
-                    style={{
-                      padding: '8px 6px', fontSize: 10, fontFamily: 'var(--mono)',
-                      fontWeight: 500, borderBottom: '1px solid var(--border)',
-                      minWidth: 52, whiteSpace: 'nowrap', cursor: 'pointer',
-                      userSelect: 'none',
-                      color: sortCol === 'percentOwned' ? 'var(--ink)' : 'var(--ink-3)',
-                    }}
-                  >
-                    Own%{sortCol === 'percentOwned' ? (sortDir === 'desc' ? ' ↓' : ' ↑') : ''}
-                  </th>
-                }
-                renderPrefix={(pitcher, i) => (
-                  <td style={{ padding: '8px 6px', borderBottom: '1px solid var(--border)', verticalAlign: 'middle', textAlign: 'center' }}
-                    onClick={e => { e.stopPropagation(); toggleCheck(i) }}>
-                    <input type="checkbox" checked={(pitcher as FreeSP).checked || false}
-                      onChange={() => toggleCheck(i)} />
-                  </td>
-                )}
-                renderSuffix={(pitcher) => (
-                  <td style={{ padding: '8px 6px', borderBottom: '1px solid var(--border)', verticalAlign: 'middle', textAlign: 'center', fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--ink-3)' }}>
-                    {(pitcher as FreeSP).percentOwned ?? 0}%
-                  </td>
-                )}
-                onRowClick={toggleCheck}
-              />
+              {/* Tab toggle — same pill-style segmented control as My Team.
+                  Both tabs are lenses on the same free-agent pitcher list. */}
+              <div style={{
+                display: 'flex', justifyContent: 'space-between',
+                alignItems: 'center', marginBottom: 12, gap: 12,
+              }}>
+                <div style={{
+                  fontSize: 10, fontFamily: 'var(--mono)', fontWeight: 500,
+                  letterSpacing: '0.1em', color: 'var(--ink-3)',
+                  textTransform: 'uppercase',
+                }}>Available starters</div>
+
+                <div style={{
+                  display: 'flex', gap: 2,
+                  background: 'var(--paper-2)', padding: 3,
+                  borderRadius: 8,
+                }}>
+                  {(['schedule', 'stats'] as const).map(tab => {
+                    const isActive = activeTab === tab
+                    return (
+                      <button
+                        key={tab}
+                        onClick={() => setActiveTab(tab)}
+                        style={{
+                          fontFamily: 'var(--sans)', fontSize: 12, fontWeight: 600,
+                          padding: '5px 14px', borderRadius: 6,
+                          border: 'none', cursor: 'pointer',
+                          background: isActive ? 'var(--white)' : 'transparent',
+                          color: isActive ? 'var(--ink)' : 'var(--ink-3)',
+                          boxShadow: isActive ? 'var(--shadow)' : 'none',
+                          transition: 'all 0.15s',
+                        }}
+                      >
+                        {tab === 'schedule' ? 'Schedule' : 'Stats'}
+                      </button>
+                    )
+                  })}
+                </div>
+              </div>
+
+              {activeTab === 'schedule' ? (
+                <ScheduleGrid
+                  pitchers={sortedFreeSPs}
+                  schedule={schedule}
+                  matchupDates={matchupDates}
+                  actualFpts={actualFpts}
+                  fptsPerStart={fptsPerStart}
+                  projectionDetails={projectionDetails}
+                  liveStats={liveStats}
+                  sortCol={sortCol}
+                  sortDir={sortDir}
+                  onSortChange={handleSort}
+                  prefixHeaders={<th style={{ padding: '8px 6px', fontSize: 10, fontFamily: 'var(--mono)', fontWeight: 500, color: 'var(--ink-3)', borderBottom: '1px solid var(--border)', minWidth: 32 }}></th>}
+                  suffixHeaders={
+                    <th
+                      onClick={() => handleSort('percentOwned')}
+                      style={{
+                        padding: '8px 6px', fontSize: 10, fontFamily: 'var(--mono)',
+                        fontWeight: 500, borderBottom: '1px solid var(--border)',
+                        minWidth: 52, whiteSpace: 'nowrap', cursor: 'pointer',
+                        userSelect: 'none',
+                        color: sortCol === 'percentOwned' ? 'var(--ink)' : 'var(--ink-3)',
+                      }}
+                    >
+                      Own%{sortCol === 'percentOwned' ? (sortDir === 'desc' ? ' ↓' : ' ↑') : ''}
+                    </th>
+                  }
+                  renderPrefix={(pitcher, i) => (
+                    <td style={{ padding: '8px 6px', borderBottom: '1px solid var(--border)', verticalAlign: 'middle', textAlign: 'center' }}
+                      onClick={e => { e.stopPropagation(); toggleCheck(i) }}>
+                      <input type="checkbox" checked={(pitcher as FreeSP).checked || false}
+                        onChange={() => toggleCheck(i)} />
+                    </td>
+                  )}
+                  renderSuffix={(pitcher) => (
+                    <td style={{ padding: '8px 6px', borderBottom: '1px solid var(--border)', verticalAlign: 'middle', textAlign: 'center', fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--ink-3)' }}>
+                      {(pitcher as FreeSP).percentOwned ?? 0}%
+                    </td>
+                  )}
+                  onRowClick={toggleCheck}
+                />
+              ) : (
+                <StatsTable
+                  pitchers={sortedFreeSPs}
+                  columns={statsColumns}
+                  fptsPerStart={fptsPerStart}
+                  actualFpts={actualFpts}
+                />
+              )}
             </div>
 
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
