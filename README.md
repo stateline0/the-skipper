@@ -25,7 +25,7 @@ the-skipper/
 │   ├── _app.tsx
 │   ├── my-team.tsx         # Pitchers
 │   ├── hitters.tsx         # Hitters
-│   ├── free-agents.tsx     # FA Pitchers/Hitters toggle
+│   ├── free-agents.tsx     # FA SPs / RPs / Batters tabs + name & position filters
 │   └── index.tsx           # Main UI
 ├── styles/
 │   └── globals.css
@@ -107,7 +107,7 @@ npx vercel dev
 
 1. **Connect** — Enter your team ID + weekly starts limit. Credentials live in Vercel env vars.
 2. **My Roster** — `/api/espn.py` authenticates with ESPN using your cookies, pulls your roster SP list with projected starts for the week.
-3. **Free Agents** — Same API call fetches top 30 available SPs in your league by ownership %.
+3. **Free Agents** — Same API call fetches the top available pitchers (starters and relievers) by ownership %, plus available hitters via `/api/hitters`. Split into **SPs / RPs / Batters** tabs with name-search and (for batters) position filters. Relievers are projected per-appearance; the Proj FPTS cell has a tap/hover breakdown.
 4. **Recommendations** — `/api/analyze.py` sends your roster + selected FAs to Claude. Returns structured add/drop/hold recommendations + a Mon–Sun action plan targeting your exact starts limit.
 
 ---
