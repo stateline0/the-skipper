@@ -24,7 +24,8 @@ Follow-ups to the Free Agents work (session 37 / PR #156).
   (`projectionDetails` threaded into `StatsTable`) — for relievers it shows
   FPTS/appearance × appearances and which season the projection leans on, which
   explains cases like a great-2025 / tiny-2026-sample arm projecting high while
-  its current-season line looks ugly.
+  its current-season line looks ugly. The Proj FPTS tooltip is wired into the
+  **Pitchers page** stats tabs (starters and relievers) too, not just Free Agents.
 - **Note on blank advanced stats:** xERA/xwOBA/Brl%/Whiff% are **current-season
   (2026) only** and render em-dash when a pitcher has no 2026 Savant footprint
   yet (small sample / hasn't pitched) — not a bug; the projection tooltip now
