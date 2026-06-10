@@ -11,8 +11,19 @@ Returns:
 import json
 import os
 import re
+import unicodedata
 from http.server import BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs
+
+
+def _strip_accents(s: str) -> str:
+    """Normalize accented characters for name matching across data sources.
+    Duplicated per file by the repo's serverless-isolation convention —
+    canonical copy lives in fetcher.py."""
+    return ''.join(
+        c for c in unicodedata.normalize('NFD', s)
+        if unicodedata.category(c) != 'Mn'
+    ).lower()
 
 try:
     from upstash_redis import Redis
@@ -112,12 +123,19 @@ def get_accuracy_data(season: int, period=None, scope: str = "roster") -> dict:
     """
     Match v2 locked projections against actual stats.
 
-    scope="roster" — proj2: keys + cache:daily: actuals. Starts are filtered
-                     to those made while the pitcher was actually on my roster
-                     (using cache:daily `my_team` membership) — without this
-                     filter, proj2: leaks Free Agents that were locked the
-                     moment anyone viewed the Free Agents page, polluting the
-                     "My Roster" scope with pitchers who were never on my team.
+    scope="roster" — proj2: keys + game-log actuals (actual-all:), falling
+                     back to the legacy ESPN-box actuals (cache:daily
+                     `actual_stats`) for dates the cron never covered. The
+                     game-log source is per-category and slug-keyed, so it
+                     can't suffer the two-way-player name collision the
+                     ESPN-box path had (Ohtani's hitting line could be stored
+                     as his pitching actuals — name-keyed, first-write-wins).
+                     Where both sources exist, the game-log FPTS is validated
+                     against ESPN's applied total and mismatches are counted.
+                     Starts are filtered to those made while the pitcher was
+                     actually on my roster (cache:daily `my_team` membership)
+                     — without this filter, proj2: leaks Free Agents that were
+                     locked the moment anyone viewed the Free Agents page.
     scope="all"    — proj2all: keys + actual-all: actuals. Always whole-MLB;
                      no roster filter applies.
 
@@ -175,89 +193,140 @@ def get_accuracy_data(season: int, period=None, scope: str = "roster") -> dict:
         all_dates.update(dates)
 
     # ── Fetch actual stats for those dates ──────────────────────────────
-    actuals_by_date = {}  # { "2026-04-10": { "Player Name/key": { actual breakdown } } }
-
+    # Both scopes use the game-log actuals (actual-all:, written by cron.py,
+    # keyed by accent-stripped lowercase pitcher name). The roster scope
+    # additionally reads cache:daily for roster membership and keeps the
+    # legacy ESPN-box actuals as a fallback (pre-cron dates) and as a
+    # validation reference.
+    actuals_by_date = {}    # { "2026-04-10": { name_key: { actual breakdown } } }
+    espn_box_by_date = {}   # roster scope only: legacy ESPN-box actual_stats
     # Roster-membership index — only populated for scope="roster". Maps each
-    # date to the SET of full player names that were on my team that day,
-    # using the `my_team` block that `get_actual_fpts()` writes into each
+    # date to {slug: full_name} for the players on my team that day, using
+    # the `my_team` block that `get_actual_fpts()` writes into each
     # `cache:daily:{date}` entry. Used below to filter out proj2: locks for
-    # free agents who were viewed through the FA page but never rostered.
+    # free agents who were viewed through the FA page but never rostered,
+    # and to recover the proper-cased full name from the proj2 slug.
     my_team_by_date: dict = {}
 
+    def make_slug(name: str) -> str:
+        return re.sub(r"[^a-z0-9]+", "-", name.lower().strip()).strip("-")
+
     for date in sorted(all_dates):
-        if scope == "all":
-            # All-MLB actuals stored by cron.py under actual-all: keys
-            # Keyed by lowercase pitcher name (same as proj2all slug source)
-            cache_key = f"actual-all:{date}"
-        else:
-            # Roster actuals from ESPN mRoster daily cache
-            cache_key = f"cache:daily:{date}"
-        val = _redis.get(cache_key)
+        val = _redis.get(f"actual-all:{date}")
+        if val is not None:
+            try:
+                daily_data = json.loads(val)
+                if daily_data:
+                    actuals_by_date[date] = daily_data
+            except (json.JSONDecodeError, TypeError):
+                pass
+        if scope != "roster":
+            continue
+        val = _redis.get(f"cache:daily:{date}")
         if val is None:
             continue
         try:
             daily_data = json.loads(val)
-            if scope == "all":
-                # actual-all: stores pitchers directly (no nested actual_stats key)
-                if daily_data:
-                    actuals_by_date[date] = daily_data
-            else:
-                actual_stats = daily_data.get("actual_stats", {})
-                if actual_stats:
-                    actuals_by_date[date] = actual_stats
-                # Capture roster membership for this date (may be {} if the
-                # cache entry predates my_team tracking — treat as no-roster
-                # and fall through to the safe-drop path in the match loop).
-                my_team_members = daily_data.get("my_team") or {}
-                my_team_by_date[date] = set(my_team_members.keys())
+            actual_stats = daily_data.get("actual_stats", {})
+            if actual_stats:
+                espn_box_by_date[date] = actual_stats
+            # Capture roster membership for this date (may be {} if the
+            # cache entry predates my_team tracking — treat as no-roster
+            # and fall through to the safe-drop path in the match loop).
+            my_team_members = daily_data.get("my_team") or {}
+            my_team_by_date[date] = {
+                make_slug(name): name for name in my_team_members
+            }
         except (json.JSONDecodeError, TypeError):
             continue
 
-    print(f"[accuracy.py] Found actual stats for {len(actuals_by_date)} dates"
-          + (f", roster membership for {len(my_team_by_date)} dates" if scope == "roster" else ""))
+    print(f"[accuracy.py] Found game-log actuals for {len(actuals_by_date)} dates"
+          + (f", ESPN-box actuals for {len(espn_box_by_date)} dates, "
+             f"roster membership for {len(my_team_by_date)} dates"
+             if scope == "roster" else ""))
 
     # ── Match projections to actuals ─────────────────────────────────────
-    def make_slug(name: str) -> str:
-        return re.sub(r"[^a-z0-9]+", "-", name.lower().strip()).strip("-")
-
     starts = []
     matched = 0
     unmatched = 0
     filtered_non_roster = 0  # scope="roster" only: dropped because pitcher
                              # was not on my team that day (FA leak fix)
+    actuals_validated = 0    # roster scope: both sources existed for a start
+    actuals_mismatched = 0   # …and their FPTS disagreed (> 0.05)
+    espn_box_fallbacks = 0   # roster scope: actuals served from ESPN-box
 
     for proj_key, proj_data in projections.items():
         slug, date = proj_key.rsplit(":", 1)
         date_actuals = actuals_by_date.get(date, {})
 
-        # Find matching player in actuals by slugifying their name
         actual_data = None
         matched_name = None
-        for full_name, a_data in date_actuals.items():
-            if make_slug(full_name) == slug:
-                actual_data = a_data
-                matched_name = full_name
-                break
+        actuals_source = None
+
+        if scope == "roster":
+            # ── Roster filter first (FA-leak + pre-acquisition fix) ──────
+            # proj2: keys accumulate locks for any pitcher viewed through the
+            # Free Agents or My Team surfaces, so resolve the slug against
+            # cache:daily `my_team` for that date before anything else.
+            # proj2: slugs are built from the ESPN full name with the same
+            # [^a-z0-9] slugger used on the membership keys, so accented
+            # names mangle identically on both sides. Conservative behavior
+            # is preserved: no my_team data for the date → drop the start.
+            roster_day = my_team_by_date.get(date)
+            full_name = (roster_day or {}).get(slug)
+            if full_name is None:
+                filtered_non_roster += 1
+                continue
+            matched_name = full_name
+
+            # Primary actuals: game-log by category (actual-all:), keyed by
+            # accent-stripped lowercase name. Immune to the two-way-player
+            # name collision in the ESPN-box source.
+            name_key = _strip_accents(full_name)
+            actual_data = date_actuals.get(name_key)
+            if actual_data is None:
+                # Name-form differences between ESPN and MLB (punctuation,
+                # suffixes) — retry on slug equality.
+                target = make_slug(name_key)
+                for gl_name, gl_data in date_actuals.items():
+                    if make_slug(gl_name) == target:
+                        actual_data = gl_data
+                        break
+            espn_box = espn_box_by_date.get(date, {}).get(full_name)
+            if actual_data is not None:
+                actuals_source = "gamelog"
+                if espn_box is not None:
+                    # Validate the game-log FPTS against ESPN's applied total
+                    # — the two are computed independently from the same box
+                    # line, so a persistent gap means a scoring or stat-
+                    # extraction bug on one side.
+                    actuals_validated += 1
+                    diff = abs((actual_data.get("fpts") or 0) - (espn_box.get("fpts") or 0))
+                    if diff > 0.05:
+                        actuals_mismatched += 1
+                        print(f"[accuracy.py] actuals mismatch for {full_name} {date}: "
+                              f"gamelog={actual_data.get('fpts')} "
+                              f"espn-box={espn_box.get('fpts')}")
+            elif espn_box is not None:
+                # Legacy fallback: dates with no actual-all: blob (pre-cron
+                # coverage or a cron gap). Keeps history matched rather than
+                # dropping it; labeled per-start via actualsSource.
+                actual_data = espn_box
+                actuals_source = "espn-box"
+                espn_box_fallbacks += 1
+        else:
+            # scope="all": actual-all: keys and proj2all: slugs share the same
+            # accent-stripped name source — match by slugifying each name.
+            for full_name, a_data in date_actuals.items():
+                if make_slug(full_name) == slug:
+                    actual_data = a_data
+                    matched_name = full_name
+                    break
+            actuals_source = "gamelog"
 
         if actual_data is None:
             unmatched += 1
             continue
-
-        # ── Roster-scope FA leak filter ──────────────────────────────────
-        # proj2: keys accumulate locks for any pitcher viewed through the
-        # Free Agents or My Team surfaces — so a pitcher never actually
-        # rostered can appear in the proj2 namespace. cache:daily `my_team`
-        # is the source of truth for who was on the roster on a given day
-        # (session 19 PR #81 uses the same dict for dropped-streamer
-        # intersection). If the player wasn't on my team that day, skip.
-        # Conservative behavior: if no my_team data exists for the date
-        # (pre-my_team cache entry), drop the start rather than risk
-        # re-polluting the roster view.
-        if scope == "roster":
-            rostered_that_day = my_team_by_date.get(date)
-            if rostered_that_day is None or matched_name not in rostered_that_day:
-                filtered_non_roster += 1
-                continue
 
         matched += 1
         proj_stats = proj_data.get("stats", {})
@@ -276,22 +345,50 @@ def get_accuracy_data(season: int, period=None, scope: str = "roster") -> dict:
         # These let us measure whether each adjustment layer is helping.
         matchup = proj_data.get("matchup", {})
         model   = proj_data.get("model", {})
-        woba_factor    = matchup.get("woba", 1.0)
-        park_factor    = matchup.get("park", 1.0)
+        weather = proj_data.get("weather") or {}
+        woba_factor    = matchup.get("woba", 1.0) or 1.0
+        park_factor    = matchup.get("park", 1.0) or 1.0
+        weather_factor = weather.get("factor", 1.0) or 1.0
         adjusted_base  = model.get("adjustedBase", 0)
         season_base    = model.get("seasonBase", 0)
         recent_form    = model.get("recentForm")
+        base_no_wl     = model.get("baseNoWl")
 
-        # What the projection would have been without each factor:
-        # Full model:       adjustedBase × woba × park  (= proj_fpts)
-        # Without wOBA:     adjustedBase × 1.0  × park
-        # Without park:     adjustedBase × woba × 1.0
-        # Without either:   adjustedBase × 1.0  × 1.0
-        # Without recent form: seasonBase × woba × park
-        without_woba = round(adjusted_base * 1.0 * park_factor, 1) if adjusted_base else proj_fpts
-        without_park = round(adjusted_base * woba_factor * 1.0, 1) if adjusted_base else proj_fpts
-        without_both = round(adjusted_base * 1.0 * 1.0, 1) if adjusted_base else proj_fpts
-        without_recent_form = round(season_base * woba_factor * park_factor, 1) if (season_base and recent_form is not None) else proj_fpts
+        if base_no_wl is not None:
+            # Exact reconstruction (locks written after June 10, 2026 carry
+            # baseNoWl + recentRatio). The real per-start formula is
+            #   fpts = (baseNoWl + W/L) × woba × park × weather
+            # with W/L = (stats.w − stats.l) × 5, so each counterfactual
+            # zeroes exactly one multiplier instead of approximating from
+            # adjustedBase (which is a per-game number, ignores W/L, and
+            # ignores weather).
+            wl_net = (proj_stats.get("w", 0) - proj_stats.get("l", 0)) * 5
+            start_base = base_no_wl + wl_net
+            without_woba    = round(start_base * park_factor * weather_factor, 1)
+            without_park    = round(start_base * woba_factor * weather_factor, 1)
+            without_both    = round(start_base * weather_factor, 1)
+            without_weather = round(start_base * woba_factor * park_factor, 1)
+            recent_ratio = model.get("recentRatio") or 1.0
+            if recent_form is not None and recent_ratio not in (0, 1.0):
+                base_no_form = base_no_wl / recent_ratio
+                without_recent_form = round(
+                    (base_no_form + wl_net) * woba_factor * park_factor * weather_factor, 1)
+            else:
+                without_recent_form = proj_fpts
+            exact_counterfactuals = True
+        else:
+            # Legacy approximation for locks that predate baseNoWl:
+            # Full model:       adjustedBase × woba × park  (≈ proj_fpts)
+            # Without wOBA:     adjustedBase × 1.0  × park
+            # Without park:     adjustedBase × woba × 1.0
+            # Without either:   adjustedBase × 1.0  × 1.0
+            # Without recent form: seasonBase × woba × park
+            without_woba = round(adjusted_base * 1.0 * park_factor, 1) if adjusted_base else proj_fpts
+            without_park = round(adjusted_base * woba_factor * 1.0, 1) if adjusted_base else proj_fpts
+            without_both = round(adjusted_base * 1.0 * 1.0, 1) if adjusted_base else proj_fpts
+            without_recent_form = round(season_base * woba_factor * park_factor, 1) if (season_base and recent_form is not None) else proj_fpts
+            without_weather = proj_fpts  # weather factor not recoverable here
+            exact_counterfactuals = False
 
         starts.append({
             "player":      matched_name,
@@ -305,11 +402,14 @@ def get_accuracy_data(season: int, period=None, scope: str = "roster") -> dict:
             "statErrors":  stat_errors,
             "matchup":     matchup,
             "model":       model,
+            "actualsSource": actuals_source,
+            "exactCounterfactuals": exact_counterfactuals,
             # Counterfactual projections for factor analysis
             "counterfactuals": {
                 "withoutWoba":       without_woba,
                 "withoutPark":       without_park,
                 "withoutBoth":       without_both,
+                "withoutWeather":    without_weather,
                 "withoutRecentForm": without_recent_form,
             },
         })
@@ -317,7 +417,10 @@ def get_accuracy_data(season: int, period=None, scope: str = "roster") -> dict:
     print(
         f"[accuracy.py] Matched {matched} starts, "
         f"{unmatched} unmatched (no actual stats)"
-        + (f", {filtered_non_roster} filtered (not on roster that day)" if scope == "roster" else "")
+        + (f", {filtered_non_roster} filtered (not on roster that day), "
+           f"{espn_box_fallbacks} ESPN-box fallbacks, "
+           f"{actuals_validated} validated vs ESPN ({actuals_mismatched} mismatched)"
+           if scope == "roster" else "")
     )
 
     # ── Compute summary statistics ───────────────────────────────────────
@@ -384,6 +487,19 @@ def get_accuracy_data(season: int, period=None, scope: str = "roster") -> dict:
         else:
             form_full_mae = None
 
+        # MAE without weather — only computable for locks with exact
+        # counterfactuals (legacy locks never stored the weather factor), so
+        # the with/without comparison runs on that subset, apples-to-apples
+        # like the recent-form block above.
+        starts_exact = [s for s in starts if s.get("exactCounterfactuals")]
+        mae_without_weather = None
+        weather_full_mae = None
+        if starts_exact:
+            wx_errors = [abs(s["counterfactuals"]["withoutWeather"] - s["actualFpts"]) for s in starts_exact]
+            mae_without_weather = round(sum(wx_errors) / len(wx_errors), 2)
+            wx_full_errors = [abs(s["fptsError"]) for s in starts_exact]
+            weather_full_mae = round(sum(wx_full_errors) / len(wx_full_errors), 2)
+
         factor_analysis = {
             "fullModelMAE":   full_mae,
             "woba": {
@@ -415,6 +531,18 @@ def get_accuracy_data(season: int, period=None, scope: str = "roster") -> dict:
                 "startsAnalyzed": len(starts_with_form),
                 "description":   "Recent form weighting (60% season / 40% last 4 starts)",
             },
+            "weather": {
+                "maeWithout":    mae_without_weather,
+                "maeWith":       weather_full_mae,
+                "impact":        round(mae_without_weather - weather_full_mae, 2) if (mae_without_weather is not None and weather_full_mae is not None) else None,
+                "helping":       (mae_without_weather > weather_full_mae) if (mae_without_weather is not None and weather_full_mae is not None) else None,
+                "startsAnalyzed": len(starts_exact),
+                "description":   "Weather factor (temperature run environment, ±5% cap)",
+            },
+            # Locks written after June 10, 2026 carry baseNoWl/recentRatio and
+            # reconstruct counterfactuals exactly; older locks use the legacy
+            # adjustedBase approximation. Surfaced so a mixed window is visible.
+            "exactStarts": len(starts_exact),
         }
 
         print(f"[accuracy.py] Factor analysis: wOBA impact={factor_analysis['woba']['impact']:+.2f}, "
@@ -440,7 +568,7 @@ def get_accuracy_data(season: int, period=None, scope: str = "roster") -> dict:
     # Sort starts by date descending
     starts.sort(key=lambda s: s["date"], reverse=True)
 
-    return {
+    response = {
         "starts":             starts,
         "summary":            summary,
         "factorAnalysis":     factor_analysis,
@@ -448,6 +576,14 @@ def get_accuracy_data(season: int, period=None, scope: str = "roster") -> dict:
         "filteredNonRoster":  filtered_non_roster,  # scope="roster" only
         "espnSummary":        espn_summary,
     }
+    if scope == "roster":
+        # Game-log-vs-ESPN-box source accounting for the unified actuals path.
+        response["actualsValidation"] = {
+            "validated":        actuals_validated,
+            "mismatched":       actuals_mismatched,
+            "espnBoxFallbacks": espn_box_fallbacks,
+        }
+    return response
 
 
 def _deslug(slug: str) -> str:

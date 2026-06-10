@@ -51,6 +51,8 @@ interface FactorAnalysis {
   park: FactorDetail
   matchupCombined: FactorDetail
   recentForm: FactorDetail
+  weather?: FactorDetail        // locks since 2026-06-10 (exact counterfactuals)
+  exactStarts?: number
 }
 
 interface EspnSummary {
@@ -313,6 +315,13 @@ export default function AccuracyPage() {
                     detail={factors.recentForm}
                     starts={factors.recentForm.startsAnalyzed ?? 0}
                   />
+                  {factors.weather && (
+                    <FactorCard
+                      label="Weather"
+                      detail={factors.weather}
+                      starts={factors.weather.startsAnalyzed ?? 0}
+                    />
+                  )}
                 </div>
               </div>
             )}

@@ -29,11 +29,13 @@ from mlb import (
     fetch_espn_probables, fetch_mlb_probables, build_pitcher_starts,
     MATCHUP_PERIODS, get_park_factor, MLB_TEAM_ID_TO_ABBREV,
     compute_matchup_win_prob, compute_recent_form_fpts,
+    fetch_game_logs_hitting,
 )
 from fetcher import (
     load_cached_data, strip_accents,
-    fetch_season_stats_hitting, load_hitter_stats, fetch_game_logs_hitting,
+    fetch_season_stats_hitting, load_hitter_stats,
 )
+from projection import per_start_avgs_from_logs
 from projection_hitter import (
     get_projected_hitter_fpts, actuals_with_stats_from_logs, DEFAULT_HITTER_SCORING,
 )
@@ -221,7 +223,15 @@ def lock_all_mlb_projections() -> dict:
                 "batters_faced": ip * 3 + h + bb + hb,
             }
 
-        avgs_26 = _avgs(stat_26, gs_26)
+        # Starts-only per-start rates (current year): average the gs>=1
+        # game-log rows when there are enough of them, so relief innings
+        # never inflate the per-start line (mirrors projection.py). Falls
+        # back to the capped season-total path; 2025 has no logs fetched.
+        pitcher_games = game_logs_current.get(pitcher_name_lower, [])
+        avgs_26 = per_start_avgs_from_logs(pitcher_games)
+        rates_basis = "logs" if avgs_26 is not None else "season"
+        if avgs_26 is None:
+            avgs_26 = _avgs(stat_26, gs_26)
         avgs_25 = _avgs(stat_25, gs_25)
 
         if avgs_26 is None and avgs_25 is None:
@@ -272,9 +282,8 @@ def lock_all_mlb_projections() -> dict:
         model_label = "savant" if used_savant else "stats"
         season_base = sum(blended[s] * SCORING[s] for s in SCORING)
 
-        # Recent form
+        # Recent form (pitcher_games resolved above for the rates basis)
         recent_form_fpts = None
-        pitcher_games = game_logs_current.get(pitcher_name_lower, [])
         if pitcher_games:
             recent_form_fpts = compute_recent_form_fpts(pitcher_games, n_starts=4)
 
@@ -328,12 +337,17 @@ def lock_all_mlb_projections() -> dict:
         win_prob = DEFAULT_WIN_PROB
         wp_source = "default"
 
-        # Compute FPTS with W/L scaling
+        # Compute FPTS with W/L scaling. The skill base is scaled by the
+        # recent-form ratio, mirroring projection.py's per-start path
+        # (PR #125): previously this path computed adjustedBase but never
+        # applied the blend to the locked value, so a cron-locked start and
+        # a roster-page-locked start for the same pitcher disagreed.
+        recent_ratio = (fpts_per_game / season_base) if season_base else 1.0
         base_no_wl = (
             blended["ip"] * 3 + blended["so"] * 1 + blended["h"] * -1 +
             blended["bb"] * -1 + blended["er"] * -2 + blended["hb"] * -1 +
             blended["sv"] * 5
-        )
+        ) * recent_ratio
         w_contrib = blended["w"] * win_prob * STARTER_WIN_SHARE * 5
         l_contrib = blended["l"] * (1 - win_prob) * STARTER_WIN_SHARE * (-5)
         start_proj = base_no_wl + w_contrib + l_contrib
@@ -360,10 +374,17 @@ def lock_all_mlb_projections() -> dict:
             },
             "model": {
                 "type":         model_label,
+                "ratesBasis":   rates_basis,
                 "blendWeight":  round(this_year_weight, 2),
                 "recentForm":   round(recent_form_fpts, 1) if recent_form_fpts is not None else None,
                 "seasonBase":   round(season_base, 1),
                 "adjustedBase": adjusted_base,
+                # Skill base excluding W/L (recent-form scaled) and the exact
+                # ratio applied — lets accuracy.py reconstruct exact
+                # counterfactuals. The all-MLB path applies no
+                # woba/park/weather, so here fpts = baseNoWl + (w−l)×5 exactly.
+                "baseNoWl":     round(base_no_wl, 2),
+                "recentRatio":  round(recent_ratio, 4),
             },
         }
 

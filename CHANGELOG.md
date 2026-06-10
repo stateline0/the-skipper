@@ -2,6 +2,61 @@
 
 ---
 
+## Session 40 — June 10, 2026 — P0 accuracy work: starts-only rates, exact counterfactuals, unified actuals (+ cron ImportError hotfix)
+
+The three P0 data-quality items from the June 10 review, plus an urgent bug
+found while shipping them.
+
+### What shipped
+- **HOTFIX: the daily cron has been crashing at import since June 7.** PR #154
+  imported `fetch_game_logs_hitting` from `fetcher`, but the function lives in
+  `mlb` (fetcher only imports it inside a local helper) — `api/cron.py` raised
+  `ImportError` at module load, so every 17:00 UTC run since PR #154 merged
+  failed entirely: no `proj2all:` locks, no `actual-all:` actuals, no ESPN
+  Forecaster locks, no `cache:cron-summary:` blob. `py_compile` can't catch
+  ImportError, which is why "logic + compile" validation missed it; the full
+  module-import chain is now part of local verification. Missed June 7–10
+  actuals backfill automatically on the next successful run (game logs cover
+  the whole season and the date keys were never NX-written); the missed
+  projection locks are unrecoverable by design.
+- **Starts-only per-start pitcher rates.** New
+  `projection.per_start_avgs_from_logs()` averages the `gs >= 1` game-log rows
+  for the current year (SP only), replacing season-total ÷ `gamesStarted` —
+  relief innings never enter the per-start line, fixing the swingman/opener
+  bias exactly instead of bounding it (`IP_PER_START_CAP` stays as the fallback
+  for pitchers without enough logged starts and for the previous season).
+  `cron.py` imports the same helper. Locks record `model.ratesBasis`
+  (`"logs"`/`"season"`). Synthetic swingman check: 25 relief IP + 3×3-IP starts
+  → 6.6 FPTS/start from logs vs 17.0 from the capped season-total path.
+- **Exact accuracy counterfactuals.** v2 locks (`proj2:` and `proj2all:`) now
+  store `model.baseNoWl` (per-start skill base excl. W/L, recent-form scaled)
+  and `model.recentRatio`. `api/accuracy.py` rebuilds counterfactuals from the
+  real formula `(baseNoWl + (w−l)×5) × woba × park × weather` for these locks —
+  adding a **weather counterfactual** and a Weather factor card on the
+  dashboard — and keeps the legacy `adjustedBase × woba × park` approximation
+  for older locks. Per-start `exactCounterfactuals` + `factorAnalysis.
+  exactStarts` make the mixed window visible. While wiring this, the cron lock
+  path was found to compute the recent-form blend but never apply it to the
+  locked value (PR #125 fixed `projection.py` only) — cron now scales
+  `base_no_wl` by the recent ratio, so cron-locked and page-locked starts
+  agree. (Spotted but deferred: cron's W/L split still uses the pre-PR-#146
+  formula — backlogged.)
+- **Pitcher-actuals unification.** Accuracy roster scope now sources actuals
+  from the game-log `actual-all:{date}` keys (per-category, slug-keyed —
+  immune to the two-way-player name collision in the ESPN-box path), resolving
+  each `proj2:` slug against `cache:daily.my_team` for the roster filter and
+  the proper-cased display name. Where both sources exist the game-log FPTS is
+  **validated against ESPN's applied total** (`actualsValidation` counters,
+  mismatches logged); ESPN-box remains a labeled fallback for pre-cron dates
+  (`actualsSource` per start). And the long-standing "FA actual FPTS only for
+  previously-rostered players" limitation is fixed: `api/espn.py` fills FA Act
+  FPTS gaps from game logs (league formula, doubleheaders summed, today
+  excluded so liveStats stays authoritative).
+- `MaeTimelineChart` milestone added (2026-06-10, "Starts-only rates + cron
+  recent form") — both changes shift the projection baseline forward-only.
+
+---
+
 ## Session 38 — June 9, 2026 — Reliever projection realism + Refresh button polish
 
 Follow-ups to the Free Agents work (session 37 / PR #156).

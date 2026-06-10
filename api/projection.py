@@ -4,6 +4,8 @@ api/projection.py — Projection model for pitcher fantasy points.
 Hybrid model combining:
   - Savant expected stats (luck-adjusted H, ER)
   - MLB Stats API counting stats (skill-based IP, K, BB, HBP, W, L, SV)
+  - Starts-only per-start rates from game logs (gs==1 rows; current year)
+    with capped season-total ÷ GS as the fallback basis
   - Year-over-year blending (2025 ↔ 2026) by innings pitched
   - Recent form weighting: 60% season / 40% last-4-starts (Layer 2)
   - Opponent quality adjustment via team wOBA factors (Layer 1)
@@ -100,6 +102,41 @@ def parse_ip(ip_str) -> float:
     except Exception:
         print(f"[projection.py] parse_ip: unparseable IP value {ip_str!r}, treating as 0.0")
         return 0.0
+
+
+def per_start_avgs_from_logs(games: list) -> dict:
+    """Per-start averages computed from game-log rows where the pitcher
+    actually STARTED (gs >= 1), skipping relief appearances entirely.
+
+    This is the exact fix for the swingman/opener bias that IP_PER_START_CAP
+    only bounds: season totals ÷ gamesStarted mixes relief innings into the
+    per-start line (inflating it), and the cap rescue assumes a 7-IP start
+    even for an opener who really goes ~3. Averaging only the gs>=1 log rows
+    gives the true per-start rates for everyone.
+
+    Returns None when the logs contain fewer than MIN_STARTS_SP starts —
+    callers fall back to the capped season-total path (which also covers the
+    previous season, where we don't fetch game logs)."""
+    starts = [g for g in (games or []) if g.get("gs", 0) >= 1]
+    n = len(starts)
+    if n < MIN_STARTS_SP:
+        return None
+    ip = sum(g.get("ip", 0.0) for g in starts) / n
+    h  = sum(g.get("h",  0) for g in starts) / n
+    bb = sum(g.get("bb", 0) for g in starts) / n
+    hb = sum(g.get("hb", 0) for g in starts) / n
+    return {
+        "ip": ip,
+        "so": sum(g.get("so", 0) for g in starts) / n,
+        "h":  h,
+        "bb": bb,
+        "er": sum(g.get("er", 0) for g in starts) / n,
+        "hb": hb,
+        "w":  sum(g.get("w",  0) for g in starts) / n,
+        "l":  sum(g.get("l",  0) for g in starts) / n,
+        "sv": sum(g.get("sv", 0) for g in starts) / n,
+        "batters_faced": ip * 3 + h + bb + hb,
+    }
 
 
 def per_game_avgs(stat: dict, games: int, is_rp: bool = False) -> dict:
@@ -239,6 +276,19 @@ def get_projected_fpts(player_starts: list, team_woba_factors: dict = None,
 
         avgs_26 = per_game_avgs(stat_26, gs_26, is_rp)
         avgs_25 = per_game_avgs(stat_25, gs_25, is_rp)
+
+        # Starts-only per-start rates (SP, current year). When the pitcher's
+        # game logs carry enough actual starts, average those rows instead of
+        # season-total ÷ gamesStarted — relief innings never enter the line.
+        # Previous-season logs aren't fetched, so 2025 stays on the capped
+        # season-total path; the blend handles the mixed bases fine since both
+        # are per-start rate dicts.
+        rates_basis = "season"
+        if not is_rp:
+            log_avgs_26 = per_start_avgs_from_logs(game_logs.get(name_lower))
+            if log_avgs_26 is not None:
+                avgs_26 = log_avgs_26
+                rates_basis = "logs"
 
         if avgs_26 is None and avgs_25 is None:
             proj_fpts[full_name]  = 0.0
@@ -456,6 +506,7 @@ def get_projected_fpts(player_starts: list, team_woba_factors: dict = None,
         proj_details[full_name] = {
             "seasonBase":   season_base,
             "modelType":    model_label,
+            "ratesBasis":   rates_basis,
             "blendWeight":  round(this_year_weight, 2),
             "recentForm":   round(recent_form_fpts, 1) if recent_form_fpts is not None else None,
             "adjustedBase": adjusted_base,
@@ -545,15 +596,25 @@ def get_projected_fpts(player_starts: list, team_woba_factors: dict = None,
                             },
                             "model": {
                                 "type":         model_label,
+                                "ratesBasis":   rates_basis,
                                 "blendWeight":  round(this_year_weight, 2),
                                 "recentForm":   round(recent_form_fpts, 1) if recent_form_fpts is not None else None,
                                 "seasonBase":   season_base,
                                 "adjustedBase": adjusted_base,
+                                # Per-start skill base excluding W/L, recent-form
+                                # scaled — the same lock_base the fpts above was
+                                # built from — plus the exact ratio applied. Lets
+                                # accuracy.py reconstruct exact counterfactuals:
+                                # fpts = (baseNoWl + (w−l)×5) × woba × park ×
+                                # weather, and baseNoWl ÷ recentRatio recovers
+                                # the no-recent-form base.
+                                "baseNoWl":     round(lock_base, 2),
+                                "recentRatio":  round(recent_ratio, 4),
                             },
                         }
                         set_locked_projection_v2(season, period, full_name, date, breakdown)
 
-        print(f"[projection.py] {full_name} [{model_label}]: "
+        print(f"[projection.py] {full_name} [{model_label}/{rates_basis}]: "
               f"{round(this_year_weight*100)}% '26 / {round(last_year_weight*100)}% '25 | "
               f"{fpts_per_game:.1f} pts/game × {avg_factor:.3f} = {projected}"
               f"{' [recent form applied]' if recent_form_fpts is not None else ''}")

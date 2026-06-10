@@ -180,7 +180,7 @@ https://statsapi.mlb.com
 - Endpoint: `/api/v1/stats?stats=season&playerPool=all&group=pitching&season=YYYY&gameType=R&limit=1000`
 - IP stored as string e.g. `"34.2"` meaning 34 innings + 2 outs = 34.667 actual innings
 - Player names may use accented characters (e.g., "Edwin Díaz") — normalize with `strip_accents()` before matching against ESPN names
-- ⚠️ **Per-start rates: `inningsPitched` is TOTAL (starts + relief), so dividing by `gamesStarted` inflates swingmen/openers (session 35).** `inningsPitched` counts every appearance, but the SP per-start denominator is `gamesStarted` — so a reliever/opener making a spot start blows up (e.g. 48 IP over 3 GS → 16 "IP/start" → ~39 projected FPTS, observed on the all-MLB accuracy view with blank opponents). Stopgap: `IP_PER_START_CAP = 7.0` in `projection.py`/`cron.py` scales the whole counting line down proportionally when per-start IP exceeds the cap (no real SP averages >7). The exact fix is starts-only rates from game logs (`gs==1`) — backlogged. **Resolving a hitter's team:** `fetch_season_stats_hitting` captures `stat["_teamId"] = s["team"]["id"]`, mapped via `mlb.MLB_TEAM_ID_TO_ABBREV` (verified 30-team map, same abbrevs the schedule uses) — this is how the all-MLB hitter cron (session 36) knows who plays today. Note the **pitching** fetch does NOT capture team, which is why all-MLB pitcher locks show blank opponents + default win-prob.
+- ⚠️ **Per-start rates: `inningsPitched` is TOTAL (starts + relief), so dividing by `gamesStarted` inflates swingmen/openers (session 35).** `inningsPitched` counts every appearance, but the SP per-start denominator is `gamesStarted` — so a reliever/opener making a spot start blows up (e.g. 48 IP over 3 GS → 16 "IP/start" → ~39 projected FPTS, observed on the all-MLB accuracy view with blank opponents). **Fixed session 40:** per-start rates now come from game-log rows filtered to `gs >= 1` (`per_start_avgs_from_logs()` in `projection.py`, imported by `cron.py`) whenever the current-year logs carry ≥ `MIN_STARTS_SP` starts; `IP_PER_START_CAP = 7.0` remains as the fallback bound for the season-total ÷ `gamesStarted` path (no logs, and the previous season — logs aren't fetched for prior years). The lock's `model.ratesBasis` records which path produced each value. **Resolving a hitter's team:** `fetch_season_stats_hitting` captures `stat["_teamId"] = s["team"]["id"]`, mapped via `mlb.MLB_TEAM_ID_TO_ABBREV` (verified 30-team map, same abbrevs the schedule uses) — this is how the all-MLB hitter cron (session 36) knows who plays today. Note the **pitching** fetch does NOT capture team, which is why all-MLB pitcher locks show blank opponents + default win-prob.
 
 ### Team stats — date-range splits
 `Confidence: 8/10 · Last assessed: April 18, 2026`
@@ -622,18 +622,34 @@ Uses `position: fixed` to escape `overflow: auto` table containers
 Accuracy tracking dashboard
 `Confidence: 9/10 · Last assessed: June 7, 2026`
 
-`api/accuracy.py` endpoint reads `proj2:` keys and `cache:daily:` actual_stats, matches by player slug.
+`api/accuracy.py` endpoint reads `proj2:`/`proj2all:` keys and matches them against actuals by player slug.
 `pages/accuracy.tsx` displays summary tiles, per-stat MAE bar chart, and expandable per-start comparisons.
 Period selector allows viewing any matchup period.
 
-Matching logic: proj2 keys use slugs, actual_stats uses full names. Matching done by slugifying actual names.
+**Unified actuals (session 40).** Both scopes source actuals from the game-log
+`actual-all:{date}` keys (per-category, accent-stripped-name-keyed). The roster
+scope previously read `cache:daily.actual_stats` (ESPN box, name-keyed,
+first-write-wins — a two-way player like Ohtani could get his hitting line
+stored as pitching actuals). It now resolves the proj2 slug against
+`cache:daily.my_team` (roster filter + display name), reads the game-log
+actual, validates its FPTS against ESPN's applied total when both exist
+(mismatches counted in `actualsValidation`), and falls back to the ESPN-box
+value only for dates with no `actual-all:` blob (pre-cron history). Each start
+carries `actualsSource: "gamelog" | "espn-box"`.
+
+**Exact counterfactuals (session 40).** Locks written from June 10, 2026 carry
+`model.baseNoWl` + `model.recentRatio`, so factor counterfactuals are rebuilt
+from the real per-start formula `(baseNoWl + (w−l)×5) × woba × park × weather`
+— including a new weather counterfactual/factor card. Older locks fall back to
+the legacy `adjustedBase × woba × park` approximation; per-start
+`exactCounterfactuals` and `factorAnalysis.exactStarts` make the mix visible.
 
 **`?kind=pitcher|hitter` (session 34).** `kind=hitter` routes to `get_hitter_accuracy_data()` — matches `proj2h:` ↔ `acth:` by slug+date, returns FPTS MAE only (no factor counterfactuals: the hitter model is FPTS-centric; no ESPN overlay: no hitter Forecaster feed). A locked game with no `acth:` entry = DNP → counted in `unmatchedCount`, excluded from MAE. Pitcher path is untouched by `kind`.
 
 **All-MLB only (sessions 35–36).** The dashboard tracks *overall* model accuracy, so the My Roster/All MLB scope toggle was removed — pitchers always read `proj2all:`/`actual-all:` (whole MLB). Hitters read `proj2h:`/`acth:`, now whole-MLB too: the cron `lock_all_mlb_hitter_projections()` (session 36) locks a baseline projection + writes game-log actuals for every hitter playing today, in addition to the page's roster locks.
 
 Limitations:
-- Only league-rostered pitchers have actual stats (free agents not in `mRoster` data)
+- ~~Only league-rostered pitchers have actual stats (free agents not in `mRoster` data)~~ — lifted session 40: accuracy actuals come from game logs (whole MLB), and the My Team/FA pages fill free-agent Act FPTS gaps from game logs too
 - V2 projections only exist from session 14 onward — older starts only have v1 floats
 - Data accumulates over time — dashboard becomes more useful as more starts complete
 
