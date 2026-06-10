@@ -293,7 +293,9 @@ def _season_line(stat: dict) -> dict | None:
 
 
 def get_hitter_data(team_id: int, week: int) -> dict:
-    league_id = os.environ["ESPN_LEAGUE_ID"]
+    league_id = os.environ.get("ESPN_LEAGUE_ID")
+    if not league_id:
+        raise RuntimeError("Missing env var ESPN_LEAGUE_ID — set it in Vercel project settings (the number in your ESPN league URL)")
     year      = os.environ.get("ESPN_SEASON", "2026")
     year_int  = int(year)
     headers, cookies = get_headers_and_cookies()
@@ -785,7 +787,9 @@ def scoring_debug(team_id: int) -> dict:
     scoringItems alongside what the parser derives and the hardcoded fallback.
     Lets us verify/repair the ESPN_HITTING_STAT_IDS map against a real league.
     Hit /api/hitters?debug=scoring."""
-    league_id = os.environ["ESPN_LEAGUE_ID"]
+    league_id = os.environ.get("ESPN_LEAGUE_ID")
+    if not league_id:
+        raise RuntimeError("Missing env var ESPN_LEAGUE_ID — set it in Vercel project settings (the number in your ESPN league URL)")
     year = os.environ.get("ESPN_SEASON", "2026")
     headers, cookies = get_headers_and_cookies()
     base = (

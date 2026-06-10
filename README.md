@@ -74,6 +74,7 @@ In your Vercel project → **Settings** → **Environment Variables**, add:
 | `ESPN_S2` | Your `espn_s2` cookie value |
 | `ESPN_SWID` | Your `SWID` cookie value |
 | `ANTHROPIC_API_KEY` | From [console.anthropic.com](https://console.anthropic.com) |
+| `CLAUDE_MODEL` | *(optional)* Claude model for recommendations; defaults to `claude-sonnet-4-6` |
 | `APP_PASSWORD` | A password of your choosing — required to access the app |
 
 ### 5. Deploy

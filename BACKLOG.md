@@ -1,6 +1,44 @@
 # The Skipper — Backlog
 
-Last updated: June 10, 2026 (session 38)
+Last updated: June 10, 2026 (session 39 — full-repo review & prioritization; see REVIEW.md)
+
+---
+
+## 🎯 Prioritization (June 10, 2026 review)
+
+**Principle:** *Indispensable = trusted projections + a complete daily decision loop.* Trust comes from accuracy transparency (the locking/MAE infrastructure is the moat — keep investing in it). Completeness means the user never needs another tab open to decide. Strategy frame: personal tool first; productization (multi-user, other platforms) is an explicit later horizon.
+
+Each tier references the detailed items below — no items were removed, only ranked.
+
+### P0 — Now: trust & correctness
+1. **Verify all-MLB hitter cron** (→ *Next session priorities*) — still the top open verification.
+2. ~~Urgent code fixes from the June 10 review~~ — shipped session 39 (Claude model retirement, env-var validation, silent-failure logging; full list in REVIEW.md).
+3. **Pitcher-actuals unification** (→ *Hitters* section) — Ohtani collision risk + FA pitcher coverage; accuracy data quality underpins everything else.
+4. **Exact accuracy counterfactuals** (→ *Model Improvements*) — store per-start `base_no_wl` in the locked breakdown so factor-impact numbers stop being approximate.
+5. **v1 lock stores Proj/G, not per-start proj** (→ *Model Improvements*) — consistency between locked and live cells.
+6. **Starts-only per-start pitcher rates** (→ *Hitters* section) — `gs==1` game-log rates; the remaining systematic bias for swingmen/openers.
+
+### P1 — Next: decision automation (the indispensability layer)
+1. **Hitters in AI recommendations** — `api/analyze.py` only sees `rosterSPs`/`freeAgentSPs`; half the roster is invisible to the flagship feature. Prereq for the planner MVP. (New — see *Future ideas → Promoted proposals*.)
+2. **Weekly planner / decision automation MVP** (→ section below) — the roadmap centerpiece.
+3. **Hitter nudge engine** (→ *Hitters* section) — watchlist/alert, buildable today on FA actuals.
+4. **Morning lineup check / scratch alerts** (new — see *Promoted proposals*) — closes the daily loop.
+5. **Live freshness for hitter projections** (→ *Hitters* section).
+6. **Unify roster-page vs cron proj2h scoring** (→ *Hitters* follow-up).
+
+### P2 — Model depth
+- Phases 8–10 (BvP, lineup-spot volume, per-stat park + wind-for-HR) — in MAE-impact order, lineup-spot volume likely first.
+- Role-aware RP appearances + leverage-based saves (→ *Model Improvements*).
+- Pitcher platoon (Layer 5), rest & workload (Layer 6), wind direction (Phase 3 weather).
+- Projection confidence bands (new — see *Promoted proposals*).
+- Prior-year Savant fallback; dropped-player projDetails merge; SSPD roster bug.
+
+### P3 — Polish & ops
+- Title-case/accents preservation, ProjectionTooltip wOBA split, dashboard at-a-glance, pro-team-map caching.
+- Ops hardening from REVIEW.md: retry/backoff on external APIs, structured logging, re-enable TS build errors, park-factor refresh process, ESPN cookie health check (new).
+
+### Horizon — productization (deferred by strategy)
+Multi-user / multi-league, category-league support (the stat-vector hitter model already enables it), Yahoo/other platforms, mobile app, paid probables source. Revisit when P0–P1 are done and the tool is winning leagues.
 
 ---
 
@@ -297,6 +335,44 @@ See CHANGELOG.md for full history of PRs #1-#47.
 
 ## 💡 Future ideas
 
+### Promoted proposals (June 10, 2026 review — ranked, see REVIEW.md for rationale)
+
+1. **Hitters in AI recommendations** *(also P1)* — extend `analyze.py`'s prompt + the
+   recommendations page payload to include roster hitters and checked FA batters
+   (data already exists in `/api/hitters`). The flagship feature currently plans
+   around half the roster.
+2. **Regret tracker / "points left on bench"** — daily optimal-lineup retrospective:
+   compare actual lineup FPTS vs the best possible lineup from locked projections +
+   actuals (all already in KV: `proj2:`/`proj2h:`/`acth:`/`actual-all:`). Quantifies
+   the tool's value and builds trust; a natural Accuracy-page sibling tab.
+3. **Morning lineup check / scratch alerts** *(also P1)* — pre-first-pitch digest:
+   benched players with games, starters without games, probable-starter scratches
+   (diff today's probables vs yesterday's), weather postponement risk. Start as an
+   on-page dashboard digest; push notifications later.
+4. **Projection confidence bands** — floor/median/ceiling per start instead of a point
+   estimate, derived from historical MAE by factor profile. Directly monetizes the
+   accuracy archive no comparable tool has.
+5. **Two-start-pitcher / streamer lookahead planner** — 2–3 week scan of FantasyPros
+   probables (already plumbed, 12 days out) + schedule to flag stream targets and
+   two-start weeks before the league notices. Concretizes "schedule advantage alerts."
+6. **Accuracy-driven factor auto-tuning** — periodically refit factor weights (wOBA
+   blend, park, recent-form 60/40, weather) against accumulated locked-vs-actual data;
+   turns the accuracy dashboard from reporting into model improvement.
+7. **"Ask the Skipper" conversational analyst** — chat endpoint that gives Claude the
+   full roster/FA/projection payload + league rules for ad-hoc questions ("hold García
+   through the @COL series?"). Natural extension of `analyze.py`.
+8. **ESPN cookie health check** — daily cron ping of an authed ESPN endpoint; surface
+   expiry on the dashboard *before* every page silently breaks (top risk in REVIEW.md).
+
+### Considered and deferred
+
+- **Direct lineup writes to ESPN** (June 10, 2026) — technically feasible (private
+  `lm-api-writes` transactions endpoint, same `espn_s2`/`SWID` cookies, slot IDs
+  already documented in KNOWLEDGE.md), but **deferred by decision: not worth the
+  ESPN ToS risk**. The Skipper stays read-only; recommendations remain advisory.
+
+### Earlier ideas (unranked)
+
 - Trade analyzer with forward-looking schedule context
 - Waiver wire rankings personalized to roster needs and matchup context
 - Live game decision engine (real-time starts limit optimization)
@@ -326,6 +402,7 @@ All set in both `.env.local` (local) and Vercel dashboard (production):
 | `ESPN_TEAM_ID` | Your team number (6) |
 | `ESPN_STARTS_LIMIT` | Weekly pitcher starts limit (12) |
 | `ANTHROPIC_API_KEY` | Claude API key |
+| `CLAUDE_MODEL` | *(optional)* Claude model for recommendations (default `claude-sonnet-4-6`) |
 | `KV_REST_API_URL` | Upstash Redis REST URL |
 | `KV_REST_API_TOKEN` | Upstash Redis REST token |
 
