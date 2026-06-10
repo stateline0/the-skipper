@@ -477,6 +477,7 @@ export default function MyTeam() {
                   pitchers={rosterStarterSPs}
                   fptsPerStart={fptsPerStart}
                   actualFpts={actualFpts}
+                  projectionDetails={projectionDetails}
                 />
               )}
             </div>
@@ -553,6 +554,7 @@ export default function MyTeam() {
                     pitchers={rosterRelievers}
                     fptsPerStart={fptsPerStart}
                     actualFpts={actualFpts}
+                    projectionDetails={projectionDetails}
                   />
                 )}
               </div>

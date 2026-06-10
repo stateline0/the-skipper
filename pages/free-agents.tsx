@@ -1,13 +1,13 @@
 import Head from 'next/head'
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import ScheduleGrid from '../components/ScheduleGrid'
-import StatsTable, { PITCHER_COLUMNS, SeasonStats, SavantExpected } from '../components/StatsTable'
+import StatsTable, { PITCHER_COLUMNS, SV_COLUMN, PitcherColumn, SeasonStats, SavantExpected } from '../components/StatsTable'
 import {
   UIHitter, Weeks, buildDateRange, todayISO, hitterFromPayload,
   HitterScheduleGrid, HitterStatsTable,
 } from '../components/HitterTables'
 
-const CACHE_VERSION = 8 // bump this whenever the API response shape changes
+const CACHE_VERSION = 9 // bump this whenever the API response shape changes
 
 // Canonical hitter positions for the Free Agents position filter. A hitter's
 // pos may be composite (e.g. "2B/SS"), so matching splits on "/". UTIL is a
@@ -15,10 +15,14 @@ const CACHE_VERSION = 8 // bump this whenever the API response shape changes
 const HITTER_POSITIONS = ['C', '1B', '2B', '3B', 'SS', 'OF', 'DH']
 
 // The RP tab reuses the pitcher StatsTable but drops start-based columns
-// (Starts, Form sparkline, season Pace) that are meaningless for relievers.
-const RP_COLUMN_KEYS = ['name', 'team', 'percentOwned', 'era', 'k9', 'bb9',
+// (Starts, Form sparkline, season Pace) that are meaningless for relievers, and
+// adds Saves (SV) — a key part of reliever scoring, omitted from the SP set.
+const RP_COLUMN_KEYS = ['name', 'team', 'percentOwned', 'era', 'k9', 'bb9', 'sv',
   'xera', 'xwoba', 'wobaDiff', 'luck', 'barrelPct', 'whiffPct', 'projFpts', 'actFpts']
-const RP_COLUMNS = PITCHER_COLUMNS.filter(c => RP_COLUMN_KEYS.includes(c.key))
+const RP_COLUMN_POOL = [...PITCHER_COLUMNS, SV_COLUMN]
+const RP_COLUMNS: PitcherColumn[] = RP_COLUMN_KEYS
+  .map(k => RP_COLUMN_POOL.find(c => c.key === k))
+  .filter((c): c is PitcherColumn => Boolean(c))
 
 interface FreeSP {
   name: string; team: string; slot: string; injuryStatus: string
@@ -291,15 +295,16 @@ function handleSort(col: string) {
               </select>
             )}
             {mode !== 'batters' && (
-              <button onClick={() => fetchFreeAgents(true)} disabled={loading} style={{
-                fontFamily: 'var(--sans)', fontSize: 13, fontWeight: 600,
-                padding: '9px 18px', borderRadius: 'var(--radius)',
+              <button onClick={() => fetchFreeAgents(true)} disabled={loading}
+                title="Refresh" aria-label="Refresh" style={{
+                fontFamily: 'var(--sans)', fontSize: 14, fontWeight: 600,
+                padding: '8px 12px', borderRadius: 'var(--radius)',
                 cursor: loading ? 'not-allowed' : 'pointer',
                 border: '1.5px solid var(--border-strong)',
-                background: 'transparent', color: 'var(--ink)',
-                opacity: loading ? 0.5 : 1,
+                background: 'var(--white)', color: 'var(--ink)',
+                lineHeight: 1, opacity: loading ? 0.5 : 1,
               }}>
-                {loading ? 'Refreshing...' : '↻ Refresh'}
+                ↻
               </button>
             )}
           </div>
@@ -470,6 +475,7 @@ function handleSort(col: string) {
                   pitchers={sortedSPs}
                   fptsPerStart={fptsPerStart}
                   actualFpts={actualFpts}
+                  projectionDetails={projectionDetails}
                 />
               )}
             </div>
@@ -506,6 +512,7 @@ function handleSort(col: string) {
                   columns={RP_COLUMNS}
                   fptsPerStart={fptsPerStart}
                   actualFpts={actualFpts}
+                  projectionDetails={projectionDetails}
                   defaultSortCol="projFpts"
                   defaultSortDir="desc"
                 />

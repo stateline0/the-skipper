@@ -2,6 +2,37 @@
 
 ---
 
+## Session 38 — June 9, 2026 — Reliever projection realism + Refresh button polish
+
+Follow-ups to the Free Agents work (session 37 / PR #156).
+
+### What shipped
+- **Sane reliever (RP) projections.** Free-agent reliever weeks were computed as
+  `FPTS/appearance × 4`, which produced absurd values — deeply negative
+  blow-ups (e.g. −17) from small samples and inflated highs near 20. Now
+  (`api/projection.py`): assume a realistic **3 appearances/week**, **regress
+  small-sample relievers toward a league-average reliever** (`RP_FULL_SAMPLE`,
+  `RP_BASELINE_FPTS_PER_APP`) so one blow-up or hot streak can't dominate, and
+  **floor the weekly total at 0**. Result compresses to realistic values
+  (bad ≈ 2–3, average ≈ 6, elite closers ≈ 15).
+- **Refresh button polish.** The Free Agents Refresh button was oversized and
+  text-labelled; it's now an icon-only `↻` sized to match the period selector
+  and toggle controls (with a `Refresh` tooltip/aria-label).
+- **RP table: Saves column + projection tooltip.** Added a **SV** column to the
+  reliever view (`_build_season_stats` now returns `sv`; new exported
+  `SV_COLUMN`). The **Proj FPTS** cell is now click/hover for a breakdown
+  (`projectionDetails` threaded into `StatsTable`) — for relievers it shows
+  FPTS/appearance × appearances and which season the projection leans on, which
+  explains cases like a great-2025 / tiny-2026-sample arm projecting high while
+  its current-season line looks ugly. The Proj FPTS tooltip is wired into the
+  **Pitchers page** stats tabs (starters and relievers) too, not just Free Agents.
+- **Note on blank advanced stats:** xERA/xwOBA/Brl%/Whiff% are **current-season
+  (2026) only** and render em-dash when a pitcher has no 2026 Savant footprint
+  yet (small sample / hasn't pitched) — not a bug; the projection tooltip now
+  surfaces that such players are projected off last season.
+
+---
+
 ## Session 37 — June 8, 2026 — Free Agents filters + RP & multi-position (PR #156)
 
 Added name-search and position filters to the Free Agents page, and widened the
