@@ -412,7 +412,9 @@ def get_actual_fpts(past_dates: list, player_names: set, headers: dict,
 
     Returns: (fpts_result, saves_result, bench_result, my_team_pitchers_by_day)
     """
-    league_id = os.environ["ESPN_LEAGUE_ID"]
+    league_id = os.environ.get("ESPN_LEAGUE_ID")
+    if not league_id:
+        raise RuntimeError("Missing env var ESPN_LEAGUE_ID — set it in Vercel project settings (the number in your ESPN league URL)")
     year      = os.environ.get("ESPN_SEASON", "2026")
     base      = (
         f"https://lm-api-reads.fantasy.espn.com/apis/v3/games/flb"

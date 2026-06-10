@@ -247,6 +247,7 @@ def get_all_locked_projections_v2(season: int, period: int) -> dict:
             try:
                 result.setdefault(slug, {})[date] = json.loads(val)
             except json.JSONDecodeError:
+                print(f"[kv.py] get_all_v2: skipped corrupted JSON at {key}")
                 continue
 
         return result
@@ -337,6 +338,7 @@ def get_all_locked_hitter_projections(season: int, period: int) -> dict:
             try:
                 result.setdefault(slug, {})[date] = json.loads(val)
             except json.JSONDecodeError:
+                print(f"[kv.py] get_all_v2h: skipped corrupted JSON at {key}")
                 continue
         return result
     except Exception as e:

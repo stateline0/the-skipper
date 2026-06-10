@@ -63,7 +63,9 @@ def fetch_roster_projections(scoring_period_id: int) -> dict:
             {"error": "..."} on any failure.
     """
     try:
-        league_id = os.environ["ESPN_LEAGUE_ID"]
+        league_id = os.environ.get("ESPN_LEAGUE_ID")
+        if not league_id:
+            raise RuntimeError("Missing env var ESPN_LEAGUE_ID — set it in Vercel project settings (the number in your ESPN league URL)")
         year      = os.environ.get("ESPN_SEASON", "2026")
         team_id   = int(os.environ.get("ESPN_TEAM_ID", "6"))
         headers, cookies = get_headers_and_cookies()

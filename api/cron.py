@@ -88,6 +88,7 @@ def _parse_ip(ip_str) -> float:
         outs = int(parts[1]) if len(parts) > 1 else 0
         return full + outs / 3
     except Exception:
+        print(f"[cron.py] _parse_ip: unparseable IP value {ip_str!r}, treating as 0.0")
         return 0.0
 
 

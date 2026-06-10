@@ -158,7 +158,9 @@ def get_status(injured: bool) -> str:
 # ── Main data assembly ────────────────────────────────────────────────
 
 def get_league_data(team_id: int, week: int) -> dict:
-    league_id = os.environ["ESPN_LEAGUE_ID"]
+    league_id = os.environ.get("ESPN_LEAGUE_ID")
+    if not league_id:
+        raise RuntimeError("Missing env var ESPN_LEAGUE_ID — set it in Vercel project settings (the number in your ESPN league URL)")
     year      = os.environ.get("ESPN_SEASON", "2026")
     year_int  = int(year)
     headers, cookies = get_headers_and_cookies()
@@ -203,6 +205,11 @@ def get_league_data(team_id: int, week: int) -> dict:
         headers=headers,
         timeout=15
     )
+    if r.status_code in (401, 403):
+        raise Exception(
+            f"ESPN returned HTTP {r.status_code} — auth failed. Your ESPN_S2/ESPN_SWID "
+            "cookie is likely expired or malformed; log into fantasy.espn.com and copy fresh cookies."
+        )
     if r.status_code != 200:
         raise Exception(f"ESPN returned HTTP {r.status_code}")
 

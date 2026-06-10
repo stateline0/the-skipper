@@ -73,10 +73,14 @@ class handler(BaseHTTPRequestHandler):
             self._respond({"ok": False, "error": "ANTHROPIC_API_KEY not set in environment."})
             return
 
+        # claude-sonnet-4-20250514 is deprecated (retires 2026-06-15);
+        # default to its drop-in replacement, overridable via CLAUDE_MODEL.
+        model = os.environ.get("CLAUDE_MODEL", "claude-sonnet-4-6")
+
         try:
             client = anthropic.Anthropic(api_key=api_key)
             message = client.messages.create(
-                model="claude-sonnet-4-20250514",
+                model=model,
                 max_tokens=1500,
                 system="You are a sharp, data-driven fantasy baseball analyst. Be specific, reference numbers, and keep recommendations actionable.",
                 messages=[{"role": "user", "content": build_prompt(data)}],

@@ -18,7 +18,7 @@ from http.server import BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs
 from urllib.request import urlopen, Request
 from urllib.error import URLError
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from html.parser import HTMLParser
 
 # ---------------------------------------------------------------------------
@@ -576,7 +576,7 @@ def get_team_woba_recent(season: int = 2026, days: int = 14) -> dict:
     rained out or on an off-week.
     """
     try:
-        today = datetime.utcnow().date()
+        today = datetime.now(timezone.utc).date()
         start = today - timedelta(days=days)
         r = requests.get(
             "https://statsapi.mlb.com/api/v1/teams/stats",

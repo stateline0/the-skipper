@@ -98,13 +98,14 @@ def parse_ip(ip_str) -> float:
         outs  = int(parts[1]) if len(parts) > 1 else 0
         return full + outs / 3
     except Exception:
+        print(f"[projection.py] parse_ip: unparseable IP value {ip_str!r}, treating as 0.0")
         return 0.0
 
 
 def per_game_avgs(stat: dict, games: int, is_rp: bool = False) -> dict:
     """Compute per-game averages from MLB Stats API season totals."""
     min_games = MIN_APPEARANCES_RP if is_rp else MIN_STARTS_SP
-    if games < min_games:
+    if games <= 0 or games < min_games:
         return None
     ip = parse_ip(stat.get("inningsPitched", "0.0")) / games
     # Scale the whole line down if relief innings inflated the per-start IP
