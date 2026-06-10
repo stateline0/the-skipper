@@ -1,6 +1,6 @@
 # The Skipper — Backlog
 
-Last updated: June 6, 2026 (session 30)
+Last updated: June 10, 2026 (session 38)
 
 ---
 
@@ -24,6 +24,7 @@ The big-picture feature still on the roadmap but not next-up:
 - [ ] Uses projection model data as input
 
 ### Model Improvements
+- [ ] **Reliever projection is heuristic** (session 38, PR #157). RP weeks = FPTS/appearance × a flat **3 appearances/week** (`RP_APPEARANCES_PER_WEEK`), with small-sample regression toward a league-average reliever (`RP_BASELINE_FPTS_PER_APP`, `RP_FULL_SAMPLE`) and a 0 floor — this tamed the old `×4` blow-ups (e.g. −17) and inflated highs (~20). Possible refinements: role-aware appearance counts (closers/setup pitch more than mop-up), and projecting saves from leverage/role rather than the season save rate. Also note the year-blend leans fully on the prior season when current-year IP is tiny (why a cratered-2026 closer can still project high).
 - [ ] Weather impact — Phase 3: wind direction model (add `PARK_OUTFIELD_BEARING` per park, compute out-to-outfield wind component, combine with temp into single weather multiplier)
 - [ ] ProjectionTooltip: split opponent wOBA display into season + last-14-day components (currently shows only the blended factor; show `seasonFactor`, `recentFactor`, and `blendedFactor` with weights). Note: the tooltip was otherwise rebuilt to reconcile in session 30 (PR #125).
 - [ ] **Accuracy `factorAnalysis` reconstruction is approximate** (surfaced reviewing PR #125). `api/accuracy.py` rebuilds counterfactuals from `adjustedBase × woba × park`, but the real per-start projection is `(base_no_wl + W/L) × woba × park × weather` — different base, and it ignores W/L + weather. Direction is now correct (PR #125 stores pitcher multipliers) but the MAE-impact numbers are rough. Rebuild from the same formula `projection.py` uses, or store the per-start `base_no_wl` in the locked breakdown so the counterfactuals can be exact.
@@ -39,6 +40,7 @@ PR #111 fixed the user-visible aggregates for mid-week pickups but deliberately 
 - [ ] Schedule grid reads `projectionDetails?.[pitcher.name]` from a global map populated only from `roster_sps`. Dropped players' per-start details live on `pitcher.projDetails` (set on the player object directly at `api/espn.py` line 622), which is never reached by the cell rendering logic. Net effect: any dropped pitcher with future or live-day starts displays a confirmed indicator without a `+X.X` projection underneath. Surfaced during PR #114 verification when the pre-fix Montero case landed in `droppedPlayers`. Two fix options: (1) merge dropped players' `projDetails` into `proj_details_roster` in `api/espn.py` before returning so the global map covers them, or (2) update `ScheduleGrid.tsx` cell paths to fall back to `pitcher.projDetails` when the global lookup misses. Option (1) is cleaner because it doesn't fork the frontend's data source. Low urgency — most dropped pitchers' starts are in the past where the cell shows actual FPTS instead.
 
 ### Display polish (low priority)
+- [ ] **Advanced (Savant) stats are current-season only** (session 38). xERA/xwOBA/Brl%/Whiff% render an em-dash for pitchers with no current-year batted-ball footprint (small sample / hasn't pitched), even when the projection leans on last season — e.g. Estévez (great 2025, tiny ugly 2026). Optional: fall back to prior-year Savant values (labelled by year) so the columns populate for these arms. Deferred to avoid mixing a 2025 Savant line with a 2026 ERA in the same row; the Proj FPTS tooltip now surfaces the season-basis instead.
 - [ ] Title-case edge cases on accuracy page: store original `fullName` (case + accents preserved) in `mlb_stats_current` and `actual-all:` entries so the dashboard renders "Lance McCullers Jr." (not "Mccullers"), "Eury Pérez" (not "Perez"), "JT Brubaker" (not "Jt"). PR #109's `\b\w` regex client-side `titleCase()` is the v1 fallback; proper fix is server-side preservation of original case + accents
 
 ---

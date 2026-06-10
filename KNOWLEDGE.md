@@ -109,11 +109,12 @@ Determines whether a player is an SP, RP, or dual-eligible. This is a player att
 Pass multiple `view` params as repeated tuples: `params=[("view", "mRoster"), ("view", "mTeam")]`
 
 ### Free agent filtering
-`Confidence: 9/10 · Last assessed: April 9, 2026`
+`Confidence: 9/10 · Last assessed: June 9, 2026`
 
-- `filterSlotIds: [14]` must be set in the `x-fantasy-filter` header before `limit`
-- Without slot filter: `limit: 100` returns ~29 SPs out of 100 results (rest are other positions)
-- With `filterSlotIds: [14]`: all 100 results are SP-eligible
+- `filterSlotIds` must be set in the `x-fantasy-filter` header before `limit`
+- Without a slot filter: `limit: 100` returns ~29 SPs out of 100 results (rest are other positions)
+- `filterSlotIds: [14, 15]` returns SP- **and** RP-eligible pitchers (slot 14 = SP, 15 = RP). The FA pitcher pool used to be SP-only (`[14]`); it now includes relievers, and each free agent carries a derived `slot` of `SP`/`RP` (SP if eligible for 14, else RP). See session 37 / PR #156.
+- On the Free Agents page these split into the **SPs** and **RPs** tabs by `slot`, except a pitcher with a projected start this period (an RP making a spot start) is routed into the start-based SPs view regardless of `slot`.
 
 ### Player stats nesting
 `Confidence: 8/10 · Last assessed: March 29, 2026`
