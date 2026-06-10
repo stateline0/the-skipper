@@ -364,6 +364,13 @@ See CHANGELOG.md for full history of PRs #1-#47.
 8. **ESPN cookie health check** — daily cron ping of an authed ESPN endpoint; surface
    expiry on the dashboard *before* every page silently breaks (top risk in REVIEW.md).
 
+### Considered and deferred
+
+- **Direct lineup writes to ESPN** (June 10, 2026) — technically feasible (private
+  `lm-api-writes` transactions endpoint, same `espn_s2`/`SWID` cookies, slot IDs
+  already documented in KNOWLEDGE.md), but **deferred by decision: not worth the
+  ESPN ToS risk**. The Skipper stays read-only; recommendations remain advisory.
+
 ### Earlier ideas (unranked)
 
 - Trade analyzer with forward-looking schedule context
