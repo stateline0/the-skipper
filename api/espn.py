@@ -643,6 +643,41 @@ def get_league_data(team_id: int, week: int) -> dict:
     fa_actual_fpts = {name: actual_fpts[name] for name in fa_pitcher_names if name in actual_fpts}
     roster_actual_fpts = {name: actual_fpts[name] for name in all_pitcher_names if name in actual_fpts}
 
+    # ── Free-agent actuals from game logs (coverage fix) ──────────────
+    # The ESPN mRoster path above only has per-day FPTS for players rostered
+    # in the league at game time, so unrostered free agents showed no Act
+    # FPTS (long-standing BACKLOG known bug). Game logs cover every MLB
+    # pitcher; fill the gaps with FPTS scored by the league formula —
+    # never overriding an ESPN-attributed value. Today is excluded (game
+    # logs lag in-progress days; liveStats covers them). Doubleheader rows
+    # on the same date are summed.
+    if all_dates:
+        window = set(all_dates)
+        today_utc = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        filled_entries = 0
+        for fa_name in fa_pitcher_names:
+            games = game_logs_current.get(strip_accents(fa_name))
+            if not games:
+                continue
+            existing = fa_actual_fpts.get(fa_name, {})
+            by_date = {}
+            for g in games:
+                d = g.get("date", "")
+                if d not in window or d >= today_utc or d in existing:
+                    continue
+                fpts = (
+                    g["ip"] * 3 + g["so"] * 1 + g["h"] * -1 + g["bb"] * -1
+                    + g["er"] * -2 + g["hb"] * -1 + g["w"] * 5 + g["l"] * -5
+                    + g["sv"] * 5
+                )
+                by_date[d] = round(by_date.get(d, 0.0) + fpts, 1)
+            if by_date:
+                fa_actual_fpts[fa_name] = {**by_date, **existing}
+                filled_entries += len(by_date)
+        if filled_entries:
+            print(f"[espn.py] FA actuals from game logs: filled "
+                  f"{filled_entries} date entr(ies) ESPN had no data for")
+
     # ── Roster-window intersection for currently-rostered pitchers ────
     # Generalizes PR #81's `startDates ∩ days_on_team` logic (which
     # previously only ran for *dropped* streamers) to currently-rostered
