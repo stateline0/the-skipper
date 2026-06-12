@@ -817,10 +817,11 @@ PR #113 (session 27) is gating infrastructure for #114 — when the lag-fix bran
 
 A recurring shape across recent sessions: code that's been silently wrong for a while because nothing was reading the value. The bug only surfaces when a new UI surface starts displaying the field, or a new code path starts depending on it.
 
-Three concrete instances:
+Four concrete instances:
 1. **Session 25 — partial `actual-all:` writes (PR #108).** `fetch_game_logs` could return `{}` silently when the MLB Stats API returned HTTP 200 with empty splits. The cron then NX-wrote a 2-pitcher blob and locked it permanently. Invisible until someone looked at the Accuracy dashboard for a specific date.
 2. **Session 27 — `today_has_started` UTC-vs-ET drift (PR #114).** The lag-fix branch silently skipped during evening usage in CT/PT because UTC had already crossed midnight while ESPN's scoring-period boundary (which tracks ET) had not. Invisible until a user added a pitcher in the evening.
 3. **Session 28 — rostered `percentOwned` defaulting to 100 (PR #117).** `pool_entry.get("percentOwned", 100)` from the `mRoster` response. The field doesn't exist there, every pitcher fell through to 100, and no UI displayed the value until the Stats tab's Own% column.
+4. **Session 41 — `cache:daily` froze mid-game box scores (the warm cron exposed it).** `get_actual_fpts` permanently cached any date `< today (UTC)` as "completed" — but at 00:00 UTC (7-8pm ET) yesterday-by-UTC's night games are mid-flight or unstarted. Latent since session 12; nearly invisible while caching only happened on page loads, then **deterministic nightly** once the 15-min warm cron (session 30) started ticking through the 00:00-00:15 UTC window. Surfaced as wrong/missing Act FPTS (Cease +10.0 vs a real 23; a 27-FPTS Detmers start missing entirely). Fix: a date is cacheable only once `now − 8h` has passed it (last games end ~06:30 UTC), entries are stamped `finalized: true`, and unstamped entries are refetched + overwritten — self-healing for the corrupted June 6-12 window. Same UTC-vs-ET class as #2.
 
 **Checklist for the next time this pattern shows up:** When adding a new UI surface that displays a previously-unsurfaced field, audit the upstream extraction once. The audit is two questions: (1) does the source the code is reading from actually carry this field? (2) does the default-value fallback look "reasonable" but mask a real silent failure? Defaults like `100`, `0`, `{}`, or `[]` are particularly risky — they often hide the gap.
 

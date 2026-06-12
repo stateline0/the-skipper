@@ -2,6 +2,31 @@
 
 ---
 
+## Session 41 — June 12, 2026 — Fix: `cache:daily` froze mid-game box scores as finals
+
+Diagnosed from screenshots showing wrong Act FPTS for June 9–11 (Cease +10.0
+vs ESPN's 23, Wrobleski +9.0 vs −1, Detmers' 27-FPTS start missing).
+
+### What shipped
+- **Root cause:** `get_actual_fpts` permanently cached any date `< today (UTC)`
+  as "completed" — but at 00:00–00:15 UTC (7–8pm ET) yesterday-by-UTC's night
+  games are mid-flight (or unstarted, for West Coast games). Latent since
+  session 12, the bug became **deterministic nightly** when the 15-minute warm
+  cron (session 30, June 6) started ticking through that window — which is
+  exactly when the corruption began. Same UTC-vs-ET class as PR #114.
+- **Fix (`api/fetcher.py`):** a date is cacheable only once `now − 8h` has
+  passed it (the latest MLB games end ~06:30 UTC); entries are stamped
+  `finalized: true`; cache reads only trust stamped entries, so the corrupted
+  June 6–12 blobs (and all legacy unstamped entries in the requested window)
+  are refetched and overwritten with correct finals — **self-healing, no
+  manual KV cleanup needed**. Dates inside the danger window are served fresh
+  on every call and picked up for permanent caching after 08:00 UTC.
+- Verified with a fake-cache/fake-ESPN harness: corrupted entry refetched →
+  corrected → stamped; stamped entry served without refetch; danger-window
+  date never cached.
+
+---
+
 ## Session 40 — June 10, 2026 — P0 accuracy work: starts-only rates, exact counterfactuals, unified actuals (+ cron ImportError hotfix)
 
 The three P0 data-quality items from the June 10 review, plus an urgent bug
