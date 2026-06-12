@@ -24,6 +24,15 @@ vs ESPN's 23, Wrobleski +9.0 vs −1, Detmers' 27-FPTS start missing).
 - Verified with a fake-cache/fake-ESPN harness: corrupted entry refetched →
   corrected → stamped; stamped entry served without refetch; danger-window
   date never cached.
+- **Follow-up (same session): zero-FPTS outings dropped as DNP.** After the
+  cache fix, every pitcher's Act FPTS corrected except Messick — whose June 10
+  line nets *exactly 0.0* (5.2 IP, 4 K, 5 H, 3 BB, 4 ER, L). The extraction's
+  `if fpts != 0` gate (and the frontend's `fpts !== 0` checks + the row
+  total's `total !== 0` em-dash) all treated a real 0.0 as "didn't play."
+  Backend now stores the day when any pitching stat in the line is nonzero
+  (`appeared`), the grid renders 0.0 (neutral color), and the `finalized`
+  stamp is versioned (`CACHE_DAILY_FINALIZED_V = 2`) so days stamped under
+  the v1 logic refetch once and pick up the missing outings.
 
 ---
 

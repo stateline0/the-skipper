@@ -168,7 +168,7 @@ function DayCell({ pitcher, date, schedule, today, actualFpts, benchDays, actual
     // tooltip that it isn't counted toward totals.
     if (isStarting && startInfo.preAcquisition) {
       const fpts = actualFpts?.[pitcher.name]?.[date]
-      const hasFpts = fpts !== undefined && fpts !== 0
+      const hasFpts = fpts !== undefined  // 0.0 is a real outing (e.g. a start netting exactly zero), not DNP
       const breakdown = projectionDetails?.[pitcher.name]
       const startDetail = breakdown?.starts?.find((s: any) => s.date === date)
       const displayProj = startDetail?.proj
@@ -219,7 +219,7 @@ function DayCell({ pitcher, date, schedule, today, actualFpts, benchDays, actual
           : <span style={{ fontSize: 9, fontWeight: 700, fontFamily: 'var(--mono)', color: 'var(--blue)', background: 'var(--blue-light)', borderRadius: 99, padding: '0px 4px' }}>P</span>
       const color = isLockedIn ? 'var(--green)' : 'var(--ink-3)'
       const fpts = actualFpts?.[pitcher.name]?.[date]
-      const hasFpts = fpts !== undefined && fpts !== 0
+      const hasFpts = fpts !== undefined  // 0.0 is a real outing (e.g. a start netting exactly zero), not DNP
       const wasOnBench = benchDays?.[pitcher.name]?.includes(date) ?? false
       const perStart = lockedProjections?.[pitcher.name]?.[date] ?? fptsPerStart?.[pitcher.name]
       const breakdown = projectionDetails?.[pitcher.name]
@@ -285,7 +285,7 @@ function DayCell({ pitcher, date, schedule, today, actualFpts, benchDays, actual
           {!isLive && hasFpts && (
             <div style={{
               fontSize: 10, fontFamily: 'var(--mono)', fontWeight: 700,
-              color: wasOnBench ? 'var(--ink-3)' : fpts > 0 ? 'var(--green)' : 'var(--red)',
+              color: wasOnBench ? 'var(--ink-3)' : fpts > 0 ? 'var(--green)' : fpts < 0 ? 'var(--red)' : 'var(--ink-3)',
               marginTop: 1,
               textDecoration: wasOnBench ? 'line-through' : 'none',
             }}>
@@ -311,7 +311,7 @@ function DayCell({ pitcher, date, schedule, today, actualFpts, benchDays, actual
       // Team played but pitcher didn't start — still show FPTS if they appeared (e.g. relievers)
       const isLive = isToday && gameInfo.status === 'in_progress'
       const fpts = actualFpts?.[pitcher.name]?.[date]
-      const hasFpts = fpts !== undefined && fpts !== 0
+      const hasFpts = fpts !== undefined  // 0.0 is a real outing (e.g. a start netting exactly zero), not DNP
       const wasOnBench = benchDays?.[pitcher.name]?.includes(date) ?? false
       const hasSave = !!actualSaves?.[pitcher.name]?.[date]
       const live = liveStats?.[pitcher.name]
@@ -635,17 +635,18 @@ export default function ScheduleGrid({
                       .filter(s => s.preAcquisition)
                       .map(s => s.date)
                   )
-                  const total = Object.entries(actualFpts[pitcher.name] || {}).reduce(
-                    (a, [d, v]) => a + (preAcqDates.has(d) ? 0 : v),
-                    0
-                  )
+                  const counted = Object.entries(actualFpts[pitcher.name] || {})
+                    .filter(([d]) => !preAcqDates.has(d))
+                  const total = counted.reduce((a, [, v]) => a + v, 0)
+                  // Em-dash only when there are no counted outings — a total of
+                  // exactly 0.0 from real appearances renders as 0.0.
                   return (
                     <td style={{
                       ...cellStyle,
                       fontFamily: 'var(--mono)', fontWeight: 700,
                       color: total > 0 ? 'var(--green)' : total < 0 ? 'var(--red)' : 'var(--ink-3)',
                     }}>
-                      {total !== 0 ? (total > 0 ? '+' : '') + total.toFixed(1) : '—'}
+                      {counted.length ? (total > 0 ? '+' : '') + total.toFixed(1) : '—'}
                     </td>
                   )
                 })()}
