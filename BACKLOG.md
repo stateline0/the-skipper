@@ -1,6 +1,6 @@
 # The Skipper — Backlog
 
-Last updated: June 10, 2026 (session 40 — P0 ships: starts-only rates, exact counterfactuals, actuals unification + cron ImportError hotfix)
+Last updated: June 12, 2026 (session 41 — actuals cache fixes shipped; trade-engine 3-phase spec approved & ranked into P1)
 
 ---
 
@@ -19,12 +19,14 @@ Each tier references the detailed items below — no items were removed, only ra
 6. ~~**Starts-only per-start pitcher rates**~~ — **shipped session 40.** `per_start_avgs_from_logs()` (gs≥1 rows) in `projection.py` + `cron.py`; capped season-total path remains the fallback (no logs / prior year).
 
 ### P1 — Next: decision automation (the indispensability layer)
-1. **Hitters in AI recommendations** — `api/analyze.py` only sees `rosterSPs`/`freeAgentSPs`; half the roster is invisible to the flagship feature. Prereq for the planner MVP. (New — see *Future ideas → Promoted proposals*.)
-2. **Weekly planner / decision automation MVP** (→ section below) — the roadmap centerpiece.
-3. **Hitter nudge engine** (→ *Hitters* section) — watchlist/alert, buildable today on FA actuals.
-4. **Morning lineup check / scratch alerts** (new — see *Promoted proposals*) — closes the daily loop.
-5. **Live freshness for hitter projections** (→ *Hitters* section).
-6. **Unify roster-page vs cron proj2h scoring** (→ *Hitters* follow-up).
+1. **Hitters in AI recommendations** — `api/analyze.py` only sees `rosterSPs`/`freeAgentSPs`; half the roster is invisible to the flagship feature. Prereq for the planner MVP **and a hard prereq for the trade evaluator/finder (Conner, June 12: both player types must be first-class in trade suggestions)**. (See *Future ideas → Promoted proposals*.)
+2. **League rosters viewer — trade engine Phase 1** (→ *Trade engine* section below; approved as-is June 12). No AI dependency — can ship before or alongside #1.
+3. **Trade evaluator + finder — trade engine Phases 2–3** (→ *Trade engine* section; spec approved June 12 with amendments). Sequenced after #1.
+4. **Weekly planner / decision automation MVP** (→ section below) — the roadmap centerpiece.
+5. **Hitter nudge engine** (→ *Hitters* section) — watchlist/alert, buildable today on FA actuals.
+6. **Morning lineup check / scratch alerts** (new — see *Promoted proposals*) — closes the daily loop.
+7. **Live freshness for hitter projections** (→ *Hitters* section).
+8. **Unify roster-page vs cron proj2h scoring** (→ *Hitters* follow-up).
 
 ### P2 — Model depth
 - Phases 8–10 (BvP, lineup-spot volume, per-stat park + wind-for-HR) — in MAE-impact order, lineup-spot volume likely first.
@@ -60,6 +62,60 @@ The big-picture feature still on the roadmap but not next-up:
 - [ ] Teach Anthropic API about ESPN transaction rules (daily locks, waiver priority)
 - [ ] Hybrid mode: AI suggests plan, user picks A/B for key decisions, AI outputs full sequence
 - [ ] Uses projection model data as input
+
+### Trade engine (3 phases — spec reviewed & approved by Conner, June 12, 2026)
+Supersedes the unranked "Trade analyzer" idea. Everything stays **read-only**
+(proposals are advisory; trades get clicked on ESPN). Key feasibility fact: the
+`mRoster`+`mTeam` call `get_league_data` already makes returns **all 12 teams'
+rosters** — opposing rosters are downloaded today and discarded.
+
+- [ ] **Phase 1 — League rosters viewer** (approved as-is; ~1 session; no AI
+  dependency). New `api/league.py?teamId=N`: teams index from `mTeam` (name,
+  owner, record); per team, pitchers/batters split with the existing payload
+  builders (`_build_season_stats`, `_build_savant_expected`,
+  `_build_fpts_history`, hitter stat path) — all from the all-MLB KV caches,
+  no new external fetches. New **ROS FPTS** column: pitchers Proj/G × est.
+  remaining starts (Pace logic), hitters projPerGame × team games remaining.
+  **No schedule grid for opponents** (Conner: not needed). Per-team cache
+  `cache:league-roster:{year}:{teamId}` ~30-min TTL; behind the auth gate.
+  Frontend: `pages/league.tsx` ("League" in sidebar) — team selector → two
+  `StatsTable` sections reusing existing column configs.
+- [ ] **Phase 2 — Trade evaluator** (~1–2 sessions; **prereq: hitters in AI
+  recommendations**). `api/trade.py` `{give, get, withTeamId}` →
+  - **Trade value = de-lucked ROS minus per-position replacement.** The skill
+    base is already Savant-de-lucked (xBA/xERA for pitchers, xwOBA for
+    hitters); for the ROS horizon, use the **season-skill base WITHOUT the
+    60/40 recent-form blend** (recent form re-injects short-term luck — right
+    for start/sit, wrong for a rest-of-season valuation; show it as context
+    instead). Replacement level computed **per position from the live FA
+    pool** (best available C vs best available OF, …) so positional scarcity
+    falls out naturally with no hand-tuned weights — and 2-for-1
+    consolidation prices correctly (the vacated slot refills from waivers).
+  - **Luck-arbitrage score per player** (Conner's buy-low/sell-high
+    requirement, explicit): *perceived value* = ROS from actual surface stats
+    (real ERA/wOBA — what the other manager sees) vs *model value* =
+    de-lucked ROS. Positive gap = unlucky/buy-low target; negative =
+    overperforming/sell-high candidate. Surfaced per player in the evaluator.
+  - **Starts-cap awareness:** projected weekly starts before/after vs the
+    12-start cap; surplus starts discounted (the league's real scarcity axis).
+  - **IL discounting** (not naive — v1 simplification removed per Conner):
+    DTD small haircut, IL15 ≈ −2.5 weeks, IL60 ≈ −9 weeks of remaining games,
+    assumptions displayed on the player.
+  - Output: per-side raw ROS / replacement-adjusted net / weekly-starts delta
+    / slot-group deltas, deterministic verdict, optional Claude rationale
+    (analyze.py pattern, both rosters in prompt, pitchers + batters).
+  - Frontend: row checkboxes on the League page → "Evaluate trade" drawer.
+- [ ] **Phase 3 — Trade finder** (~1–2 sessions after Phase 2).
+  `api/trade.py?mode=find`: per-team needs model (ROS Proj/G by slot group vs
+  league median → surplus/need lists); deterministic scan of 1-for-1 and
+  2-for-1 swaps kept only where **both sides net positive** after replacement
+  adjustment (the acceptance filter), **optimizing the luck-arbitrage term**
+  (send negative-gap players, receive positive-gap ones — which also boosts
+  acceptance plausibility, since outgoing players' surface stats flatter
+  them). ~50 candidates → Claude ranks top 5–10 with talking points for the
+  pitch. Every proposal surfaces its underlying numbers — a bad suggestion
+  must be visibly bad, not oracle-flavored. Frontend: "Trade Finder" tab on
+  the League page; cards expand into the Phase 2 evaluator view.
 
 ### Model Improvements
 - [ ] **Reliever projection is heuristic** (session 38, PR #157). RP weeks = FPTS/appearance × a flat **3 appearances/week** (`RP_APPEARANCES_PER_WEEK`), with small-sample regression toward a league-average reliever (`RP_BASELINE_FPTS_PER_APP`, `RP_FULL_SAMPLE`) and a 0 floor — this tamed the old `×4` blow-ups (e.g. −17) and inflated highs (~20). Possible refinements: role-aware appearance counts (closers/setup pitch more than mop-up), and projecting saves from leverage/role rather than the season save rate. Also note the year-blend leans fully on the prior season when current-year IP is tiny (why a cratered-2026 closer can still project high).
@@ -378,7 +434,9 @@ See CHANGELOG.md for full history of PRs #1-#47.
 
 ### Earlier ideas (unranked)
 
-- Trade analyzer with forward-looking schedule context
+- ~~Trade analyzer with forward-looking schedule context~~ — superseded by the
+  3-phase **Trade engine** spec (approved June 12, 2026; see the section above
+  and P1 #2–3)
 - Waiver wire rankings personalized to roster needs and matchup context
 - Live game decision engine (real-time starts limit optimization)
 - Schedule advantage alerts (2-3 week lookahead for favorable/unfavorable stretches)
