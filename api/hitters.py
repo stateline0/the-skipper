@@ -118,15 +118,29 @@ def _lock_started_days(season, period, name, days, model, today_iso, existing):
     the timezone-independent "game has begun" signal (mirrors pitcher per-start
     locks). `existing` is the pre-fetched {slug: {date: ...}} map so we only
     write genuinely new locks — avoids redundant writes + log spam on reloads.
-    Returns the count of new locks written."""
+
+    A date already holding the cron's all-MLB BASELINE lock (model.allMlb —
+    per-game rate, no factor stack) is UPGRADED to this factor-adjusted value:
+    the noon cron always beats the at-game-start page write to the NX lock, so
+    without the upgrade roster hitters' accuracy locks would never carry the
+    matchup factors. A factor-adjusted lock is frozen for good — never rewritten.
+    Returns the count of new locks written (upgrades included)."""
     have = existing.get(_hitter_slug(name), {})
     new_locks = 0
     for d in days:
         if d.get("status") not in ("final", "in_progress"):
             continue                      # not yet played → still mutable
         date = d.get("date")
-        if not date or date > today_iso or date in have:
+        if not date or date > today_iso:
             continue
+        prior = have.get(date)
+        is_baseline = (isinstance(prior, dict)
+                       and bool((prior.get("model") or {}).get("allMlb")))
+        if prior is not None and not is_baseline:
+            continue                      # factor-adjusted lock already frozen
+        model_out = dict(model)
+        if is_baseline:
+            model_out["upgradedFrom"] = "allMlb"
         set_locked_hitter_projection(season, period, name, date, {
             "name":    name,
             "fpts":    d["proj"],
@@ -138,8 +152,8 @@ def _lock_started_days(season, period, name, days, model, today_iso, existing):
                 "oppStarter": d["oppStarter"],
                 "oppHand":    d["oppHand"],
             },
-            "model":   model,
-        })
+            "model":   model_out,
+        }, overwrite=is_baseline)
         new_locks += 1
     return new_locks
 

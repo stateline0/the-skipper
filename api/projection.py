@@ -522,8 +522,6 @@ def get_projected_fpts(player_starts: list, team_woba_factors: dict = None,
                 if date and date <= today_str:
                     existing = get_locked_projection(season, period, full_name, date)
                     if existing is None:
-                        set_locked_projection(season, period, full_name, date,
-                                              round(fpts_per_game, 1))
                         opp       = sd.get("opponent", "")
                         is_home   = sd.get("is_home", True)
                         vegas_wp  = sd.get("win_prob")
@@ -568,6 +566,15 @@ def get_projected_fpts(player_starts: list, team_woba_factors: dict = None,
                         park_m    = env_to_pitcher_mult(park_f)
                         weather_m = env_to_pitcher_mult(weather_f)
                         start_proj = (lock_base + w_adj * 5 + l_adj * (-5)) * woba_m * park_m * weather_m
+                        # v1 float lock (the value ScheduleGrid falls back to
+                        # for locked past cells): store the factor-adjusted
+                        # per-start projection so locked and live cells render
+                        # on the same basis. Previously this stored Proj/G
+                        # (fpts_per_game) while live future cells showed the
+                        # per-start proj. Forward-only — existing locks keep
+                        # their old value (NX).
+                        set_locked_projection(season, period, full_name, date,
+                                              round(start_proj, 1))
                         breakdown = {
                             "fpts": round(start_proj, 1),
                             "stats": {

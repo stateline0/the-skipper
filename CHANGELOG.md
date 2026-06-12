@@ -2,6 +2,49 @@
 
 ---
 
+## Session 42 — June 12, 2026 — Four small consistency fixes (lock values + dropped-player display)
+
+The four self-contained items from the backlog review, batched into one PR.
+All forward-only; no payload shapes change.
+
+### What shipped
+- **Cron W/L contributions aligned with PR #146** (`api/cron.py`). The all-MLB
+  lock path scaled `w_contrib`/`l_contrib` by the pitcher's separate historical
+  W/L rates (the pre-PR-#146 form), so with this path's default 0.5 win prob
+  the net W/L reflected the pitcher's record instead of being 0. Now uses the
+  decision-rate-split-by-win-prob form `projection.py` uses
+  (`decision_rate = w + l`; net = `decision_rate × STARTER_WIN_SHARE × 5 ×
+  (2·win_prob − 1)`), and the breakdown's `stats.w`/`stats.l` mirror it.
+  `fpts = baseNoWl + (w−l)×5` still decomposes exactly, so accuracy
+  counterfactual reconstruction is unaffected. `proj2all:` and `proj2:` locks
+  for the same start now agree on the W/L component.
+- **v1 lock stores the per-start projection, not Proj/G**
+  (`api/projection.py`). `set_locked_projection` moved below the per-start
+  computation inside the lock block and now stores the factor-adjusted
+  `start_proj` (identical to the v2 lock's `fpts`), so `ScheduleGrid`'s locked
+  past cells and live future cells render on the same basis. Existing v1 locks
+  keep their old value (NX).
+- **proj2h unification: page upgrades the cron's baseline lock**
+  (`api/hitters.py`, `api/kv.py`). The 17:00 UTC cron locks a per-game
+  BASELINE (`model.allMlb`, no factor stack) before any game starts, so it
+  always won the NX race against the Hitters page's factor-adjusted
+  at-game-start lock — roster hitters' accuracy locks were silently
+  baseline-only. `_lock_started_days` now detects an all-MLB baseline lock and
+  upgrades it to the factor-adjusted value (`set_locked_hitter_projection`
+  gained an `overwrite` flag — the only sanctioned overwrite of a lock;
+  `model.upgradedFrom: "allMlb"` records the upgrade). A factor-adjusted lock
+  is frozen for good and never rewritten.
+- **Dropped-player per-start projection display** (`api/espn.py`). The
+  schedule grid only reads the global `projectionDetails` map, which was
+  populated from `roster_sps` only — dropped pitchers' details lived solely on
+  `pitcher.projDetails` and never reached the cell renderer, so their
+  live/future starts showed a confirmed indicator with no `(proj: +X.X)`.
+  `dropped_proj_details` now merges into `proj_details_roster` before the
+  payload returns (option 1 from the backlog — no frontend fork; dropped names
+  are disjoint from the roster by construction).
+
+---
+
 ## Session 41 — June 12, 2026 — Fix: `cache:daily` froze mid-game box scores as finals
 
 Diagnosed from screenshots showing wrong Act FPTS for June 9–11 (Cease +10.0
