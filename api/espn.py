@@ -866,6 +866,16 @@ def get_league_data(team_id: int, week: int) -> dict:
         if name not in roster_actual_fpts and filtered_fpts:
             roster_actual_fpts[name] = filtered_fpts
 
+    # Dropped players' per-start details merge into the global projectionDetails
+    # map. The schedule grid's cell renderer only reads projectionDetails[name];
+    # the per-player projDetails field above never reaches it, so a dropped
+    # pitcher's live/future start showed a confirmed indicator with no
+    # (proj: +X.X) underneath. Dropped names are disjoint from the roster by
+    # construction, so this can't clobber a rostered pitcher's breakdown.
+    for name, details in dropped_proj_details.items():
+        if details and name not in proj_details_roster:
+            proj_details_roster[name] = details
+
     return {
         "ok":                True,
         "teamName":          team_name,

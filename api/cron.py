@@ -348,8 +348,16 @@ def lock_all_mlb_projections() -> dict:
             blended["bb"] * -1 + blended["er"] * -2 + blended["hb"] * -1 +
             blended["sv"] * 5
         ) * recent_ratio
-        w_contrib = blended["w"] * win_prob * STARTER_WIN_SHARE * 5
-        l_contrib = blended["l"] * (1 - win_prob) * STARTER_WIN_SHARE * (-5)
+        # W/L mirrors projection.py's PR #146 form: expected W and L both
+        # scale by the pitcher's total decision rate split by win prob, so
+        # the net (= decision_rate × SWS × 5 × (2·win_prob − 1)) tracks the
+        # matchup, not the W-L record. With this path's default 0.5 win prob
+        # the net is exactly 0 — previously it reflected the pitcher's
+        # record, so proj2all: and proj2: locks for the same start disagreed
+        # on the W/L component.
+        decision_rate = blended["w"] + blended["l"]
+        w_contrib = decision_rate * win_prob * STARTER_WIN_SHARE * 5
+        l_contrib = decision_rate * (1 - win_prob) * STARTER_WIN_SHARE * (-5)
         start_proj = base_no_wl + w_contrib + l_contrib
 
         # Lock the projection
@@ -362,8 +370,8 @@ def lock_all_mlb_projections() -> dict:
                 "bb": round(blended["bb"], 2),
                 "er": round(blended["er"], 2),
                 "hb": round(blended["hb"], 2),
-                "w":  round(blended["w"] * win_prob * STARTER_WIN_SHARE, 3),
-                "l":  round(blended["l"] * (1 - win_prob) * STARTER_WIN_SHARE, 3),
+                "w":  round(decision_rate * win_prob * STARTER_WIN_SHARE, 3),
+                "l":  round(decision_rate * (1 - win_prob) * STARTER_WIN_SHARE, 3),
                 "sv": round(blended["sv"], 3),
             },
             "matchup": {

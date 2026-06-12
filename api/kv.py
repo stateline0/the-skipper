@@ -273,10 +273,16 @@ def _make_hitter_key(season: int, period: int, player_name: str, date: str) -> s
     return f"proj2h:{season}:{period}:{slug}:{date}"
 
 
-def set_locked_hitter_projection(season: int, period: int, player_name: str, date: str, breakdown: dict):
+def set_locked_hitter_projection(season: int, period: int, player_name: str, date: str, breakdown: dict, overwrite: bool = False):
     """
     Lock a hitter's per-game projection breakdown into Redis as JSON.
     Uses NX — will not overwrite an existing locked value (freeze at game start).
+
+    overwrite=True replaces an existing lock. The only sanctioned use is the
+    Hitters page upgrading the cron's all-MLB BASELINE lock (model.allMlb,
+    no factor stack) to the factor-adjusted value at game start — the noon
+    cron always wins the NX race for roster hitters, so without the upgrade
+    their accuracy locks would stay baseline-only.
 
     breakdown should contain:
       - fpts: float — the per-game FPTS projection (base × factor stack)
@@ -291,8 +297,12 @@ def set_locked_hitter_projection(season: int, period: int, player_name: str, dat
         import json
         key = _make_hitter_key(season, period, player_name, date)
         val = json.dumps(breakdown)
-        _redis.set(key, val, nx=True)
-        print(f"[kv.py] Locked hitter projection: {key} ({len(val)} bytes)")
+        if overwrite:
+            _redis.set(key, val)
+        else:
+            _redis.set(key, val, nx=True)
+        print(f"[kv.py] Locked hitter projection: {key} ({len(val)} bytes)"
+              f"{' [upgraded]' if overwrite else ''}")
     except Exception as e:
         print(f"[kv.py] set_hitter failed for {player_name} {date}: {e}")
 

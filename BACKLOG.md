@@ -1,6 +1,6 @@
 # The Skipper — Backlog
 
-Last updated: June 12, 2026 (session 41 — actuals cache fixes shipped; trade-engine 3-phase spec approved & ranked into P1)
+Last updated: June 12, 2026 (session 42 — four small consistency items resolved: cron W/L formula aligned with PR #146, v1 lock stores per-start proj, proj2h baseline→factor-adjusted upgrade, dropped-player projDetails merge)
 
 ---
 
@@ -15,7 +15,7 @@ Each tier references the detailed items below — no items were removed, only ra
 2. ~~Urgent code fixes from the June 10 review~~ — shipped session 39 (Claude model retirement, env-var validation, silent-failure logging; full list in REVIEW.md).
 3. ~~**Pitcher-actuals unification**~~ — **shipped session 40.** Accuracy roster scope now reads game-log `actual-all:` actuals (validated against ESPN's applied total, ESPN-box fallback for pre-cron dates); FA Act FPTS gaps filled from game logs on the My Team/FA payload.
 4. ~~**Exact accuracy counterfactuals**~~ — **shipped session 40.** Locks store `baseNoWl` + `recentRatio`; accuracy rebuilds counterfactuals from the real per-start formula (incl. W/L + weather) for new locks, legacy approximation for old ones.
-5. **v1 lock stores Proj/G, not per-start proj** (→ *Model Improvements*) — consistency between locked and live cells.
+5. ~~**v1 lock stores Proj/G, not per-start proj**~~ — **shipped session 42** (see *Model Improvements*).
 6. ~~**Starts-only per-start pitcher rates**~~ — **shipped session 40.** `per_start_avgs_from_logs()` (gs≥1 rows) in `projection.py` + `cron.py`; capped season-total path remains the fallback (no logs / prior year).
 
 ### P1 — Next: decision automation (the indispensability layer)
@@ -26,14 +26,14 @@ Each tier references the detailed items below — no items were removed, only ra
 5. **Hitter nudge engine** (→ *Hitters* section) — watchlist/alert, buildable today on FA actuals.
 6. **Morning lineup check / scratch alerts** (new — see *Promoted proposals*) — closes the daily loop.
 7. **Live freshness for hitter projections** (→ *Hitters* section).
-8. **Unify roster-page vs cron proj2h scoring** (→ *Hitters* follow-up).
+8. ~~**Unify roster-page vs cron proj2h scoring**~~ — **shipped session 42** (→ *Hitters* follow-up; all-MLB matchup factors remain a future consideration).
 
 ### P2 — Model depth
 - Phases 8–10 (BvP, lineup-spot volume, per-stat park + wind-for-HR) — in MAE-impact order, lineup-spot volume likely first.
 - Role-aware RP appearances + leverage-based saves (→ *Model Improvements*).
 - Pitcher platoon (Layer 5), rest & workload (Layer 6), wind direction (Phase 3 weather).
 - Projection confidence bands (new — see *Promoted proposals*).
-- Prior-year Savant fallback; dropped-player projDetails merge; SSPD roster bug.
+- Prior-year Savant fallback; SSPD roster bug. (~~Dropped-player projDetails merge~~ — shipped session 42.)
 
 ### P3 — Polish & ops
 - Title-case/accents preservation, ProjectionTooltip wOBA split, dashboard at-a-glance, pro-team-map caching.
@@ -47,6 +47,7 @@ Multi-user / multi-league, category-league support (the stat-vector hitter model
 ## 🔜 Next session priorities
 
 ### ⏳ Verify next — all-MLB cron (now includes the session-40 import fix)
+- [ ] **Verify the session-42 proj2h baseline→factor-adjusted upgrade.** The noon cron writes the all-MLB BASELINE lock (`model.allMlb`) first; the Hitters page should UPGRADE it to the factor-adjusted value on the first load after a game starts. Check: load the Hitters page after games begin, then either grep Vercel logs for `[kv.py] Locked hitter projection: … [upgraded]` lines or read a roster hitter's `proj2h:{2026}:{period}:{slug}:{date}` key in Upstash — it should carry `model.upgradedFrom: "allMlb"` plus a non-empty `factors` stack (a stale baseline lock with `allMlb: true` and `factors: []` for a started roster game means the upgrade didn't fire). Note the page only locks on load, so the upgrade requires visiting the Hitters page post-first-pitch.
 - [ ] **Confirm the daily cron runs clean on the next scheduled tick** (17:00 UTC). **Session 40 discovery:** PR #154 imported `fetch_game_logs_hitting` from `fetcher` but the function lives in `mlb` — `api/cron.py` has raised `ImportError` at module load since June 7, so **every cron run since then failed entirely** (no `proj2all:` locks, no `actual-all:` actuals, no ESPN locks, no `cache:cron-summary:` writes — for pitchers AND hitters; py_compile can't catch ImportError, which is why "logic + compile" validation missed it). Fixed in session 40 (import moved to `mlb`, verified by importing the full module chain). After the next run, read `cache:cron-summary:{date}`: check `mlb.ok`, `espn.ok`, and `hitter.ok: true` with `hittersToday` ~250–350 and nonzero `locked` + `actualsStored`. If `hitter.error` is set, the original PR #154 candidates still apply (`_teamId` None → 0 hitters mapped; `fetch_game_logs_hitting` runtime pushing the 120s budget; `get_projected_hitter_fpts` edge at league scale). The June 7–10 `actual-all:`/`proj2all:` gap: actuals for those dates will backfill on the next successful run (game logs cover the whole season and the dates' keys were never NX-locked); the missed projection locks are unrecoverable by design (locking is the point).
 
 ### Flagged during review (next up)
@@ -122,8 +123,8 @@ rosters** — opposing rosters are downloaded today and discarded.
 - [ ] Weather impact — Phase 3: wind direction model (add `PARK_OUTFIELD_BEARING` per park, compute out-to-outfield wind component, combine with temp into single weather multiplier)
 - [ ] ProjectionTooltip: split opponent wOBA display into season + last-14-day components (currently shows only the blended factor; show `seasonFactor`, `recentFactor`, and `blendedFactor` with weights). Note: the tooltip was otherwise rebuilt to reconcile in session 30 (PR #125).
 - [x] ~~**Accuracy `factorAnalysis` reconstruction is approximate**~~ — **fixed session 40.** Locks now store `model.baseNoWl` (the recent-form-scaled per-start skill base) + `model.recentRatio`; `api/accuracy.py` rebuilds counterfactuals from the exact formula `(baseNoWl + (w−l)×5) × woba × park × weather` for new locks (incl. a new weather counterfactual + Weather factor card), keeping the legacy `adjustedBase` approximation for pre-June-10 locks. Per-start `exactCounterfactuals` + `factorAnalysis.exactStarts` expose the mix.
-- [ ] **Cron W/L contributions still use the pre-PR-#146 formula** (surfaced session 40). `cron.py` scales `w_contrib`/`l_contrib` by the pitcher's separate historical W/L rates instead of the decision-rate-split-by-win-prob form `projection.py` uses — with the cron's default 0.5 win prob, the net should be 0 but instead reflects the pitcher's record. Doesn't affect counterfactual exactness (`fpts = baseNoWl + (w−l)×5` holds either way) but `proj2all:` and `proj2:` locks for the same start disagree on the W/L component. Align with `projection.py` (forward-only).
-- [ ] **v1 locked value stores Proj/G, not the per-start projection.** `set_locked_projection` (the v1 float read by `ScheduleGrid` for locked past-start cells) stores `fpts_per_game` (≈ Proj/G), while live future cells show the factor-adjusted per-start `proj`. So a locked past start and a future start render on different bases. Low impact (past cells usually show actual FPTS), but lock the per-start `start_proj` instead for consistency.
+- [x] ~~**Cron W/L contributions still use the pre-PR-#146 formula**~~ — **fixed session 42.** `cron.py` now uses the same decision-rate-split-by-win-prob form as `projection.py` (`decision_rate = w + l`, split by win prob × `STARTER_WIN_SHARE`), so with the cron's default 0.5 win prob the net W/L is exactly 0 instead of reflecting the pitcher's record. `stats.w`/`stats.l` in the `proj2all:` breakdown mirror the same form; `fpts = baseNoWl + (w−l)×5` still decomposes exactly. Forward-only.
+- [x] ~~**v1 locked value stores Proj/G, not the per-start projection.**~~ — **fixed session 42.** `projection.py`'s v1 `set_locked_projection` call moved below the per-start computation and now stores the factor-adjusted `start_proj` (same value as the v2 lock's `fpts`), so locked past cells and live future cells render on the same basis. Forward-only — existing v1 locks keep their Proj/G value (NX).
 
 ### Pre-acquisition follow-ups (deferred from session 26 PR #111)
 PR #111 fixed the user-visible aggregates for mid-week pickups but deliberately punted on three downstream concerns. Two remain; the third closed as PR #115 in session 27. None are user-blocking; all forward-only.
@@ -132,7 +133,7 @@ PR #111 fixed the user-visible aggregates for mid-week pickups but deliberately 
 - [x] ~~**Dropped player post-drop `actualFpts` pruning.**~~ (`info["player_fpts"]` now intersected with `days_on_team_set` in the dropped-player branch of `api/espn.py`. Symmetric closure of the rostered-window invariant — see KNOWLEDGE.md. **Note:** session 27's PR #115 was written but never merged — the fix was absent from `main` until re-landed in session 29 after a project review caught the discrepancy. The original PR #115 has since been closed as superseded.)
 
 ### Dropped-player per-start projection display
-- [ ] Schedule grid reads `projectionDetails?.[pitcher.name]` from a global map populated only from `roster_sps`. Dropped players' per-start details live on `pitcher.projDetails` (set on the player object directly at `api/espn.py` line 622), which is never reached by the cell rendering logic. Net effect: any dropped pitcher with future or live-day starts displays a confirmed indicator without a `+X.X` projection underneath. Surfaced during PR #114 verification when the pre-fix Montero case landed in `droppedPlayers`. Two fix options: (1) merge dropped players' `projDetails` into `proj_details_roster` in `api/espn.py` before returning so the global map covers them, or (2) update `ScheduleGrid.tsx` cell paths to fall back to `pitcher.projDetails` when the global lookup misses. Option (1) is cleaner because it doesn't fork the frontend's data source. Low urgency — most dropped pitchers' starts are in the past where the cell shows actual FPTS instead.
+- [x] ~~Schedule grid reads `projectionDetails?.[pitcher.name]` from a global map populated only from `roster_sps`; dropped players' details never reach it~~ — **fixed session 42** via option (1): `api/espn.py` merges `dropped_proj_details` into `proj_details_roster` before returning (dropped names are disjoint from the roster by construction, so no clobbering). The per-player `projDetails` field stays on the dropped-player object for backward compatibility. Frontend untouched.
 
 ### Display polish (low priority)
 - [ ] **Advanced (Savant) stats are current-season only** (session 38). xERA/xwOBA/Brl%/Whiff% render an em-dash for pitchers with no current-year batted-ball footprint (small sample / hasn't pitched), even when the projection leans on last season — e.g. Estévez (great 2025, tiny ugly 2026). Optional: fall back to prior-year Savant values (labelled by year) so the columns populate for these arms. Deferred to avoid mixing a 2025 Savant line with a 2026 ERA in the same row; the Proj FPTS tooltip now surfaces the season-basis instead.
@@ -193,9 +194,15 @@ PR #111 fixed the user-visible aggregates for mid-week pickups but deliberately 
     `MLB_TEAM_ID_TO_ABBREV`). Bounded to today's hitters; isolated/last in the
     cron. Forward-only; validated by logic+compile, confirm live via
     `cache:cron-summary:{date}.hitter`.
-  - [ ] **Follow-up:** unify roster-page vs cron proj2h scoring/value (page locks
-    factor-adjusted, cron locks baseline; NX first-write-wins on the small
-    overlap). Also consider all-MLB matchup factors + a starts-only follow-up.
+  - [x] ~~**Follow-up:** unify roster-page vs cron proj2h scoring/value~~ —
+    **fixed session 42.** The noon cron always beat the at-game-start page
+    write to the NX lock, so roster hitters' accuracy locks stayed
+    baseline-only. `_lock_started_days` now UPGRADES a cron all-MLB baseline
+    lock (`model.allMlb`, no factor stack) to the page's factor-adjusted value
+    at game start (`set_locked_hitter_projection(..., overwrite=True)`, the
+    only sanctioned overwrite; `model.upgradedFrom: "allMlb"` for
+    traceability). A factor-adjusted lock is frozen for good. Still open:
+    all-MLB matchup factors in the cron pass + a starts-only follow-up.
 - [x] ~~**Starts-only per-start pitcher rates (follow-up to the IP cap, session 35).**~~ — **shipped session 40.** `per_start_avgs_from_logs()` averages the `gs>=1` game-log rows (current year, SP only); the capped season-total path remains the fallback for pitchers without enough logged starts and for the previous season (no prior-year logs fetched). `model.ratesBasis` in the lock + the `[model/logs]` log tag record which path fired. Verified on a synthetic swingman: 25 relief IP + 3×3-IP starts → 6.6 FPTS/start from logs vs 17.0 from the capped season-total path.
 - [x] ~~**Pitcher-actuals unification (follow-up to hitter accuracy).**~~ —
   **shipped session 40.** Accuracy roster scope reads game-log `actual-all:`
