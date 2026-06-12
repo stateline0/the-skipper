@@ -21,6 +21,11 @@ from kv import cache_get, cache_set
 
 SEASON_START = datetime(2026, 3, 25)
 
+# Version stamp for finalized cache:daily entries. Bump to force a one-time
+# refetch of already-stamped days after a fix to the extraction logic above
+# them — v2: v1 writes dropped zero-FPTS appearances (the Messick case).
+CACHE_DAILY_FINALIZED_V = 2
+
 # ESPN per-game stat ID mapping for pitching scoring stats.
 # Verified against Joe Ryan (W, 7IP/2H/2ER/1BB/1HBP/5K = 23.0 FPTS)
 # and Kyle Harrison (L, 4.1IP/4H/2ER/1BB/1HBP/1K = -1.0 FPTS).
@@ -436,9 +441,10 @@ def get_actual_fpts(past_dates: list, player_names: set, headers: dict,
     # freezing partial box scores (or missing pitchers entirely, for West
     # Coast night games) into cache:daily. The latest MLB games end by
     # ~06:30 UTC, so a date is final only once (now − 8h) has moved past it.
-    # Entries are stamped "finalized": True when written under this rule;
-    # unstamped entries (legacy + the partial snapshots written June 6-12)
-    # are refetched and overwritten — self-healing for the corrupted window.
+    # Entries are stamped "finalized": CACHE_DAILY_FINALIZED_V when written
+    # under this rule; unstamped or older-version entries (legacy, the partial
+    # snapshots written June 6-12, and v1 stamps missing zero-FPTS outings)
+    # are refetched and overwritten — self-healing, no manual KV cleanup.
     today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     finalized_cutoff = (datetime.now(timezone.utc) - timedelta(hours=8)).strftime("%Y-%m-%d")
     dates_to_fetch = []
@@ -449,7 +455,7 @@ def get_actual_fpts(past_dates: list, player_names: set, headers: dict,
             continue
         try:
             cached = cache_get(f"cache:daily:{date_str}")
-            if cached and cached.get("finalized"):
+            if cached and cached.get("finalized") == CACHE_DAILY_FINALIZED_V:
                 cached_fpts    = cached.get("fpts", {})
                 cached_saves   = cached.get("saves", {})
                 cached_bench   = cached.get("bench", {})
@@ -537,14 +543,23 @@ def get_actual_fpts(past_dates: list, player_names: set, headers: dict,
                             if (stat.get("statSplitTypeId") == 5 and
                                     stat.get("scoringPeriodId") == scoring_period):
                                 fpts = stat.get("appliedTotal", 0.0)
-                                if fpts != 0:
-                                    day_fpts[name] = round(float(fpts), 1)
                                 raw_stats = stat.get("stats", {})
+                                # "Appeared" = any pitching stat in the line is
+                                # nonzero. The old `fpts != 0` gate silently
+                                # dropped real outings that net exactly 0.0 FPTS
+                                # (Messick: 5.2 IP, 4 K, 5 H, 3 BB, 4 ER, L =
+                                # 0.0) as if the pitcher never played.
+                                appeared = any(
+                                    float(raw_stats.get(sid, 0) or 0)
+                                    for sid in ESPN_PITCHING_STAT_IDS
+                                )
+                                if fpts != 0 or appeared:
+                                    day_fpts[name] = round(float(fpts), 1)
                                 sv = raw_stats.get("57", 0)
                                 if sv:
                                     day_saves[name] = int(sv)
                                 # Extract per-stat actuals for accuracy tracking
-                                if raw_stats and fpts != 0:
+                                if raw_stats and (fpts != 0 or appeared):
                                     outs = raw_stats.get("34", 0)
                                     actual_breakdown = {
                                         "fpts": round(float(fpts), 1),
@@ -593,7 +608,7 @@ def get_actual_fpts(past_dates: list, player_names: set, headers: dict,
                             "bench":        list(day_bench),
                             "my_team":      day_my_team,
                             "actual_stats": day_actual_stats,
-                            "finalized":    True,
+                            "finalized":    CACHE_DAILY_FINALIZED_V,
                         })
                     except Exception:
                         pass
