@@ -428,7 +428,19 @@ def get_actual_fpts(past_dates: list, player_names: set, headers: dict,
     live_stats_result = {}  # pitcher_name -> {fpts, stats: {ip, so, h, bb, er, ...}}
 
     # ── Check cache for each past day ─────────────────────────────────────
+    # A calendar date is only safe to cache permanently once its games are
+    # certainly over. "date < today (UTC)" is NOT that: at 00:00-00:15 UTC
+    # (7-8pm ET) yesterday-by-UTC just became "past" while its ET/PT night
+    # games are mid-flight or haven't started — and the 15-min warm cron
+    # (api/warm.py, session 30) reliably hits that window, permanently
+    # freezing partial box scores (or missing pitchers entirely, for West
+    # Coast night games) into cache:daily. The latest MLB games end by
+    # ~06:30 UTC, so a date is final only once (now − 8h) has moved past it.
+    # Entries are stamped "finalized": True when written under this rule;
+    # unstamped entries (legacy + the partial snapshots written June 6-12)
+    # are refetched and overwritten — self-healing for the corrupted window.
     today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    finalized_cutoff = (datetime.now(timezone.utc) - timedelta(hours=8)).strftime("%Y-%m-%d")
     dates_to_fetch = []
 
     for date_str in past_dates:
@@ -437,7 +449,7 @@ def get_actual_fpts(past_dates: list, player_names: set, headers: dict,
             continue
         try:
             cached = cache_get(f"cache:daily:{date_str}")
-            if cached:
+            if cached and cached.get("finalized"):
                 cached_fpts    = cached.get("fpts", {})
                 cached_saves   = cached.get("saves", {})
                 cached_bench   = cached.get("bench", {})
@@ -569,8 +581,11 @@ def get_actual_fpts(past_dates: list, player_names: set, headers: dict,
                         if name in day_actual_stats:
                             live_stats_result[name] = day_actual_stats[name]
 
-                # Cache this day if it's fully completed (not today)
-                if date_str < today_str:
+                # Cache this day only once its games are certainly over (see
+                # finalized_cutoff above). Dates between the cutoff and today
+                # are served fresh on every call and picked up for permanent
+                # caching on the first fetch after 08:00 UTC.
+                if date_str < finalized_cutoff:
                     try:
                         cache_set(f"cache:daily:{date_str}", {
                             "fpts":         day_fpts,
@@ -578,6 +593,7 @@ def get_actual_fpts(past_dates: list, player_names: set, headers: dict,
                             "bench":        list(day_bench),
                             "my_team":      day_my_team,
                             "actual_stats": day_actual_stats,
+                            "finalized":    True,
                         })
                     except Exception:
                         pass
