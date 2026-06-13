@@ -233,7 +233,7 @@ export function IlPill({ status, estReturn, detail }: {
   status?: string; estReturn?: string; detail?: string
 }) {
   const ref = useRef<HTMLSpanElement>(null)
-  const [pos, setPos] = useState<{ top: number; left: number } | null>(null)
+  const [pos, setPos] = useState<{ left: number; top?: number; bottom?: number } | null>(null)
   if (!status) return null
   const isIL = status.startsWith('IL')
   if (!isIL && status !== 'DTD' && status !== 'SUSP') return null
@@ -254,7 +254,15 @@ export function IlPill({ status, estReturn, detail }: {
     e.stopPropagation()
     if (pos) { setPos(null); return }
     const r = ref.current?.getBoundingClientRect()
-    if (r) setPos({ top: r.bottom + 4, left: r.left })
+    if (!r) return
+    // Flip above the pill when there isn't room below (IL rows often sit at the
+    // bottom of the table — a downward popover would run off-screen and force a
+    // scroll). Anchor by `bottom` when flipped so height doesn't matter.
+    const roomBelow = window.innerHeight - r.bottom
+    const left = Math.min(r.left, window.innerWidth - 180)
+    setPos(roomBelow < 96
+      ? { left, bottom: window.innerHeight - r.top + 4 }
+      : { left, top: r.bottom + 4 })
   }
   return (
     <span ref={ref} onClick={toggle} style={{ ...pillStyle, cursor: 'pointer' }}>
@@ -265,7 +273,7 @@ export function IlPill({ status, estReturn, detail }: {
           <div onClick={(e) => { e.stopPropagation(); setPos(null) }}
                style={{ position: 'fixed', inset: 0, zIndex: 1000 }} />
           <div onClick={(e) => e.stopPropagation()} style={{
-            position: 'fixed', top: pos.top, left: pos.left, zIndex: 1001,
+            position: 'fixed', left: pos.left, top: pos.top, bottom: pos.bottom, zIndex: 1001,
             background: 'var(--white)', border: '1px solid var(--border-strong)',
             borderRadius: 'var(--radius)', boxShadow: 'var(--shadow)', padding: '8px 10px',
             fontFamily: 'var(--mono)', fontSize: 11, whiteSpace: 'nowrap', textAlign: 'left',
