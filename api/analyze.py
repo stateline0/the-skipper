@@ -29,35 +29,54 @@ def build_prompt(data: dict) -> str:
         f"{', opp: ' + p['opps'] if p.get('opps') else ''}"
         for p in data["freeAgentSPs"]
     )
+    roster_hitter_lines = "\n".join(
+        f"  • {p['name']} ({p['team']}, {p.get('pos', '?')}, bats {p.get('bats', '?')}) — "
+        f"{p.get('games', '?')} games, proj {p.get('projFpts', '?')} FPTS "
+        f"({p.get('projPerGame', '?')}/game)"
+        for p in data.get("rosterHitters", [])
+    ) or "  (none provided)"
+    fa_hitter_lines = "\n".join(
+        f"  • {p['name']} ({p['team']}, {p.get('pos', '?')}, bats {p.get('bats', '?')}) — "
+        f"{p.get('games', '?')} games, proj {p.get('projFpts', '?')} FPTS "
+        f"({p.get('projPerGame', '?')}/game), {p.get('percentOwned', '?')}% owned"
+        for p in data.get("freeAgentHitters", [])
+    ) or "  (none provided)"
 
-    return f"""You are a fantasy baseball starts optimizer. Today is {today_name}, {week_label}.
+    return f"""You are a fantasy baseball roster optimizer covering both pitchers and hitters. Today is {today_name}, {week_label}.
 
 LEAGUE SETTINGS:
-- Weekly starts limit: {limit}
+- Weekly pitcher starts limit: {limit}
 - Starts already locked in from current roster: {scheduled}
 - Starts still needed to hit the limit exactly: {needed}
+- Hitters have no weekly limit — they score in daily lineup slots, so games played and proj FPTS/game drive hitter value.
 
 MY ROSTERED STARTING PITCHERS:
 {roster_lines}
 
-AVAILABLE FREE AGENTS / STREAMERS (checked by user):
+AVAILABLE FREE AGENT PITCHERS / STREAMERS (top 10 by projected FPTS):
 {fa_lines}
 
+MY ROSTERED HITTERS (pos is current lineup slot; IL = injured list):
+{roster_hitter_lines}
+
+TOP AVAILABLE FREE AGENT BATTERS (top 4 per position by projected FPTS):
+{fa_hitter_lines}
+
 TASK:
-Generate a complete, actionable recommendation plan. Structure your response with exactly these four markdown sections:
+Generate a complete, actionable recommendation plan covering BOTH pitchers and hitters. Structure your response with exactly these four markdown sections:
 
 ## Adds
-For each pitcher to add: name, team, how many starts they have this week, projected FPTS, the opponent(s), and exactly who to drop to make room (if needed). Be explicit: "Add X, drop Y."
+For each player to add: name, team, position, projected FPTS (and starts + opponents for pitchers), and exactly who to drop to make room (if needed). Be explicit: "Add X, drop Y." Only recommend a hitter add when the FA clearly out-projects a rostered hitter at a position they can fill.
 
 ## Drops
-Any rostered pitchers to drop or stream away from — bad matchup, injury, low projected FPTS. Include timing (e.g. "drop after Tuesday start").
+Any rostered players to drop or stream away from — bad matchup, injury, low projected FPTS. Include timing (e.g. "drop after Tuesday start").
 
 ## Day-by-day plan
-A Mon–Sun schedule showing every add, drop, and start to target. Goal: hit exactly {limit} starts while maximizing projected FPTS.
+A Mon–Sun schedule showing every add, drop, start to target, and hitter lineup call. Goal: hit exactly {limit} pitcher starts while maximizing total projected FPTS.
 Format each line as: **Day**: action (or "No moves needed")
 
 ## Watch list
-2–3 backup options to monitor in case a planned add gets sniped on waivers or a start gets skipped (rain, injury). One sentence each.
+2–3 backup options (either player type) to monitor in case a planned add gets sniped on waivers or a start gets skipped (rain, injury). One sentence each.
 
 Keep it concrete and reference the FPTS numbers throughout."""
 
@@ -81,7 +100,7 @@ class handler(BaseHTTPRequestHandler):
             client = anthropic.Anthropic(api_key=api_key)
             message = client.messages.create(
                 model=model,
-                max_tokens=1500,
+                max_tokens=2000,
                 system="You are a sharp, data-driven fantasy baseball analyst. Be specific, reference numbers, and keep recommendations actionable.",
                 messages=[{"role": "user", "content": build_prompt(data)}],
             )
