@@ -327,18 +327,14 @@ export const PITCHER_COLUMNS: PitcherColumn[] = [
     render: (p) => (
       <div>
         <div style={{ fontWeight: 600 }}>{p.name}</div>
+        {/* Team lives on the subline (mirrors the Free Agents batter layout),
+            not a dedicated Team column. */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 5, flexWrap: 'wrap', marginTop: 2 }}>
           <PosTags pos={p.posEligible || p.slot} />
           <IlPill status={p.injuryStatus} />
+          <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--ink-3)' }}>{p.team}</span>
         </div>
       </div>
-    ),
-  },
-  {
-    key: 'team', label: 'Team', minWidth: 52,
-    stringValue: (p) => p.team,
-    render: (p) => (
-      <span style={{ fontFamily: 'var(--mono)', fontSize: 11 }}>{p.team}</span>
     ),
   },
   {

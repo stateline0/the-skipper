@@ -505,7 +505,6 @@ export default function ScheduleGrid({
             >
               Pitcher{sortIndicator('name')}
             </th>
-            <th style={{ ...headerStyle, minWidth: 44 }}>Team</th>
             <th style={{ ...headerStyle, minWidth: 44 }}>Slot</th>
 
             {/* Date columns — inserted between Slot and Starts */}
@@ -578,18 +577,16 @@ export default function ScheduleGrid({
               >
                 {renderPrefix?.(pitcher, i)}
 
-                {/* Pitcher name + eligibility/injury pill subline */}
+                {/* Pitcher name + eligibility/injury/team subline (mirrors the
+                    Free Agents batter layout — team lives on the subline, not a
+                    dedicated column). */}
                 <td style={{ ...cellStyle, textAlign: 'left', paddingLeft: 10 }}>
                   <div style={{ fontWeight: 600 }}>{pitcher.name}</div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 5, flexWrap: 'wrap', marginTop: 2 }}>
                     <PosTags pos={pitcher.posEligible || pitcher.slot} />
                     <IlPill status={pitcher.injuryStatus} />
+                    <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--ink-3)' }}>{pitcher.team}</span>
                   </div>
-                </td>
-
-                {/* Team */}
-                <td style={cellStyle}>
-                  <span style={{ fontFamily: 'var(--mono)', fontSize: 11 }}>{pitcher.team}</span>
                 </td>
 
                 {/* Slot badge */}

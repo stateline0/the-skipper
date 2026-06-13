@@ -17,7 +17,7 @@ const HITTER_POSITIONS = ['C', '1B', '2B', '3B', 'SS', 'OF', 'DH']
 // The RP tab reuses the pitcher StatsTable but drops start-based columns
 // (Starts, Form sparkline, season Pace) that are meaningless for relievers, and
 // adds Saves (SV) — a key part of reliever scoring, omitted from the SP set.
-const RP_COLUMN_KEYS = ['name', 'team', 'percentOwned', 'era', 'k9', 'bb9', 'sv',
+const RP_COLUMN_KEYS = ['name', 'percentOwned', 'era', 'k9', 'bb9', 'sv',
   'xera', 'xwoba', 'wobaDiff', 'luck', 'barrelPct', 'whiffPct', 'projFpts', 'actFpts']
 const RP_COLUMN_POOL = [...PITCHER_COLUMNS, SV_COLUMN]
 const RP_COLUMNS: PitcherColumn[] = RP_COLUMN_KEYS
