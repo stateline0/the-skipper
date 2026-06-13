@@ -1,6 +1,6 @@
 # The Skipper — Backlog
 
-Last updated: June 13, 2026 (session 43 — hitters in AI recommendations shipped: P1 #1 closed, trade-engine Phase 2–3 prereq met; also fixed the recommendations page's dead sessionStorage handoff left behind by PR #127)
+Last updated: June 13, 2026 (session 43 — hitters in AI recommendations shipped: P1 #1 closed, trade-engine Phase 2–3 prereq met; also fixed the recommendations page's dead sessionStorage handoff left behind by PR #127. New P1 #2: IL-aware FA projections + Est Return, feasibility explored — see section below)
 
 ---
 
@@ -20,13 +20,14 @@ Each tier references the detailed items below — no items were removed, only ra
 
 ### P1 — Next: decision automation (the indispensability layer)
 1. ~~**Hitters in AI recommendations**~~ — **shipped session 43.** `build_prompt` gains roster-hitter + FA-batter sections and hitter-aware TASK instructions (same four output sections, so the frontend parser is untouched); the recommendations page fetches `/api/hitters` directly and selects **top 10 FA pitchers by proj FPTS** (replacing the checked-set handoff) and **top 4 FA batters per position** (Conner's spec, June 13). Also fixed in passing: the page was still reading PR #127's dead sessionStorage keys, so its data handoff had been silently broken since session 30 — now reads the current localStorage shapes. Unblocks the trade evaluator/finder and planner MVP. **Verify in prod:** load Recommendations (no amber pitcher-only banner) and generate once.
-2. **League rosters viewer — trade engine Phase 1** (→ *Trade engine* section below; approved as-is June 12). No AI dependency — can ship before or alongside #1.
-3. **Trade evaluator + finder — trade engine Phases 2–3** (→ *Trade engine* section; spec approved June 12 with amendments). Sequenced after #1.
-4. **Weekly planner / decision automation MVP** (→ section below) — the roadmap centerpiece.
-5. **Hitter nudge engine** (→ *Hitters* section) — watchlist/alert, buildable today on FA actuals.
-6. **Morning lineup check / scratch alerts** (new — see *Promoted proposals*) — closes the daily loop.
-7. **Live freshness for hitter projections** (→ *Hitters* section).
-8. ~~**Unify roster-page vs cron proj2h scoring**~~ — **shipped session 42** (→ *Hitters* follow-up; all-MLB matchup factors remain a future consideration).
+2. **IL-aware FA projections + Est Return (flagged by Conner, June 13)** — IL'd free agents still carry full projections, which now also pollutes the AI payload's top-10/top-4 selection (picked by projFpts). Phase A (IL pill + zero-while-IL, no new external calls) is small and should ship next; Phase B (ESPN "Est Return" date) needs a probe. (→ *IL-aware projections & Est Return* section below.)
+3. **League rosters viewer — trade engine Phase 1** (→ *Trade engine* section below; approved as-is June 12). No AI dependency — can ship before or alongside #1.
+4. **Trade evaluator + finder — trade engine Phases 2–3** (→ *Trade engine* section; spec approved June 12 with amendments). Sequenced after #1.
+5. **Weekly planner / decision automation MVP** (→ section below) — the roadmap centerpiece.
+6. **Hitter nudge engine** (→ *Hitters* section) — watchlist/alert, buildable today on FA actuals.
+7. **Morning lineup check / scratch alerts** (new — see *Promoted proposals*) — closes the daily loop.
+8. **Live freshness for hitter projections** (→ *Hitters* section).
+9. ~~**Unify roster-page vs cron proj2h scoring**~~ — **shipped session 42** (→ *Hitters* follow-up; all-MLB matchup factors remain a future consideration).
 
 ### P2 — Model depth
 - Phases 8–10 (BvP, lineup-spot volume, per-stat park + wind-for-HR) — in MAE-impact order, lineup-spot volume likely first.
@@ -53,6 +54,64 @@ Multi-user / multi-league, category-league support (the stat-vector hitter model
 ### Flagged during review (next up)
 - [x] ~~**W/L impact sign should track win prob, not the pitcher's record.**~~ — **fixed session 33 (PR #146).** Both `w_contrib`/`l_contrib` (live) and `w_adj`/`l_adj` (lock) now scale by the total decision rate `(raw_w + raw_l)` split by win prob instead of the separate historical W/L rates, so net = `decision_rate × STARTER_WIN_SHARE × 5 × (2·win_prob − 1)` → **positive when favored, 0 at a coin flip, negative as an underdog**, magnitude still pitcher-specific. Verified the backlog's 56%-win-prob case flips from −0.1 to +0.19. The net decomposes exactly into the existing `w×5 + l×−5` shape, so the locked breakdown's `stats.w`/`stats.l` (read by `accuracy.py`) keep their shape and become a cleaner expected-W/L estimate; the tooltip's `wlContrib` sign is now correct. Added a `MaeTimelineChart` milestone marker (2026-06-07); **forward-only** for locked values.
 - [x] ~~**ESPN Forecaster scraper broken since ~mid-May**~~ — **fixed session 32 (PR #145).** External break, as suspected: ESPN now fronts the Forecaster article with **AWS WAF (CloudFront)**, which serves a ~2KB HTTP-202 challenge stub (`window.awsWafCookieDomainList` / `window.gokuProps`, no table) to **Chrome-fingerprinted** requests. The `/api/forecaster_probe` strategy matrix (rewritten this session to test multiple UAs/cookie-warmup in one request) showed legacy Chrome/123, a modern Chrome+client-hints fingerprint, and a cookie-warmed session all get the stub, while a **plain Safari UA and Googlebot UA both pass straight through** to the real 156KB article — so it's a UA-based rule, not a JS challenge, and a header swap is the whole fix. `fetch_forecaster()` now sends Safari (primary) → Googlebot (fallback) and returns a loud, specific error (`all UAs blocked — safari: HTTP 202 … [AWS WAF stub]`) on failure. The missed mid-May→Jun weeks remain **unrecoverable** (rolling 10-day window); data resumes going forward. **Note:** the cron already writes the full `espn` result (counters *or* error) into `cache:cron-summary:{date}`, so the "add ESPN-lock counters to cron-summary" sub-item was already covered — a future WAF change will show up there verbatim.
+
+### IL-aware projections & Est Return (flagged by Conner, June 13 — feasibility explored session 43)
+IL'd free agents still show full projections, and since session 43 the AI
+payload selects FA pitchers/batters **by projFpts** — so a high-skill IL60
+player can crowd a healthy streamer out of the top-10/top-4 lists. Three
+parts, phased by data availability:
+
+- [ ] **Phase A1 — IL pill (with type) on the Name subline.** *Buildable
+  today for FAs, no new external calls.* The kona `player.injuryStatus`
+  field works for free agents (KNOWLEDGE.md, 10/10): `FIFTEEN_DAY_DL`,
+  `SIXTY_DAY_DL`, `DAY_TO_DAY`, `SUSPENSION`. `api/espn.py`'s FA pitcher
+  loop already maps these to `IL15`/`IL60`/`DTD`/`SUSP` (`inj_label_map`)
+  and ships `injuryStatus` — the pill just isn't rendered. FA hitters:
+  `_fetch_fa_hitters` in `api/hitters.py` parses the same flat `player`
+  dict but doesn't capture `injuryStatus` — one field to add + a pill in
+  `HitterTables` (reuse the existing compact position-pill pattern).
+  Add `TEN_DAY_DL → IL10` to the map (not yet observed but the obvious MLB
+  value). **Rostered players:** mRoster `injuryStatus` is empty for all
+  rostered players (KNOWLEDGE.md) — only the `player.injured` boolean, so
+  rostered pills say "IL" without type for now. Worth one log line in the
+  existing `kona_player_info` ownership-parse loop (PR #117) to check
+  whether that view carries granular status for rostered players — zero new
+  HTTP calls either way.
+- [ ] **Phase A2 — zero daily projections while on IL (no return date
+  needed).** Hitters: zero the per-day `proj` in `_build_days` (shared by
+  roster + FA paths — one change point) whenever status is IL10/IL15/IL60;
+  status clears when ESPN activates the player and data refreshes daily, so
+  projections resume automatically. **DTD keeps projections** (day-to-day
+  players usually play; consistent with the trade-engine spec's "DTD small
+  haircut"). Pitchers: IL FAs rarely have probable starts so per-start proj
+  is mostly already 0; apply the same zero-while-IL rule to `projFpts`.
+  Knock-on win: the AI payload's top-10/top-4 selection self-corrects with
+  no `analyze.py` change. Accuracy impact: nil — an IL hitter's locked proj
+  becomes 0 instead of stale-nonzero, and DNP games were already excluded
+  from MAE (unmatched). Forward-only.
+- [ ] **Phase B — ESPN "Est Return" date + zero-until-return.** The return
+  date the fantasy app shows is **not in any feed we currently parse**.
+  Probe candidates, in order: (1) the kona `player` object itself (cheapest
+  if present — same call we already make); (2) ESPN's public injuries feed
+  `site.api.espn.com/apis/site/v2/sports/baseball/mlb/injuries` (the NFL
+  variant carries `details.returnDate`; moderate confidence MLB's does
+  too); (3) the athlete card/overview service
+  (`site.web.api.espn.com/.../athletes/{id}/overview`). ESPN fantasy player
+  IDs are MLB athlete IDs (the Forecaster scraper already extracts them),
+  so the join is free. **Couldn't probe from the session-43 dev container
+  (network egress allowlist)** — follow the `/api/forecaster_probe`
+  pattern: ship a tiny `/api/injury_probe` diagnostic, inspect raw shapes
+  for 2–3 known-IL players in prod, then wire. Cache under
+  `cache:injuries:{date}` (24h TTL). Once landed: refine Phase A2's blanket
+  zero to **zero until Est Return** (a returning IL15 player's last week of
+  the window projects normally), show the date next to the pill, and feed
+  it to **trade engine Phase 2's IL discounting** (replacing the IL15 ≈
+  −2.5wk / IL60 ≈ −9wk assumptions with real dates).
+
+Sizing: Phase A ≈ half a session (A1+A2 together — same files, one verify
+cycle); Phase B ≈ half–1 session including the probe round-trip. Suggested
+sequencing: Phase A next session (it's the trust/correctness fix), Phase B
+with or just before trade engine Phase 2.
 
 ### Stats view tab — follow-ups
 ✅ **All six shipped in session 30** (PRs #121–#123) — Whiff% plumbing, Cease Brl% (self-resolved), Free Agents Stats tab, Luck indicator (rendered as a colored trend line), full-season Pace column, and the relievers Stats tab. Also added a Form sparkline, mobile tap popovers, and the FPTS/G → Proj/G rename. See **Completed (session 30)** below for details.
@@ -440,7 +499,7 @@ See CHANGELOG.md for full history of PRs #1-#47.
 
 - ~~Trade analyzer with forward-looking schedule context~~ — superseded by the
   3-phase **Trade engine** spec (approved June 12, 2026; see the section above
-  and P1 #2–3)
+  and P1 #3–4)
 - Waiver wire rankings personalized to roster needs and matchup context
 - Live game decision engine (real-time starts limit optimization)
 - Schedule advantage alerts (2-3 week lookahead for favorable/unfavorable stretches)
