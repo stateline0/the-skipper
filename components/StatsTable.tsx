@@ -95,22 +95,6 @@ export interface PitcherColumn {
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-function SlotBadge({ slot }: { slot: string }) {
-  const styles: Record<string, React.CSSProperties> = {
-    SP: { background: 'var(--blue-light)',  color: 'var(--blue)' },
-    RP: { background: 'var(--amber-light)', color: 'var(--amber)' },
-    IL: { background: 'var(--red-light)',   color: 'var(--red)' },
-  }
-  const style = styles[slot] || { background: 'var(--paper-2)', color: 'var(--ink-3)' }
-  return (
-    <span style={{
-      display: 'inline-block', fontSize: 11, fontWeight: 600,
-      fontFamily: 'var(--mono)', padding: '2px 8px', borderRadius: 99,
-      letterSpacing: '0.04em', whiteSpace: 'nowrap', ...style,
-    }}>{slot}</span>
-  )
-}
-
 // Sums actualFpts for a pitcher, excluding any date tagged as a
 // pre-acquisition start. Mirrors the ScheduleGrid Act FPTS row total
 // so the two tabs agree on the same number for the same pitcher.
@@ -327,24 +311,15 @@ export const PITCHER_COLUMNS: PitcherColumn[] = [
     render: (p) => (
       <div>
         <div style={{ fontWeight: 600 }}>{p.name}</div>
+        {/* Team lives on the subline (mirrors the Free Agents batter layout),
+            not a dedicated Team column. */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 5, flexWrap: 'wrap', marginTop: 2 }}>
           <PosTags pos={p.posEligible || p.slot} />
           <IlPill status={p.injuryStatus} />
+          <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--ink-3)' }}>{p.team}</span>
         </div>
       </div>
     ),
-  },
-  {
-    key: 'team', label: 'Team', minWidth: 52,
-    stringValue: (p) => p.team,
-    render: (p) => (
-      <span style={{ fontFamily: 'var(--mono)', fontSize: 11 }}>{p.team}</span>
-    ),
-  },
-  {
-    key: 'slot', label: 'Slot', minWidth: 52,
-    stringValue: (p) => p.slot,
-    render: (p) => <SlotBadge slot={p.slot} />,
   },
   {
     key: 'percentOwned', label: 'Own%', minWidth: 60,
