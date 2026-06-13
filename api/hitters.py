@@ -38,6 +38,7 @@ from kv import (
     cache_get, cache_set,
     set_locked_hitter_projection, get_all_locked_hitter_projections,
 )
+from injuries import get_injuries
 from projection_hitter import (
     parse_hitter_scoring, get_projected_hitter_fpts, strip_accents,
     platoon_multiplier, opp_pitcher_multiplier, actuals_from_logs,
@@ -48,7 +49,7 @@ from projection_hitter import (
 
 def _build_days(name, team, game_dates, schedule, base, hands, splits, overall_ops,
                 opp_savant, league_xwoba, weather_map, today_iso, actuals=None,
-                il_zero=False):
+                il_zero=False, il_return=None):
     """Per-day cells with the matchup factor stack:
       Phase 6 — platoon (batter vs the day's probable-starter hand)
       Phase 7 — opposing-starter quality (their xwOBA-against vs league)
@@ -56,9 +57,11 @@ def _build_days(name, team, game_dates, schedule, base, hands, splits, overall_o
       Phase 5 — weather (host park, future days; warm = more offense)
     day proj = base × Π(factors); each factor is {label, mult} so the frontend
     popover lists Base → factors → Proj.
-    il_zero: player is on the IL (IL10/IL15/IL60) — every day gains an
-    IL ×0 factor so proj is 0 and the popover explains why. Past days'
-    actuals are untouched."""
+    il_zero: player is on the IL (IL10/IL15/IL60) — IL days gain an IL ×0 factor
+    so proj is 0 and the popover explains why. Past days' actuals are untouched.
+    il_return (Phase B): the estimated return date (YYYY-MM-DD). When set, only
+    days BEFORE it are zeroed — games on/after the return date project normally,
+    so a returning player isn't flat-zeroed across the whole window."""
     days = []
     for d in game_dates:
         game = schedule.get(d, {}).get(team, {})
@@ -96,7 +99,7 @@ def _build_days(name, team, game_dates, schedule, base, hands, splits, overall_o
                     label = f"Weather ({round(temp)}°F)" if temp else "Weather"
                     factors.append({"label": label, "mult": round(wf, 3)})
                     mult *= wf
-        if il_zero:
+        if il_zero and (not il_return or d < il_return):
             factors.append({"label": "IL", "mult": 0.0})
             mult = 0.0
         av = (actuals.get(name) or {}).get(d) if actuals else None
@@ -401,7 +404,7 @@ def get_hitter_data(team_id: int, week: int) -> dict:
         team_abbrev = PRO_TEAM_MAP.get(player.get("proTeamId", 0), "")
         bats = (player.get("batSide") or {}).get("code", "") if isinstance(player.get("batSide"), dict) else ""
         hitters_meta.append({
-            "name": name, "team": team_abbrev,
+            "name": name, "team": team_abbrev, "id": player.get("id"),
             "pos": pos, "rank": rank, "bats": bats, "il": il,
         })
         if team_abbrev:
@@ -561,6 +564,9 @@ def get_hitter_data(team_id: int, week: int) -> dict:
     # freeze below only writes genuinely new locks (see _lock_started_days).
     existing_hit_locks = get_all_locked_hitter_projections(year_int, week)
     hit_locks_new = 0
+    # Phase B: real IL grade + est. return date from the public injuries feed,
+    # joined by ESPN id. Degrades to {} (bare "IL") if the feed is unreachable.
+    injuries = get_injuries()
     roster_hitters = []
     for h in hitters_meta:
         name = h["name"]
@@ -569,11 +575,14 @@ def get_hitter_data(team_id: int, week: int) -> dict:
         season = _season_line(hitting_current.get(strip_accents(name), {}))
         overall_ops = (season["obp"] + season["slg"]) if season else None
         bats = (hands.get(strip_accents(name)) or {}).get("bats") or h["bats"]
+        inj = injuries.get(h["id"]) if h["il"] else None
+        il_return = inj.get("returnDate") if inj else None
         # Per-day cells with the matchup factor stack (Phase 6 platoon + Phase 7 opp SP).
+        # IL'd hitters zero only through their return date (Phase B), not the whole week.
         days = _build_days(name, h["team"], h["gameDates"], schedule, per_game,
                            hands, splits, overall_ops, pitch_savant, league_xwoba,
                            weather_map, today_iso, actual_fpts,
-                           il_zero=h["il"])
+                           il_zero=h["il"], il_return=il_return)
         # Freeze each started game's projection for the accuracy dashboard.
         hit_locks_new += _lock_started_days(
             year_int, week, name, days,
@@ -590,9 +599,12 @@ def get_hitter_data(team_id: int, week: int) -> dict:
             "pos":         h["pos"],
             "rank":        h["rank"],
             "bats":        bats,
-            # Roster feed exposes only the `injured` boolean, not the IL grade
-            # (KNOWLEDGE.md) — so the pill shows a bare "IL" for roster hitters.
-            "injuryStatus": "IL" if h["il"] else None,
+            # Phase B: the injuries feed supplies the real IL grade + est. return
+            # for rostered hitters (the fantasy roster feed's injuryStatus is
+            # empty — KNOWLEDGE.md). Falls back to a bare "IL" if unmatched.
+            "injuryStatus": ((inj.get("grade") if inj else None) or "IL") if h["il"] else None,
+            "estReturn":    il_return,
+            "injuryDetail": inj.get("detail") if inj else None,
             "projFpts":    proj_week,
             "actualFpts":  act_week,
             "projPerGame": round(per_game, 1),
@@ -676,7 +688,7 @@ def _fetch_fa_hitters(base, headers, cookies, PRO_TEAM_MAP, current_week,
             inj = FA_INJ_LABEL_MAP.get(player.get("injuryStatus", "ACTIVE"),
                                        player.get("injuryStatus", "ACTIVE"))
             meta.append({
-                "name": name, "team": team_abbrev,
+                "name": name, "team": team_abbrev, "id": player.get("id"),
                 "pos": _eligible_positions(eligible), "ownPct": own, "inj": inj,
                 "gameDates": [d for d in period_dates if team_abbrev and team_abbrev in schedule.get(d, {})],
             })
@@ -695,6 +707,9 @@ def _fetch_fa_hitters(base, headers, cookies, PRO_TEAM_MAP, current_week,
             season=year_int, period=week,
         )
 
+        # Phase B: enrich FA injury labels with the feed's grade + est. return
+        # (the kona path gives a grade but no return date). Joined by ESPN id.
+        injuries = get_injuries()
         out = []
         for h in meta:
             p = proj.get(h["name"], {})
@@ -702,14 +717,20 @@ def _fetch_fa_hitters(base, headers, cookies, PRO_TEAM_MAP, current_week,
             season = _season_line(hitting_current.get(strip_accents(h["name"]), {}))
             overall_ops = (season["obp"] + season["slg"]) if season else None
             bats = (hands.get(strip_accents(h["name"])) or {}).get("bats", "")
+            finj = injuries.get(h["id"])
+            # Prefer the feed grade; fall back to the kona label.
+            inj_label = (finj.get("grade") if finj else None) or h["inj"]
+            il_return = finj.get("returnDate") if finj else None
             days = _build_days(h["name"], h["team"], h["gameDates"], schedule, per_game,
                                hands, fa_splits, overall_ops, pitch_savant, league_xwoba,
                                weather_map, today_iso, fa_actuals,
-                               il_zero=(h["inj"] in FA_IL_ZERO_STATUSES))
+                               il_zero=(inj_label in FA_IL_ZERO_STATUSES), il_return=il_return)
             out.append({
                 "name": h["name"], "team": h["team"], "pos": h["pos"], "bats": bats,
                 "percentOwned": h["ownPct"],
-                "injuryStatus": h["inj"],
+                "injuryStatus": inj_label,
+                "estReturn": il_return,
+                "injuryDetail": finj.get("detail") if finj else None,
                 "projFpts": round(sum(d["proj"] for d in days), 1), "projPerGame": round(per_game, 1),
                 "actualFpts": round(sum(d["actual"] for d in days if d.get("actual") is not None), 1),
                 "games": p.get("games", len(h["gameDates"])),
@@ -753,7 +774,9 @@ HITTER_CACHE_TTL = 1800  # 30 min
 #   v23: FA actuals computed from game logs by category (ESPN can't expose them).
 #   v24: Phase A IL-awareness — FA injuryStatus label + IL ×0 day factor (roster + FA).
 #   v25: roster IL hitters keep real position + carry injuryStatus "IL" (split pill).
-HITTER_CACHE_VERSION = 25
+#   v26: Phase B — real IL grade + est. return (injuries feed, ESPN-id join);
+#        IL days zero only through the return date (roster + FA).
+HITTER_CACHE_VERSION = 26
 
 
 def _cache_key(team_id: int, week: int) -> str:

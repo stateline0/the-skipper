@@ -55,7 +55,9 @@ export interface Pitcher {
   projBlend?: number
   percentOwned?: number
   startDates?: StartDate[]
-  injuryStatus?: string           // typed IL label (IL10/IL15/IL60/DTD/SUSP); FA view only
+  injuryStatus?: string           // typed IL label (IL10/IL15/IL60/DTD/SUSP)
+  estReturn?: string              // est. return date (YYYY-MM-DD) — Phase B injuries feed
+  injuryDetail?: string           // injury descriptor for the IL tooltip
   posEligible?: string            // SP/RP eligibility for the name-subline pills
   seasonStats?: SeasonStats | null
   savantExpected?: SavantExpected | null
@@ -315,7 +317,7 @@ export const PITCHER_COLUMNS: PitcherColumn[] = [
             not a dedicated Team column. */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 5, flexWrap: 'wrap', marginTop: 2 }}>
           <PosTags pos={p.posEligible || p.slot} />
-          <IlPill status={p.injuryStatus} />
+          <IlPill status={p.injuryStatus} estReturn={p.estReturn} detail={p.injuryDetail} />
           <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--ink-3)' }}>{p.team}</span>
         </div>
       </div>

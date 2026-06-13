@@ -30,6 +30,8 @@ interface Pitcher {
   // Free agents also have these:
   percentOwned?: number
   injuryStatus?: string
+  estReturn?: string              // est. return date (YYYY-MM-DD) — Phase B injuries feed
+  injuryDetail?: string           // injury descriptor for the IL tooltip
   posEligible?: string            // SP/RP eligibility for the name-subline pills
   checked?: boolean
 }
@@ -567,7 +569,7 @@ export default function ScheduleGrid({
                   <div style={{ fontWeight: 600 }}>{pitcher.name}</div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 5, flexWrap: 'wrap', marginTop: 2 }}>
                     <PosTags pos={pitcher.posEligible || pitcher.slot} />
-                    <IlPill status={pitcher.injuryStatus} />
+                    <IlPill status={pitcher.injuryStatus} estReturn={pitcher.estReturn} detail={pitcher.injuryDetail} />
                     <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--ink-3)' }}>{pitcher.team}</span>
                   </div>
                 </td>

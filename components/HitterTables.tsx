@@ -7,7 +7,8 @@
 //
 // Pass `showOwn` to render an Own% column (Free Agents view).
 
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -26,7 +27,9 @@ export interface UIHitter {
   avg: number; obp: number; slg: number
   hr: number; r: number; rbi: number; sb: number
   percentOwned?: number       // Free Agents view only
-  il?: string                 // typed injury label (IL10/IL15/IL60/DTD/SUSP) — FA view only
+  il?: string                 // typed injury label (IL10/IL15/IL60/DTD/SUSP)
+  estReturn?: string          // est. return date (YYYY-MM-DD) — Phase B injuries feed
+  injuryDetail?: string       // injury descriptor for the IL tooltip, e.g. "Right Quadriceps (Strain)"
   adv?: HitterAdvanced        // advanced Savant block (Stats tab)
 }
 
@@ -211,23 +214,91 @@ export function PosTags({ pos }: { pos: string }) {
   )
 }
 
+// Format an ISO date (YYYY-MM-DD) as "Jun 26" for the IL tooltip.
+function fmtReturn(iso?: string): string | null {
+  if (!iso || !/^\d{4}-\d{2}-\d{2}$/.test(iso)) return null
+  const [, m, d] = iso.split('-')
+  return `${MONTHS[parseInt(m) - 1]} ${parseInt(d)}`
+}
+
 // Injury-status pill on the name sub-line (IL10/IL15/IL60/DTD/SUSP). IL grades
-// are red (projection zeroed while shelved); DTD/SUSP are amber (still
+// are red (projection zeroed until the return date); DTD/SUSP are amber (still
 // projecting). Self-guarding: only injury statuses render — anything else
-// (Active, Dropped, undefined) yields nothing.
-export function IlPill({ status }: { status?: string }) {
+// (Active, Dropped, undefined) yields nothing. When an est. return date and/or
+// injury detail are known (Phase B), tapping the pill opens a popover
+// ("Est. return Jun 26" + injury detail). The popover renders through a portal
+// to <body> so it escapes the IL row's dimming (opacity:0.55 would otherwise
+// wash it out) and the table's horizontal scroll clipping.
+export function IlPill({ status, estReturn, detail }: {
+  status?: string; estReturn?: string; detail?: string
+}) {
+  const ref = useRef<HTMLSpanElement>(null)
+  const [pos, setPos] = useState<{ left: number; top?: number; bottom?: number } | null>(null)
+  // The popover is viewport-fixed, so it would detach from the pill on scroll —
+  // dismiss it instead (it re-anchors on the next tap). Capture phase catches
+  // scrolls inside the table's own scroll container too.
+  useEffect(() => {
+    if (!pos) return
+    const close = () => setPos(null)
+    window.addEventListener('scroll', close, true)
+    window.addEventListener('resize', close)
+    return () => {
+      window.removeEventListener('scroll', close, true)
+      window.removeEventListener('resize', close)
+    }
+  }, [pos])
   if (!status) return null
   const isIL = status.startsWith('IL')
   if (!isIL && status !== 'DTD' && status !== 'SUSP') return null
   const style = isIL
     ? { background: 'var(--red-light)', color: 'var(--red)' }
     : { background: 'var(--amber-light)', color: 'var(--amber)' }
+  const pillStyle: React.CSSProperties = {
+    display: 'inline-block', fontSize: 9, fontWeight: 700, fontFamily: 'var(--mono)',
+    padding: '1px 5px', borderRadius: 99, letterSpacing: '0.03em',
+    whiteSpace: 'nowrap', ...style,
+  }
+  const ret = fmtReturn(estReturn)
+  // No extra info → a plain, non-interactive pill.
+  if (!ret && !detail) {
+    return <span style={pillStyle}>{status}</span>
+  }
+  const toggle = (e: React.MouseEvent) => {
+    e.stopPropagation()
+    if (pos) { setPos(null); return }
+    const r = ref.current?.getBoundingClientRect()
+    if (!r) return
+    // Flip above the pill when there isn't room below (IL rows often sit at the
+    // bottom of the table — a downward popover would run off-screen and force a
+    // scroll). Anchor by `bottom` when flipped so height doesn't matter.
+    const roomBelow = window.innerHeight - r.bottom
+    const left = Math.min(r.left, window.innerWidth - 180)
+    setPos(roomBelow < 96
+      ? { left, bottom: window.innerHeight - r.top + 4 }
+      : { left, top: r.bottom + 4 })
+  }
   return (
-    <span style={{
-      display: 'inline-block', fontSize: 9, fontWeight: 700, fontFamily: 'var(--mono)',
-      padding: '1px 5px', borderRadius: 99, letterSpacing: '0.03em',
-      whiteSpace: 'nowrap', ...style,
-    }}>{status}</span>
+    <span ref={ref} onClick={toggle} style={{ ...pillStyle, cursor: 'pointer' }}>
+      {status}
+      {pos && typeof document !== 'undefined' && createPortal(
+        <>
+          {/* Tap-anywhere backdrop to dismiss (touch-friendly, no listeners). */}
+          <div onClick={(e) => { e.stopPropagation(); setPos(null) }}
+               style={{ position: 'fixed', inset: 0, zIndex: 1000 }} />
+          <div onClick={(e) => e.stopPropagation()} style={{
+            position: 'fixed', left: pos.left, top: pos.top, bottom: pos.bottom, zIndex: 1001,
+            background: 'var(--white)', border: '1px solid var(--border-strong)',
+            borderRadius: 'var(--radius)', boxShadow: 'var(--shadow)', padding: '8px 10px',
+            fontFamily: 'var(--mono)', fontSize: 11, whiteSpace: 'nowrap', textAlign: 'left',
+            color: 'var(--ink-2)',
+          }}>
+            {ret && <div style={{ fontWeight: 700, color: 'var(--ink)' }}>Est. return {ret}</div>}
+            {detail && <div style={{ marginTop: ret ? 2 : 0 }}>{detail}</div>}
+          </div>
+        </>,
+        document.body,
+      )}
+    </span>
   )
 }
 
@@ -295,7 +366,7 @@ export function HitterScheduleGrid({ hitters, weeks, weekDates, today, showOwn, 
                   <div style={{ fontWeight: 600 }}>{h.name}</div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 5, flexWrap: 'wrap', marginTop: 2 }}>
                     <PosTags pos={h.pos} />
-                    <IlPill status={h.il} />
+                    <IlPill status={h.il} estReturn={h.estReturn} detail={h.injuryDetail} />
                     <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--ink-3)' }}>
                       {h.team}{h.bats ? ` · ${h.bats}HB` : ''}
                     </span>
@@ -478,7 +549,7 @@ export function HitterStatsTable({ hitters, weeks, showOwn, leagueAvg }: {
                   <div style={{ fontWeight: 600 }}>{h.name}</div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 5, flexWrap: 'wrap', marginTop: 2 }}>
                     <PosTags pos={h.pos} />
-                    <IlPill status={h.il} />
+                    <IlPill status={h.il} estReturn={h.estReturn} detail={h.injuryDetail} />
                     <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--ink-3)' }}>
                       {h.team}{h.bats ? ` · ${h.bats}HB` : ''}
                     </span>
@@ -527,6 +598,8 @@ export function hitterFromPayload(h: any, dates: string[]): { hitter: UIHitter; 
       hr: s.hr || 0, r: s.r || 0, rbi: s.rbi || 0, sb: s.sb || 0,
       percentOwned: h.percentOwned,
       il: h.injuryStatus && h.injuryStatus !== 'Active' ? h.injuryStatus : undefined,
+      estReturn: h.estReturn || undefined,
+      injuryDetail: h.injuryDetail || undefined,
       adv: h.advanced || undefined,
     },
     days,
