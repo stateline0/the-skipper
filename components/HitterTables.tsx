@@ -179,6 +179,10 @@ const POS_STYLE: Record<string, React.CSSProperties> = {
   DH:   { background: 'var(--green-light)', color: 'var(--green)' },
   BN:   { background: 'var(--paper-2)',     color: 'var(--ink-3)' },
   IL:   { background: 'var(--red-light)',   color: 'var(--red)' },
+  // Pitcher eligibility (PosTags is reused for SP/RP pills on the pitcher
+  // pages); colors mirror the Slot-column badge.
+  SP:   { background: 'var(--blue-light)',  color: 'var(--blue)' },
+  RP:   { background: 'var(--amber-light)', color: 'var(--amber)' },
 }
 const INFIELD = ['1B', '2B', '3B', 'SS', '2B/SS', '1B/3B']
 
@@ -209,10 +213,12 @@ export function PosTags({ pos }: { pos: string }) {
 
 // Injury-status pill on the name sub-line (IL10/IL15/IL60/DTD/SUSP). IL grades
 // are red (projection zeroed while shelved); DTD/SUSP are amber (still
-// projecting). Nothing renders for active players.
+// projecting). Self-guarding: only injury statuses render — anything else
+// (Active, Dropped, undefined) yields nothing.
 export function IlPill({ status }: { status?: string }) {
   if (!status) return null
   const isIL = status.startsWith('IL')
+  if (!isIL && status !== 'DTD' && status !== 'SUSP') return null
   const style = isIL
     ? { background: 'var(--red-light)', color: 'var(--red)' }
     : { background: 'var(--amber-light)', color: 'var(--amber)' }
@@ -278,7 +284,7 @@ export function HitterScheduleGrid({ hitters, weeks, weekDates, today, showOwn, 
         <tbody>
           {sorted.map(h => {
             const week = weeks[h.name] || []
-            const isBench = h.pos === 'BN' || h.pos === 'IL'
+            const isBench = h.pos === 'BN' || h.pos === 'IL' || !!h.il
             const games = week.filter(g => !g.off)
             const projTotal = games.reduce((a, g) => a + g.proj, 0)
             const actGames = games.filter(g => g.actual != null)
@@ -463,7 +469,7 @@ export function HitterStatsTable({ hitters, weeks, showOwn, leagueAvg }: {
           {sorted.map(h => {
             const week = weeks[h.name] || []
             const projWk = week.reduce((a, g) => a + g.proj, 0)
-            const isBench = h.pos === 'BN' || h.pos === 'IL'
+            const isBench = h.pos === 'BN' || h.pos === 'IL' || !!h.il
             const hasLine = h.avg || h.obp || h.slg || h.hr || h.r || h.rbi || h.sb
             const adv = h.adv || {}
             return (

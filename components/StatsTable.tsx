@@ -10,7 +10,7 @@
 // stays renderer-only — all data shaping lives in the column defs.
 
 import { useCallback, useMemo, useState } from 'react'
-import { IlPill } from './HitterTables'
+import { IlPill, PosTags } from './HitterTables'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -56,6 +56,7 @@ export interface Pitcher {
   percentOwned?: number
   startDates?: StartDate[]
   injuryStatus?: string           // typed IL label (IL10/IL15/IL60/DTD/SUSP); FA view only
+  posEligible?: string            // SP/RP eligibility for the name-subline pills
   seasonStats?: SeasonStats | null
   savantExpected?: SavantExpected | null
   fptsHistory?: number[] | null   // actual FPTS per start, oldest→newest (last ~10)
@@ -324,11 +325,13 @@ export const PITCHER_COLUMNS: PitcherColumn[] = [
     key: 'name', label: 'Pitcher', align: 'left', minWidth: 160,
     stringValue: (p) => p.name,
     render: (p) => (
-      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
-        <span style={{ fontWeight: 600 }}>{p.name}</span>
-        {p.injuryStatus && p.injuryStatus !== 'Active' && p.injuryStatus !== 'IL'
-          && <IlPill status={p.injuryStatus} />}
-      </span>
+      <div>
+        <div style={{ fontWeight: 600 }}>{p.name}</div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 5, flexWrap: 'wrap', marginTop: 2 }}>
+          <PosTags pos={p.posEligible || p.slot} />
+          <IlPill status={p.injuryStatus} />
+        </div>
+      </div>
     ),
   },
   {

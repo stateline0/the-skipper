@@ -155,6 +155,18 @@ def get_status(injured: bool) -> str:
     return "Active"
 
 
+def get_pos_eligible(eligible_slots: set) -> str:
+    """Pitcher position eligibility from eligibleSlots, '/'-joined (e.g. "SP/RP"),
+    for the name-subline pills. Distinct from `slot` (a single label) and from
+    the Slot column. 14=SP, 15=RP."""
+    out = []
+    if 14 in eligible_slots:
+        out.append("SP")
+    if 15 in eligible_slots:
+        out.append("RP")
+    return "/".join(out) or "P"
+
+
 # FA injuryStatus display labels (the kona flat player path carries the granular
 # type for free agents; mRoster's injuryStatus is empty for rostered players —
 # see KNOWLEDGE.md "Injury detection").
@@ -476,6 +488,7 @@ def get_league_data(team_id: int, week: int) -> dict:
             "team":         team_abbrev,
             "slot":         slot_label,
             "position":     position,
+            "posEligible":  get_pos_eligible(eligible_slots),
             "injuryStatus": status_label,
             "starts":       scheduled_starts,
             "startDates":   start_dates,
@@ -624,6 +637,7 @@ def get_league_data(team_id: int, week: int) -> dict:
                 "team":           team_abbrev,
                 "slot":           fa_slot,
                 "injuryStatus":   inj_label,
+                "posEligible":    get_pos_eligible(fa_eligible),
                 "percentOwned":   round(player.get("ownership", {}).get("percentOwned", 0), 1),
                 # Zero-while-IL (Phase A): an IL'd FA can't pitch until activated.
                 "projFpts":       0.0 if inj_label in IL_ZERO_STATUSES else fa_proj_fpts.get(fa_name, 0.0),

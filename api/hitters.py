@@ -393,11 +393,16 @@ def get_hitter_data(team_id: int, week: int) -> dict:
         injured = player.get("injured", False)
         slot_id = entry.get("lineupSlotId", 16)
         pos, rank = hitter_slot(slot_id, eligible, injured)
+        il = injured or slot_id == 17
+        # Show the real eligible position(s) for IL'd hitters (the IL status
+        # rides on a separate pill); `rank` from hitter_slot still sinks them.
+        if il:
+            pos = _eligible_positions(eligible)
         team_abbrev = PRO_TEAM_MAP.get(player.get("proTeamId", 0), "")
         bats = (player.get("batSide") or {}).get("code", "") if isinstance(player.get("batSide"), dict) else ""
         hitters_meta.append({
             "name": name, "team": team_abbrev,
-            "pos": pos, "rank": rank, "bats": bats,
+            "pos": pos, "rank": rank, "bats": bats, "il": il,
         })
         if team_abbrev:
             team_map[name] = team_abbrev
@@ -568,7 +573,7 @@ def get_hitter_data(team_id: int, week: int) -> dict:
         days = _build_days(name, h["team"], h["gameDates"], schedule, per_game,
                            hands, splits, overall_ops, pitch_savant, league_xwoba,
                            weather_map, today_iso, actual_fpts,
-                           il_zero=(h["pos"] == "IL"))
+                           il_zero=h["il"])
         # Freeze each started game's projection for the accuracy dashboard.
         hit_locks_new += _lock_started_days(
             year_int, week, name, days,
@@ -585,6 +590,9 @@ def get_hitter_data(team_id: int, week: int) -> dict:
             "pos":         h["pos"],
             "rank":        h["rank"],
             "bats":        bats,
+            # Roster feed exposes only the `injured` boolean, not the IL grade
+            # (KNOWLEDGE.md) — so the pill shows a bare "IL" for roster hitters.
+            "injuryStatus": "IL" if h["il"] else None,
             "projFpts":    proj_week,
             "actualFpts":  act_week,
             "projPerGame": round(per_game, 1),
@@ -744,7 +752,8 @@ HITTER_CACHE_TTL = 1800  # 30 min
 #   v22: capture actual/live FPTS per day (roster) — status + actual on day cells.
 #   v23: FA actuals computed from game logs by category (ESPN can't expose them).
 #   v24: Phase A IL-awareness — FA injuryStatus label + IL ×0 day factor (roster + FA).
-HITTER_CACHE_VERSION = 24
+#   v25: roster IL hitters keep real position + carry injuryStatus "IL" (split pill).
+HITTER_CACHE_VERSION = 25
 
 
 def _cache_key(team_id: int, week: int) -> str:
