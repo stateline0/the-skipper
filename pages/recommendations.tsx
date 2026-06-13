@@ -12,6 +12,11 @@ interface FreeSP {
   percentOwned: number; projFpts: number; starts: number
   opps?: string; checked: boolean
 }
+interface RosterHitter {
+  name: string; team: string; pos: string; bats: string
+  games: number; projFpts: number; projPerGame: number
+}
+interface FreeHitter extends RosterHitter { percentOwned: number }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 function getWeekRange(start?: string, end?: string) {
@@ -25,6 +30,24 @@ function getWeekRange(start?: string, end?: string) {
 }
 
 const DAY_NAMES = ['monday','tuesday','wednesday','thursday','friday','saturday','sunday']
+
+// Canonical hitter positions (mirrors the Free Agents position filter; a
+// hitter's pos may be composite like "2B/SS", so matching splits on "/").
+const HITTER_POSITIONS = ['C', '1B', '2B', '3B', 'SS', 'OF', 'DH']
+
+// Top 4 FA batters per position by projected weekly FPTS, deduped by name
+// (multi-position players count toward every position they're eligible at).
+function topFreeHitters(fas: FreeHitter[]): FreeHitter[] {
+  const picked = new Map<string, FreeHitter>()
+  for (const pos of HITTER_POSITIONS) {
+    fas
+      .filter(h => (h.pos || '').split('/').includes(pos))
+      .sort((a, b) => (b.projFpts || 0) - (a.projFpts || 0))
+      .slice(0, 4)
+      .forEach(h => picked.set(h.name, h))
+  }
+  return Array.from(picked.values())
+}
 
 // ─── Sub-components ───────────────────────────────────────────────────────────
 function Badge({ label, color }: { label: string; color: 'green'|'amber'|'red'|'blue'|'gray' }) {
@@ -91,6 +114,9 @@ export default function Recommendations() {
   const [analysis, setAnalysis] = useState('')
   const [rosterSPs, setRosterSPs] = useState<RosterSP[]>([])
   const [freeSPs, setFreeSPs] = useState<FreeSP[]>([])
+  const [rosterHitters, setRosterHitters] = useState<RosterHitter[]>([])
+  const [freeHitters, setFreeHitters] = useState<FreeHitter[]>([])
+  const [hittersStatus, setHittersStatus] = useState<'loading'|'ok'|'error'>('loading')
   const [limit, setLimit] = useState(12)
   const [confirmedStarts, setConfirmedStarts] = useState(0)
   const [weekStart, setWeekStart] = useState('')
@@ -101,26 +127,22 @@ export default function Recommendations() {
   const needed = Math.max(0, limit - confirmedStarts)
   const projPts = rosterSPs.reduce((a, p) => a + (p.projFpts || 0), 0)
 
-  // Load cached data from sessionStorage on page load
+  // Load cached pitcher data from the localStorage caches written by the
+  // My Team / Free Agents pages (PR #127 moved these from sessionStorage and
+  // changed their shapes; this page was still reading the dead keys).
   useEffect(() => {
-    const rosterCache = sessionStorage.getItem('skipper_roster')
+    const rosterCache = localStorage.getItem('skipper_roster')
     if (rosterCache) {
       const data = JSON.parse(rosterCache)
       setRosterSPs(data.rosterSPs || [])
-      setConfirmedStarts(data.confirmedStarts || 0)
+      setConfirmedStarts(data.projectedStarts || 0)
       setWeekStart(data.weekStart || '')
       setWeekEnd(data.weekEnd || '')
     }
 
-    const faCache = sessionStorage.getItem('skipper_free_agents')
+    const faCache = localStorage.getItem('skipper_free_agents')
     if (faCache) {
-      setFreeSPs(JSON.parse(faCache))
-    }
-
-    const configCache = sessionStorage.getItem('skipper_config')
-    if (configCache) {
-      const c = JSON.parse(configCache)
-      if (c.limit) setLimit(c.limit)
+      setFreeSPs(JSON.parse(faCache).freeSPs || [])
     }
 
     // Also load cached analysis if available
@@ -128,12 +150,26 @@ export default function Recommendations() {
     if (analysisCache) setAnalysis(analysisCache)
   }, [])
 
-  // Load config
+  // Load config, then hitter data (roster + FA batters) for the current period.
   useEffect(() => {
     fetch('/api/config')
       .then(r => r.json())
-      .then(data => { if (data.defaultLimit) setLimit(data.defaultLimit) })
-      .catch(() => {})
+      .then(data => {
+        if (data.defaultLimit) setLimit(data.defaultLimit)
+        const saved = localStorage.getItem('skipper_selected_period')
+        const week = saved ? parseInt(saved) : data.currentPeriod
+        if (!week) { setHittersStatus('error'); return }
+        return fetch(`/api/hitters?week=${week}`)
+          .then(r => r.json())
+          .then(d => {
+            if (d && d.ok) {
+              setRosterHitters(d.rosterHitters || [])
+              setFreeHitters(d.freeAgentHitters || [])
+              setHittersStatus('ok')
+            } else setHittersStatus('error')
+          })
+      })
+      .catch(() => setHittersStatus('error'))
   }, [])
 
   const generateAnalysis = useCallback(async () => {
@@ -150,10 +186,22 @@ export default function Recommendations() {
           name: p.name, team: p.team, starts: p.starts,
           projFpts: p.projFpts, injuryStatus: p.injuryStatus,
         })),
-        freeAgentSPs: freeSPs.filter(p => p.checked).map(p => ({
-          name: p.name, team: p.team, starts: p.starts,
-          projFpts: p.projFpts, percentOwned: p.percentOwned,
-          opps: p.opps || '', injuryStatus: p.injuryStatus,
+        freeAgentSPs: [...freeSPs]
+          .sort((a, b) => (b.projFpts || 0) - (a.projFpts || 0))
+          .slice(0, 10)
+          .map(p => ({
+            name: p.name, team: p.team, starts: p.starts,
+            projFpts: p.projFpts, percentOwned: p.percentOwned,
+            opps: p.opps || '', injuryStatus: p.injuryStatus,
+          })),
+        rosterHitters: rosterHitters.map(h => ({
+          name: h.name, team: h.team, pos: h.pos, bats: h.bats,
+          games: h.games, projFpts: h.projFpts, projPerGame: h.projPerGame,
+        })),
+        freeAgentHitters: topFreeHitters(freeHitters).map(h => ({
+          name: h.name, team: h.team, pos: h.pos, bats: h.bats,
+          games: h.games, projFpts: h.projFpts, projPerGame: h.projPerGame,
+          percentOwned: h.percentOwned,
         })),
       }
       const res = await fetch('/api/analyze', {
@@ -170,7 +218,7 @@ export default function Recommendations() {
     } finally {
       setLoading(false)
     }
-  }, [limit, confirmedStarts, weekLabel, todayName, rosterSPs, freeSPs])
+  }, [limit, confirmedStarts, weekLabel, todayName, rosterSPs, freeSPs, rosterHitters, freeHitters])
 
   // Parse the analysis text into sections by ## heading
   function parseSections(text: string) {
@@ -243,6 +291,15 @@ export default function Recommendations() {
           )}
         </div>
 
+        {/* Hitter-data fallback notice */}
+        {hittersStatus === 'error' && (
+          <div style={{
+            background: 'var(--amber-light)', border: '1px solid var(--amber)',
+            borderRadius: 'var(--radius)', padding: '12px 16px',
+            fontSize: 13, color: 'var(--amber)', marginBottom: 16,
+          }}>⚠ Hitter data unavailable — recommendations will cover pitchers only.</div>
+        )}
+
         {/* Error banner */}
         {error && (
           <div style={{
@@ -262,7 +319,7 @@ export default function Recommendations() {
             <div style={{ fontSize: 32, marginBottom: 12 }}>🤖</div>
             <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 8 }}>No data loaded yet</div>
             <div style={{ fontSize: 13, color: 'var(--ink-3)', marginBottom: 20 }}>
-              Load your roster and select free agents before generating recommendations.
+              Visit My Team and Free Agents to load roster data before generating recommendations.
             </div>
             <button
               onClick={() => router.push('/dashboard')}

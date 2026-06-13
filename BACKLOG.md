@@ -1,6 +1,6 @@
 # The Skipper — Backlog
 
-Last updated: June 12, 2026 (session 42 — four small consistency items resolved: cron W/L formula aligned with PR #146, v1 lock stores per-start proj, proj2h baseline→factor-adjusted upgrade, dropped-player projDetails merge)
+Last updated: June 13, 2026 (session 43 — hitters in AI recommendations shipped: P1 #1 closed, trade-engine Phase 2–3 prereq met; also fixed the recommendations page's dead sessionStorage handoff left behind by PR #127)
 
 ---
 
@@ -19,7 +19,7 @@ Each tier references the detailed items below — no items were removed, only ra
 6. ~~**Starts-only per-start pitcher rates**~~ — **shipped session 40.** `per_start_avgs_from_logs()` (gs≥1 rows) in `projection.py` + `cron.py`; capped season-total path remains the fallback (no logs / prior year).
 
 ### P1 — Next: decision automation (the indispensability layer)
-1. **Hitters in AI recommendations** — `api/analyze.py` only sees `rosterSPs`/`freeAgentSPs`; half the roster is invisible to the flagship feature. Prereq for the planner MVP **and a hard prereq for the trade evaluator/finder (Conner, June 12: both player types must be first-class in trade suggestions)**. (See *Future ideas → Promoted proposals*.)
+1. ~~**Hitters in AI recommendations**~~ — **shipped session 43.** `build_prompt` gains roster-hitter + FA-batter sections and hitter-aware TASK instructions (same four output sections, so the frontend parser is untouched); the recommendations page fetches `/api/hitters` directly and selects **top 10 FA pitchers by proj FPTS** (replacing the checked-set handoff) and **top 4 FA batters per position** (Conner's spec, June 13). Also fixed in passing: the page was still reading PR #127's dead sessionStorage keys, so its data handoff had been silently broken since session 30 — now reads the current localStorage shapes. Unblocks the trade evaluator/finder and planner MVP. **Verify in prod:** load Recommendations (no amber pitcher-only banner) and generate once.
 2. **League rosters viewer — trade engine Phase 1** (→ *Trade engine* section below; approved as-is June 12). No AI dependency — can ship before or alongside #1.
 3. **Trade evaluator + finder — trade engine Phases 2–3** (→ *Trade engine* section; spec approved June 12 with amendments). Sequenced after #1.
 4. **Weekly planner / decision automation MVP** (→ section below) — the roadmap centerpiece.
@@ -405,10 +405,7 @@ See CHANGELOG.md for full history of PRs #1-#47.
 
 ### Promoted proposals (June 10, 2026 review — ranked, see REVIEW.md for rationale)
 
-1. **Hitters in AI recommendations** *(also P1)* — extend `analyze.py`'s prompt + the
-   recommendations page payload to include roster hitters and checked FA batters
-   (data already exists in `/api/hitters`). The flagship feature currently plans
-   around half the roster.
+1. ~~**Hitters in AI recommendations**~~ *(also P1)* — **shipped session 43** (see P1 #1).
 2. **Regret tracker / "points left on bench"** — daily optimal-lineup retrospective:
    compare actual lineup FPTS vs the best possible lineup from locked projections +
    actuals (all already in KV: `proj2:`/`proj2h:`/`acth:`/`actual-all:`). Quantifies
