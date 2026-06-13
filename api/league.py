@@ -20,20 +20,17 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs
 
-from fetcher import (
-    get_headers_and_cookies, get_pro_team_map,
-    load_cached_data, load_hitter_stats,
-)
-from kv import cache_get, cache_set
-from projection import get_projected_fpts
-from projection_hitter import (
-    get_projected_hitter_fpts, parse_hitter_scoring, strip_accents,
-)
-from espn import (
-    _build_season_stats, _build_savant_expected, _build_fpts_history,
-    get_pos_eligible, get_slot_label, get_status,
-)
-from hitters import _season_line, _advanced_line, _eligible_positions, HITTER_SLOTS
+# NOTE: the local-module imports (fetcher / espn / hitters / projection / kv …)
+# are done lazily inside the functions below, NOT at module scope. Vercel's
+# Python builder doesn't reliably bundle sibling modules for a freshly-added
+# endpoint (see /api/injury_probe), and a module-scope import that fails to
+# resolve crashes the whole function at cold start — an opaque platform 500 that
+# the handler's try/except can't catch. Keeping module scope to stdlib +
+# requests guarantees the handler loads and can surface the real error as JSON.
+
+# 14=SP, 13=RP (mirrors espn.py SP/RP_ELIGIBLE). Inlined so no import is needed
+# just for the roster split.
+HITTER_SLOTS = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12}
 
 # Rest-of-season horizons. A full MLB season is 162 team games; a healthy
 # starter makes ~32 starts (mirrors the Stats-tab Pace comparator,
@@ -77,6 +74,14 @@ def _team_meta(team: dict, members_by_id: dict) -> dict:
 def _build_team(team, cd, hd, scoring, PRO_TEAM_MAP, year_int, week):
     """Pitchers + batters payloads for a single team, projected off the shared
     caches. Returns {pitchers: [...], batters: [...]}."""
+    from projection import get_projected_fpts
+    from projection_hitter import get_projected_hitter_fpts, strip_accents
+    from espn import (
+        _build_season_stats, _build_savant_expected, _build_fpts_history,
+        get_pos_eligible, get_slot_label, get_status,
+    )
+    from hitters import _season_line, _advanced_line, _eligible_positions
+
     entries = team.get("roster", {}).get("entries", [])
 
     # ── Split the roster ────────────────────────────────────────────────
@@ -183,6 +188,12 @@ def _build_team(team, cd, hd, scoring, PRO_TEAM_MAP, year_int, week):
 
 
 def build_league_rosters() -> dict:
+    from fetcher import (
+        get_headers_and_cookies, get_pro_team_map,
+        load_cached_data, load_hitter_stats,
+    )
+    from projection_hitter import parse_hitter_scoring
+
     league_id = os.environ.get("ESPN_LEAGUE_ID")
     if not league_id:
         raise RuntimeError("Missing env var ESPN_LEAGUE_ID")
@@ -229,6 +240,7 @@ def build_league_rosters() -> dict:
 class handler(BaseHTTPRequestHandler):
     def do_GET(self):
         try:
+            from kv import cache_get, cache_set
             qs = parse_qs(urlparse(self.path).query)
             fresh = qs.get("fresh", ["0"])[0] == "1"
             year = int(os.environ.get("ESPN_SEASON", "2026"))
@@ -246,7 +258,9 @@ class handler(BaseHTTPRequestHandler):
                     pass
             status, body = 200, payload
         except Exception as e:
-            status, body = 500, {"error": f"{type(e).__name__}: {e}"}
+            import traceback
+            status, body = 500, {"error": f"{type(e).__name__}: {e}",
+                                 "traceback": traceback.format_exc()[-1500:]}
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
         self.end_headers()
