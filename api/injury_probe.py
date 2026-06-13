@@ -26,6 +26,7 @@ Usage:
 import json
 import os
 import re
+import traceback
 import requests
 from http.server import BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs
@@ -57,9 +58,13 @@ def _trunc(v, n=240):
     return s if len(s) <= n else s[:n] + "…"
 
 
-def _interesting_fields(obj: dict) -> dict:
+def _interesting_fields(obj) -> dict:
     """Top-level keys of `obj` whose NAME looks injury/return-related, with
-    truncated values, plus any key whose VALUE looks like a date string."""
+    truncated values, plus any key whose VALUE looks like a date string.
+    Returns {} for any non-dict input (ESPN shapes vary) so callers can't
+    crash on an unexpected list/scalar."""
+    if not isinstance(obj, dict):
+        return {}
     out = {}
     for k, v in obj.items():
         if isinstance(v, (dict, list)):
@@ -83,59 +88,60 @@ def probe_kona() -> dict:
     if not league_id:
         return {"source": "kona", "error": "ESPN_LEAGUE_ID not set"}
     year = os.environ.get("ESPN_SEASON", "2026")
-    headers, cookies = get_headers_and_cookies()
-    base = (
-        f"https://lm-api-reads.fantasy.espn.com/apis/v3/games/flb"
-        f"/seasons/{year}/segments/0/leagues/{league_id}"
-    )
-    # Pull a broad FA slate (all slots) so we catch IL'd hitters and pitchers.
-    xff = json.dumps({"players": {
-        "filterStatus": {"value": ["FREEAGENT", "WAIVERS"]},
-        "limit": 300,
-        "sortPercOwned": {"sortPriority": 1, "sortAsc": False},
-    }})
     try:
+        headers, cookies = get_headers_and_cookies()
+        base = (
+            f"https://lm-api-reads.fantasy.espn.com/apis/v3/games/flb"
+            f"/seasons/{year}/segments/0/leagues/{league_id}"
+        )
+        # Pull a broad FA slate (all slots) so we catch IL'd hitters and pitchers.
+        xff = json.dumps({"players": {
+            "filterStatus": {"value": ["FREEAGENT", "WAIVERS"]},
+            "limit": 300,
+            "sortPercOwned": {"sortPriority": 1, "sortAsc": False},
+        }})
         r = requests.get(
             base,
             params=[("view", "kona_player_info"), ("scoringPeriodId", 1)],
             cookies=cookies, headers={**headers, "x-fantasy-filter": xff},
             timeout=15,
         )
+        if r.status_code != 200:
+            return {"source": "kona", "error": f"HTTP {r.status_code}"}
+
+        players = r.json().get("players", [])
+        il_players = []
+        sample_keys = None
+        for p in players:
+            player = p.get("player", {}) if isinstance(p, dict) else {}
+            status = player.get("injuryStatus", "")
+            if status in ("", "ACTIVE", "NORMAL"):
+                continue
+            if sample_keys is None:
+                sample_keys = sorted(player.keys())
+            il_players.append({
+                "id": player.get("id"),
+                "fullName": player.get("fullName"),
+                "injuryStatus": status,
+                "interesting_fields": _interesting_fields(player),
+                # ESPN sometimes nests a per-player injuries array with detail text.
+                "injuries": _trunc(player.get("injuries")) if player.get("injuries") else None,
+            })
+            if len(il_players) >= 8:
+                break
+
+        has_date = any(_has_date(p["interesting_fields"]) for p in il_players)
+        return {
+            "source": "kona",
+            "total_fa_returned": len(players),
+            "il_count_shown": len(il_players),
+            "player_top_level_keys": sample_keys,
+            "carries_return_date": has_date,
+            "il_players": il_players,
+        }
     except Exception as e:
-        return {"source": "kona", "error": f"{type(e).__name__}: {e}"}
-    if r.status_code != 200:
-        return {"source": "kona", "error": f"HTTP {r.status_code}"}
-
-    players = r.json().get("players", [])
-    il_players = []
-    sample_keys = None
-    for p in players:
-        player = p.get("player", {})
-        status = player.get("injuryStatus", "")
-        if status in ("", "ACTIVE", "NORMAL"):
-            continue
-        if sample_keys is None:
-            sample_keys = sorted(player.keys())
-        il_players.append({
-            "id": player.get("id"),
-            "fullName": player.get("fullName"),
-            "injuryStatus": status,
-            "interesting_fields": _interesting_fields(player),
-            # ESPN sometimes nests a per-player injuries array with detail text.
-            "injuries": _trunc(player.get("injuries")) if player.get("injuries") else None,
-        })
-        if len(il_players) >= 8:
-            break
-
-    has_date = any(_has_date(p["interesting_fields"]) for p in il_players)
-    return {
-        "source": "kona",
-        "total_fa_returned": len(players),
-        "il_count_shown": len(il_players),
-        "player_top_level_keys": sample_keys,
-        "carries_return_date": has_date,
-        "il_players": il_players,
-    }
+        return {"source": "kona", "error": f"{type(e).__name__}: {e}",
+                "traceback": traceback.format_exc()[-1500:]}
 
 
 def probe_injuries_feed() -> dict:
@@ -144,45 +150,48 @@ def probe_injuries_feed() -> dict:
     try:
         r = requests.get(INJURIES_FEED, timeout=15,
                          headers={"User-Agent": "Mozilla/5.0"})
-    except Exception as e:
-        return {"source": "injuries_feed", "error": f"{type(e).__name__}: {e}"}
-    if r.status_code != 200:
-        return {"source": "injuries_feed", "error": f"HTTP {r.status_code}"}
-    try:
-        data = r.json()
-    except Exception as e:
-        return {"source": "injuries_feed", "error": f"non-JSON: {e}",
-                "body_head": (r.text or "")[:400]}
+        if r.status_code != 200:
+            return {"source": "injuries_feed", "error": f"HTTP {r.status_code}",
+                    "body_head": (r.text or "")[:400]}
+        try:
+            data = r.json()
+        except Exception as e:
+            return {"source": "injuries_feed", "error": f"non-JSON: {e}",
+                    "body_head": (r.text or "")[:400]}
 
-    # Shape: { injuries: [ { team..., injuries: [ {athlete, status, details...} ] } ] }
-    teams = data.get("injuries", [])
-    sample = []
-    found_date = False
-    for team in teams:
-        for entry in team.get("injuries", []) or []:
-            fields = _interesting_fields(entry)
-            athlete = entry.get("athlete") or {}
-            sample.append({
-                "athlete": athlete.get("displayName") or athlete.get("fullName"),
-                "athleteId": athlete.get("id"),
-                "status": entry.get("status"),
-                "entry_keys": sorted(entry.keys()),
-                "interesting_fields": fields,
-            })
-            if _has_date(fields):
-                found_date = True
+        # Shape: { injuries: [ { team..., injuries: [ {athlete, status, details...} ] } ] }
+        teams = data.get("injuries", []) if isinstance(data, dict) else []
+        sample = []
+        found_date = False
+        for team in teams:
+            entries = (team.get("injuries", []) or []) if isinstance(team, dict) else []
+            for entry in entries:
+                fields = _interesting_fields(entry)
+                athlete = (entry.get("athlete") or {}) if isinstance(entry, dict) else {}
+                sample.append({
+                    "athlete": athlete.get("displayName") or athlete.get("fullName"),
+                    "athleteId": athlete.get("id"),
+                    "status": entry.get("status") if isinstance(entry, dict) else None,
+                    "entry_keys": sorted(entry.keys()) if isinstance(entry, dict) else None,
+                    "interesting_fields": fields,
+                })
+                if _has_date(fields):
+                    found_date = True
+                if len(sample) >= 8:
+                    break
             if len(sample) >= 8:
                 break
-        if len(sample) >= 8:
-            break
 
-    return {
-        "source": "injuries_feed",
-        "url": INJURIES_FEED,
-        "team_blocks": len(teams),
-        "carries_return_date": found_date,
-        "sample_entries": sample,
-    }
+        return {
+            "source": "injuries_feed",
+            "url": INJURIES_FEED,
+            "team_blocks": len(teams),
+            "carries_return_date": found_date,
+            "sample_entries": sample,
+        }
+    except Exception as e:
+        return {"source": "injuries_feed", "error": f"{type(e).__name__}: {e}",
+                "traceback": traceback.format_exc()[-1500:]}
 
 
 def probe_athlete_overview(athlete_id: str) -> dict:
@@ -191,27 +200,28 @@ def probe_athlete_overview(athlete_id: str) -> dict:
     url = ATHLETE_OVERVIEW.format(id=athlete_id)
     try:
         r = requests.get(url, timeout=15, headers={"User-Agent": "Mozilla/5.0"})
+        if r.status_code != 200:
+            return {"source": "athlete_overview", "athleteId": athlete_id,
+                    "error": f"HTTP {r.status_code}"}
+        try:
+            data = r.json()
+        except Exception as e:
+            return {"source": "athlete_overview", "athleteId": athlete_id,
+                    "error": f"non-JSON: {e}"}
+        # The overview is a big nested doc; surface only the injury-ish slices.
+        fields = _interesting_fields(data)
+        return {
+            "source": "athlete_overview",
+            "athleteId": athlete_id,
+            "url": url,
+            "top_level_keys": sorted(data.keys()) if isinstance(data, dict) else None,
+            "carries_return_date": _has_date(fields),
+            "interesting_fields": fields,
+        }
     except Exception as e:
         return {"source": "athlete_overview", "athleteId": athlete_id,
-                "error": f"{type(e).__name__}: {e}"}
-    if r.status_code != 200:
-        return {"source": "athlete_overview", "athleteId": athlete_id,
-                "error": f"HTTP {r.status_code}"}
-    try:
-        data = r.json()
-    except Exception as e:
-        return {"source": "athlete_overview", "athleteId": athlete_id,
-                "error": f"non-JSON: {e}"}
-    # The overview is a big nested doc; surface only the injury-ish slices.
-    fields = _interesting_fields(data)
-    return {
-        "source": "athlete_overview",
-        "athleteId": athlete_id,
-        "url": url,
-        "top_level_keys": sorted(data.keys()),
-        "carries_return_date": _has_date(fields),
-        "interesting_fields": fields,
-    }
+                "error": f"{type(e).__name__}: {e}",
+                "traceback": traceback.format_exc()[-1500:]}
 
 
 def probe(source: str | None, athlete_id: str | None) -> dict:
@@ -251,10 +261,16 @@ def probe(source: str | None, athlete_id: str | None) -> dict:
 
 class handler(BaseHTTPRequestHandler):
     def do_GET(self):
-        qs = parse_qs(urlparse(self.path).query)
-        source = (qs.get("source") or [None])[0]
-        athlete_id = (qs.get("athleteId") or [None])[0]
-        result = probe(source, athlete_id)
+        try:
+            qs = parse_qs(urlparse(self.path).query)
+            source = (qs.get("source") or [None])[0]
+            athlete_id = (qs.get("athleteId") or [None])[0]
+            result = probe(source, athlete_id)
+        except Exception as e:
+            # A diagnostic endpoint must never hand back an opaque platform 500 —
+            # surface the failure as JSON so it's actually diagnosable.
+            result = {"error": f"{type(e).__name__}: {e}",
+                      "traceback": traceback.format_exc()[-2000:]}
         ok = "error" not in result
         self.send_response(200 if ok else 500)
         self.send_header("Content-Type", "application/json")
