@@ -1,6 +1,5 @@
 import Head from 'next/head'
 import { useState, useEffect, useMemo } from 'react'
-import Layout from '../components/Layout'
 import StatsTable, { PITCHER_COLUMNS, ROS_COLUMN, PitcherColumn } from '../components/StatsTable'
 import { HitterStatsTable, UIHitter } from '../components/HitterTables'
 
@@ -80,7 +79,7 @@ export default function League() {
   )
 
   return (
-    <Layout weekLabel={data ? `Period ${data.week}` : undefined}>
+    <>
       <Head><title>League · The Skipper</title></Head>
 
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12, marginBottom: 16 }}>
@@ -137,6 +136,6 @@ export default function League() {
           </div>
         </>
       )}
-    </Layout>
+    </>
   )
 }
