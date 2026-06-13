@@ -76,7 +76,7 @@ const sectionLabel: React.CSSProperties = {
   letterSpacing: '0.1em', color: 'var(--ink-3)',
   textTransform: 'uppercase', marginBottom: 12,
 }
-const mono12: React.CSSProperties = { fontFamily: 'var(--mono)', fontSize: 12 }
+const mono12: React.CSSProperties = { fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--ink)' }
 
 export default function League() {
   const [data, setData] = useState<LeagueData | null>(null)
@@ -365,7 +365,7 @@ export default function League() {
 function TradeResultView({ trade }: { trade: TradeResult }) {
   const s = trade.summary
   const color = VERDICT_COLOR[s.verdict] || 'var(--ink)'
-  const mono = { fontFamily: 'var(--mono)', fontSize: 12 } as React.CSSProperties
+  const mono = { fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--ink)' } as React.CSSProperties
 
   const sideTable = (label: string, rows: TradeSidePlayer[]) => (
     <div>
@@ -423,7 +423,7 @@ function TradeResultView({ trade }: { trade: TradeResult }) {
 
 // ── Finder proposals list ───────────────────────────────────────────────
 function FinderResults({ finder, onPick }: { finder: any; onPick: (p: any) => void }) {
-  const mono = { fontFamily: 'var(--mono)', fontSize: 12 } as React.CSSProperties
+  const mono = { fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--ink)' } as React.CSSProperties
   const proposals: any[] = finder.proposals || []
   if (proposals.length === 0) {
     return (
