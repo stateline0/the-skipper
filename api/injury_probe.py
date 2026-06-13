@@ -31,7 +31,12 @@ import requests
 from http.server import BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs
 
-from fetcher import get_headers_and_cookies
+# NOTE: `fetcher` (and its kv/upstash import chain) is imported lazily inside
+# probe_kona(), NOT at module scope. A failure in that chain at cold start would
+# crash the whole module before the handler loads — turning every request into
+# an opaque platform 500 with no way to report it. Keeping module-level imports
+# to stdlib + requests (same as the working forecaster_probe) guarantees the
+# handler always loads and can surface errors as JSON.
 
 # Field names that would plausibly carry a return date / injury detail. Used to
 # pull the interesting keys out of otherwise-large objects so the response is
@@ -89,6 +94,7 @@ def probe_kona() -> dict:
         return {"source": "kona", "error": "ESPN_LEAGUE_ID not set"}
     year = os.environ.get("ESPN_SEASON", "2026")
     try:
+        from fetcher import get_headers_and_cookies
         headers, cookies = get_headers_and_cookies()
         base = (
             f"https://lm-api-reads.fantasy.espn.com/apis/v3/games/flb"
