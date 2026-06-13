@@ -1,6 +1,6 @@
 # The Skipper — Backlog
 
-Last updated: June 13, 2026 (session 43 — hitters in AI recommendations shipped: P1 #1 closed, trade-engine Phase 2–3 prereq met; also fixed the recommendations page's dead sessionStorage handoff left behind by PR #127. New P1 #2: IL-aware FA projections + Est Return, feasibility explored — see section below)
+Last updated: June 13, 2026 (session 44 — shipped end-to-end: IL grades + injury pills on every page (roster + FA, pitchers + batters), Phase B Est-Return-aware projections, and the League rosters viewer / trade-engine Phase 1. Also fixed `/api/injury_probe` (the probe that validated the injuries feed). P1 #2 and P1 #3 both closed. New infra gotcha recorded: Vercel doesn't bundle sibling modules for *newly-added* Python endpoint files — route new endpoints through an existing one. See sections below.)
 
 ---
 
@@ -20,8 +20,8 @@ Each tier references the detailed items below — no items were removed, only ra
 
 ### P1 — Next: decision automation (the indispensability layer)
 1. ~~**Hitters in AI recommendations**~~ — **shipped session 43.** `build_prompt` gains roster-hitter + FA-batter sections and hitter-aware TASK instructions (same four output sections, so the frontend parser is untouched); the recommendations page fetches `/api/hitters` directly and selects **top 10 FA pitchers by proj FPTS** (replacing the checked-set handoff) and **top 4 FA batters per position** (Conner's spec, June 13). Also fixed in passing: the page was still reading PR #127's dead sessionStorage keys, so its data handoff had been silently broken since session 30 — now reads the current localStorage shapes. Unblocks the trade evaluator/finder and planner MVP. **Verify in prod:** load Recommendations (no amber pitcher-only banner) and generate once.
-2. **IL-aware FA projections + Est Return (flagged by Conner, June 13)** — IL'd free agents still carry full projections, which now also pollutes the AI payload's top-10/top-4 selection (picked by projFpts). Phase A (IL pill + zero-while-IL, no new external calls) is small and should ship next; Phase B (ESPN "Est Return" date) needs a probe. (→ *IL-aware projections & Est Return* section below.)
-3. **League rosters viewer — trade engine Phase 1** (→ *Trade engine* section below; approved as-is June 12). No AI dependency — can ship before or alongside #1.
+2. ~~**IL-aware FA projections + Est Return**~~ — **shipped session 44 (Phases A + B).** Real typed IL grades (IL10/IL15/IL60/DTD) on every page incl. rostered players, sourced from the public ESPN injuries feed (joined by ESPN id); est-return-aware projections (IL hitters zero only through the return date, then resume); tap-to-open IL tooltip with est. return + injury detail. (→ *IL-aware projections & Est Return* section for the phase detail.)
+3. ~~**League rosters viewer — trade engine Phase 1**~~ — **shipped session 44.** Every team's roster with the same Stats payloads + a season-long ROS column, served via `/api/hitters?view=league`. Unblocks the Phase 2 evaluator. (→ *Trade engine* section.)
 4. **Trade evaluator + finder — trade engine Phases 2–3** (→ *Trade engine* section; spec approved June 12 with amendments). Sequenced after #1.
 5. **Weekly planner / decision automation MVP** (→ section below) — the roadmap centerpiece.
 6. **Hitter nudge engine** (→ *Hitters* section) — watchlist/alert, buildable today on FA actuals.
@@ -43,6 +43,21 @@ Each tier references the detailed items below — no items were removed, only ra
 ### Horizon — productization (deferred by strategy)
 Multi-user / multi-league, category-league support (the stat-vector hitter model already enables it), Yahoo/other platforms, mobile app, paid probables source. Revisit when P0–P1 are done and the tool is winning leagues.
 
+### Infra notes (learned the hard way)
+- **Vercel doesn't bundle sibling modules for *newly-added* Python endpoint
+  files.** A brand-new `api/foo.py` that does `from kv import …` /
+  `from fetcher import …` crashes at cold start with `ModuleNotFoundError`
+  (the function bundle ships without the siblings), even though existing
+  endpoints import the same modules fine. Confirmed session 44 on both
+  `api/injury_probe.py` and `api/league.py`; deferring imports, leaf-only
+  imports, `vercel.json` `includeFiles`, and a no-cache redeploy all FAILED.
+  **Workaround that works:** add the logic to an *existing* endpoint module
+  (whose bundle already resolves) behind a query-param branch — e.g. the
+  League viewer ships as `/api/hitters?view=league`. Do this for any new
+  backend endpoint until the root cause (Vercel build config / tracer) is
+  understood. `api/injury_probe.py`'s kona path is still broken for the same
+  reason (its `injuries_feed` path works because it needs no siblings).
+
 ---
 
 ## 🔜 Next session priorities
@@ -55,13 +70,16 @@ Multi-user / multi-league, category-league support (the stat-vector hitter model
 - [x] ~~**W/L impact sign should track win prob, not the pitcher's record.**~~ — **fixed session 33 (PR #146).** Both `w_contrib`/`l_contrib` (live) and `w_adj`/`l_adj` (lock) now scale by the total decision rate `(raw_w + raw_l)` split by win prob instead of the separate historical W/L rates, so net = `decision_rate × STARTER_WIN_SHARE × 5 × (2·win_prob − 1)` → **positive when favored, 0 at a coin flip, negative as an underdog**, magnitude still pitcher-specific. Verified the backlog's 56%-win-prob case flips from −0.1 to +0.19. The net decomposes exactly into the existing `w×5 + l×−5` shape, so the locked breakdown's `stats.w`/`stats.l` (read by `accuracy.py`) keep their shape and become a cleaner expected-W/L estimate; the tooltip's `wlContrib` sign is now correct. Added a `MaeTimelineChart` milestone marker (2026-06-07); **forward-only** for locked values.
 - [x] ~~**ESPN Forecaster scraper broken since ~mid-May**~~ — **fixed session 32 (PR #145).** External break, as suspected: ESPN now fronts the Forecaster article with **AWS WAF (CloudFront)**, which serves a ~2KB HTTP-202 challenge stub (`window.awsWafCookieDomainList` / `window.gokuProps`, no table) to **Chrome-fingerprinted** requests. The `/api/forecaster_probe` strategy matrix (rewritten this session to test multiple UAs/cookie-warmup in one request) showed legacy Chrome/123, a modern Chrome+client-hints fingerprint, and a cookie-warmed session all get the stub, while a **plain Safari UA and Googlebot UA both pass straight through** to the real 156KB article — so it's a UA-based rule, not a JS challenge, and a header swap is the whole fix. `fetch_forecaster()` now sends Safari (primary) → Googlebot (fallback) and returns a loud, specific error (`all UAs blocked — safari: HTTP 202 … [AWS WAF stub]`) on failure. The missed mid-May→Jun weeks remain **unrecoverable** (rolling 10-day window); data resumes going forward. **Note:** the cron already writes the full `espn` result (counters *or* error) into `cache:cron-summary:{date}`, so the "add ESPN-lock counters to cron-summary" sub-item was already covered — a future WAF change will show up there verbatim.
 
-### IL-aware projections & Est Return (flagged by Conner, June 13 — feasibility explored session 43)
-IL'd free agents still show full projections, and since session 43 the AI
-payload selects FA pitchers/batters **by projFpts** — so a high-skill IL60
-player can crowd a healthy streamer out of the top-10/top-4 lists. Three
-parts, phased by data availability:
+### IL-aware projections & Est Return — ✅ SHIPPED (sessions 43–44)
+**Done.** Phase A (session 43, PR #170: typed IL pill + zero-while-IL for FAs)
+and Phase B (session 44, PRs #171–#174: pills rendered on every page incl.
+rostered players, real grades + est. return from the public ESPN injuries feed
+joined by ESPN id, return-date-aware projection resumption, tap-to-open IL
+tooltip). Roster grades — the original blocker (mRoster `injuryStatus` is empty
+for rostered players) — are solved because the public injuries feed needs no
+auth and covers all of MLB. Phase history retained below for reference:
 
-- [ ] **Phase A1 — IL pill (with type) on the Name subline.** *Buildable
+- [x] **Phase A1 — IL pill (with type) on the Name subline.** ✅ Shipped (rendered on every page — roster + FA, pitchers + batters; roster grades from the injuries feed, not kona). *Buildable
   today for FAs, no new external calls.* The kona `player.injuryStatus`
   field works for free agents (KNOWLEDGE.md, 10/10): `FIFTEEN_DAY_DL`,
   `SIXTY_DAY_DL`, `DAY_TO_DAY`, `SUSPENSION`. `api/espn.py`'s FA pitcher
@@ -77,8 +95,8 @@ parts, phased by data availability:
   existing `kona_player_info` ownership-parse loop (PR #117) to check
   whether that view carries granular status for rostered players — zero new
   HTTP calls either way.
-- [ ] **Phase A2 — zero daily projections while on IL (no return date
-  needed).** Hitters: zero the per-day `proj` in `_build_days` (shared by
+- [x] **Phase A2 — zero daily projections while on IL.** ✅ Shipped, then
+  superseded by Phase B's return-date awareness. Hitters: zero the per-day `proj` in `_build_days` (shared by
   roster + FA paths — one change point) whenever status is IL10/IL15/IL60;
   status clears when ESPN activates the player and data refreshes daily, so
   projections resume automatically. **DTD keeps projections** (day-to-day
@@ -89,8 +107,16 @@ parts, phased by data availability:
   no `analyze.py` change. Accuracy impact: nil — an IL hitter's locked proj
   becomes 0 instead of stale-nonzero, and DNP games were already excluded
   from MAE (unmatched). Forward-only.
-- [ ] **Phase B — ESPN "Est Return" date + zero-until-return.** The return
-  date the fantasy app shows is **not in any feed we currently parse**.
+- [x] **Phase B — ESPN "Est Return" date + zero-until-return.** ✅ Shipped
+  session 44 (PRs #173–#174). **Source = candidate (2), the public ESPN
+  injuries feed** (`site.api.espn.com/.../mlb/injuries`) — `/api/injury_probe`
+  confirmed it carries `details.returnDate` AND the typed grade for every MLB
+  player, no auth, so it works for rostered players too. New `api/injuries.py`
+  fetches/caches it (`cache:injuries-feed:v1`, 6h), joined to roster/FA by ESPN
+  id. Projections zero only days before the return date, then resume; the date
+  shows in the IL tooltip. Still TODO: feed the real dates into **trade engine
+  Phase 2's IL discounting** (replacing the IL15 ≈ −2.5wk / IL60 ≈ −9wk
+  assumptions). Original probe plan retained below:
   Probe candidates, in order: (1) the kona `player` object itself (cheapest
   if present — same call we already make); (2) ESPN's public injuries feed
   `site.api.espn.com/apis/site/v2/sports/baseball/mlb/injuries` (the NFL
@@ -129,17 +155,17 @@ Supersedes the unranked "Trade analyzer" idea. Everything stays **read-only**
 `mRoster`+`mTeam` call `get_league_data` already makes returns **all 12 teams'
 rosters** — opposing rosters are downloaded today and discarded.
 
-- [ ] **Phase 1 — League rosters viewer** (approved as-is; ~1 session; no AI
-  dependency). New `api/league.py?teamId=N`: teams index from `mTeam` (name,
-  owner, record); per team, pitchers/batters split with the existing payload
-  builders (`_build_season_stats`, `_build_savant_expected`,
-  `_build_fpts_history`, hitter stat path) — all from the all-MLB KV caches,
-  no new external fetches. New **ROS FPTS** column: pitchers Proj/G × est.
-  remaining starts (Pace logic), hitters projPerGame × team games remaining.
-  **No schedule grid for opponents** (Conner: not needed). Per-team cache
-  `cache:league-roster:{year}:{teamId}` ~30-min TTL; behind the auth gate.
-  Frontend: `pages/league.tsx` ("League" in sidebar) — team selector → two
-  `StatsTable` sections reusing existing column configs.
+- [x] **Phase 1 — League rosters viewer** — ✅ **shipped session 44** (PR #175).
+  All 12 teams' rosters with the same Stats payloads (reusing the existing
+  builders) + a season-long **ROS FPTS** column (SP: Proj/G × `32 − GS` Pace
+  horizon; RP: appearance-prorated; hitters: projPerGame × `162 − games played`
+  from cached `team_win_data`). Team meta (name/owner/record) from `mTeam`;
+  cache `cache:league-roster:{year}` 30-min; behind auth; no opponent schedule
+  grid. Frontend: `pages/league.tsx` ("League" in sidebar) — team selector → two
+  `StatsTable`/`HitterStatsTable` sections. **Served as `/api/hitters?view=league`,
+  NOT a standalone `api/league.py`** — see the Vercel-bundling note in *Infra
+  notes* below. Follow-ups deferred: preselect the user's own team in the
+  selector (needs an `/api/config` fetch).
 - [ ] **Phase 2 — Trade evaluator** (~1–2 sessions; **prereq: hitters in AI
   recommendations**). `api/trade.py` `{give, get, withTeamId}` →
   - **Trade value = de-lucked ROS minus per-position replacement.** The skill
