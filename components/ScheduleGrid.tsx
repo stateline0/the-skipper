@@ -91,22 +91,6 @@ interface Props {
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-function Badge({ label, color }: { label: string; color: 'blue' | 'amber' | 'red' | 'gray' }) {
-  const styles: Record<string, React.CSSProperties> = {
-    blue:  { background: 'var(--blue-light)',  color: 'var(--blue)' },
-    amber: { background: 'var(--amber-light)', color: 'var(--amber)' },
-    red:   { background: 'var(--red-light)',   color: 'var(--red)' },
-    gray:  { background: 'var(--paper-2)',     color: 'var(--ink-3)' },
-  }
-  return (
-    <span style={{
-      display: 'inline-block', fontSize: 11, fontWeight: 600,
-      fontFamily: 'var(--mono)', padding: '2px 8px', borderRadius: 99,
-      letterSpacing: '0.04em', whiteSpace: 'nowrap', ...styles[color],
-    }}>{label}</span>
-  )
-}
-
 // Build array of YYYY-MM-DD strings between start and end (inclusive)
 function buildDateRange(start: string, end: string): string[] {
   const dates: string[] = []
@@ -505,9 +489,8 @@ export default function ScheduleGrid({
             >
               Pitcher{sortIndicator('name')}
             </th>
-            <th style={{ ...headerStyle, minWidth: 44 }}>Slot</th>
 
-            {/* Date columns — inserted between Slot and Starts */}
+            {/* Date columns */}
             {dates.map(date => {
               const isToday = date === today
               const isActiveSort = sortCol === date
@@ -587,14 +570,6 @@ export default function ScheduleGrid({
                     <IlPill status={pitcher.injuryStatus} />
                     <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--ink-3)' }}>{pitcher.team}</span>
                   </div>
-                </td>
-
-                {/* Slot badge */}
-                <td style={cellStyle}>
-                  <Badge
-                    label={pitcher.slot}
-                    color={pitcher.slot === 'IL' ? 'red' : pitcher.slot === 'RP' ? 'amber' : 'blue'}
-                  />
                 </td>
 
                 {/* Day cells */}
