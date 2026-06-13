@@ -26,6 +26,7 @@ export interface UIHitter {
   avg: number; obp: number; slg: number
   hr: number; r: number; rbi: number; sb: number
   percentOwned?: number       // Free Agents view only
+  il?: string                 // typed injury label (IL10/IL15/IL60/DTD/SUSP) — FA view only
   adv?: HitterAdvanced        // advanced Savant block (Stats tab)
 }
 
@@ -206,6 +207,24 @@ export function PosTags({ pos }: { pos: string }) {
   )
 }
 
+// Injury-status pill on the name sub-line (IL10/IL15/IL60/DTD/SUSP). IL grades
+// are red (projection zeroed while shelved); DTD/SUSP are amber (still
+// projecting). Nothing renders for active players.
+export function IlPill({ status }: { status?: string }) {
+  if (!status) return null
+  const isIL = status.startsWith('IL')
+  const style = isIL
+    ? { background: 'var(--red-light)', color: 'var(--red)' }
+    : { background: 'var(--amber-light)', color: 'var(--amber)' }
+  return (
+    <span style={{
+      display: 'inline-block', fontSize: 9, fontWeight: 700, fontFamily: 'var(--mono)',
+      padding: '1px 5px', borderRadius: 99, letterSpacing: '0.03em',
+      whiteSpace: 'nowrap', ...style,
+    }}>{status}</span>
+  )
+}
+
 // ─── Schedule grid ──────────────────────────────────────────────────────────
 
 export function HitterScheduleGrid({ hitters, weeks, weekDates, today, showOwn, actualsTracked }: {
@@ -270,6 +289,7 @@ export function HitterScheduleGrid({ hitters, weeks, weekDates, today, showOwn, 
                   <div style={{ fontWeight: 600 }}>{h.name}</div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 5, flexWrap: 'wrap', marginTop: 2 }}>
                     <PosTags pos={h.pos} />
+                    <IlPill status={h.il} />
                     <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--ink-3)' }}>
                       {h.team}{h.bats ? ` · ${h.bats}HB` : ''}
                     </span>
@@ -452,6 +472,7 @@ export function HitterStatsTable({ hitters, weeks, showOwn, leagueAvg }: {
                   <div style={{ fontWeight: 600 }}>{h.name}</div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 5, flexWrap: 'wrap', marginTop: 2 }}>
                     <PosTags pos={h.pos} />
+                    <IlPill status={h.il} />
                     <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--ink-3)' }}>
                       {h.team}{h.bats ? ` · ${h.bats}HB` : ''}
                     </span>
@@ -499,6 +520,7 @@ export function hitterFromPayload(h: any, dates: string[]): { hitter: UIHitter; 
       avg: s.avg || 0, obp: s.obp || 0, slg: s.slg || 0,
       hr: s.hr || 0, r: s.r || 0, rbi: s.rbi || 0, sb: s.sb || 0,
       percentOwned: h.percentOwned,
+      il: h.injuryStatus && h.injuryStatus !== 'Active' ? h.injuryStatus : undefined,
       adv: h.advanced || undefined,
     },
     days,

@@ -16,8 +16,9 @@ export const config = {
   //   api/cron/*, api/warm — Vercel Cron triggers; no session, auth'd via
   //                CRON_SECRET header inside the handler (see api/cron.py,
   //                api/warm.py)
-  //   api/forecaster, api/forecaster_probe, api/espn_proj — read-only
-  //     diagnostic/data endpoints with no user-specific or sensitive data
-  '/((?!_next/static|_next/image|favicon.ico|api/auth|api/cron|api/warm|api/forecaster|api/forecaster_probe|api/espn_proj).*)',
+  //   api/forecaster, api/forecaster_probe, api/espn_proj, api/injury_probe —
+  //     read-only diagnostic/data endpoints with no user-specific or sensitive
+  //     data (injury_probe surfaces only ESPN injury fields, never auth cookies)
+  '/((?!_next/static|_next/image|favicon.ico|api/auth|api/cron|api/warm|api/forecaster|api/forecaster_probe|api/espn_proj|api/injury_probe).*)',
 ],
 }

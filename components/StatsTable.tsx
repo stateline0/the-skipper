@@ -10,6 +10,7 @@
 // stays renderer-only — all data shaping lives in the column defs.
 
 import { useCallback, useMemo, useState } from 'react'
+import { IlPill } from './HitterTables'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -54,6 +55,7 @@ export interface Pitcher {
   projBlend?: number
   percentOwned?: number
   startDates?: StartDate[]
+  injuryStatus?: string           // typed IL label (IL10/IL15/IL60/DTD/SUSP); FA view only
   seasonStats?: SeasonStats | null
   savantExpected?: SavantExpected | null
   fptsHistory?: number[] | null   // actual FPTS per start, oldest→newest (last ~10)
@@ -322,7 +324,11 @@ export const PITCHER_COLUMNS: PitcherColumn[] = [
     key: 'name', label: 'Pitcher', align: 'left', minWidth: 160,
     stringValue: (p) => p.name,
     render: (p) => (
-      <span style={{ fontWeight: 600 }}>{p.name}</span>
+      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+        <span style={{ fontWeight: 600 }}>{p.name}</span>
+        {p.injuryStatus && p.injuryStatus !== 'Active' && p.injuryStatus !== 'IL'
+          && <IlPill status={p.injuryStatus} />}
+      </span>
     ),
   },
   {

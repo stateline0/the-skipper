@@ -155,6 +155,20 @@ def get_status(injured: bool) -> str:
     return "Active"
 
 
+# FA injuryStatus display labels (the kona flat player path carries the granular
+# type for free agents; mRoster's injuryStatus is empty for rostered players —
+# see KNOWLEDGE.md "Injury detection").
+INJ_LABEL_MAP = {
+    "ACTIVE": "Active", "NORMAL": "Active",
+    "TEN_DAY_DL": "IL10", "FIFTEEN_DAY_DL": "IL15", "SIXTY_DAY_DL": "IL60",
+    "DAY_TO_DAY": "DTD", "SUSPENSION": "SUSP",
+}
+# Statuses whose projections zero while shelved (Phase A, June 13). DTD keeps
+# projecting (day-to-day players usually play); unknown statuses fall through
+# unzeroed — conservative by design.
+IL_ZERO_STATUSES = {"IL10", "IL15", "IL60"}
+
+
 # ── Main data assembly ────────────────────────────────────────────────
 
 def get_league_data(team_id: int, week: int) -> dict:
@@ -244,6 +258,7 @@ def get_league_data(team_id: int, week: int) -> dict:
     # capture it here from the kona_player_info call we're already making
     # for projections — no extra HTTP request needed.
     percent_owned_by_player = {}
+    rostered_inj_statuses = {}
     if stats_r.status_code == 200:
         for p in stats_r.json().get("players", []):
             pid  = p.get("id")
@@ -251,6 +266,14 @@ def get_league_data(team_id: int, week: int) -> dict:
             proj_fpts_by_player[pid] = round(float(proj or 0), 1)
             own  = p.get("player", {}).get("ownership", {}).get("percentOwned", 0)
             percent_owned_by_player[pid] = round(float(own or 0), 1)
+            # Diagnostic (Phase A, June 13): mRoster's injuryStatus is empty for
+            # rostered players — check whether this kona view carries the
+            # granular type so rostered IL pills could gain one (Phase B input).
+            inj = p.get("player", {}).get("injuryStatus", "")
+            if inj and inj not in ("ACTIVE", "NORMAL"):
+                rostered_inj_statuses[p.get("player", {}).get("fullName", pid)] = inj
+    if rostered_inj_statuses:
+        print(f"[espn.py] kona injuryStatus for rostered players (non-ACTIVE): {rostered_inj_statuses}")
 
     # ── Fetch probable pitchers + full game schedule ──────────────────
     roster_entries   = my_team.get("roster", {}).get("entries", [])
@@ -575,17 +598,13 @@ def get_league_data(team_id: int, week: int) -> dict:
             schedule=schedule,
         )
 
-        inj_label_map = {
-            "ACTIVE": "Active", "NORMAL": "Active",
-            "FIFTEEN_DAY_DL": "IL15", "SIXTY_DAY_DL": "IL60",
-            "DAY_TO_DAY": "DTD", "SUSPENSION": "SUSP",
-        }
         for p in fa_players_raw:
             player       = p.get("player", {})
             fa_name      = player.get("fullName", "Unknown")
             pro_team_id  = player.get("proTeamId", 0)
             team_abbrev  = PRO_TEAM_MAP.get(pro_team_id, str(pro_team_id))
             raw_inj      = player.get("injuryStatus", "ACTIVE")
+            inj_label    = INJ_LABEL_MAP.get(raw_inj, raw_inj)
             fa_eligible  = set(player.get("eligibleSlots", []))
             fa_slot      = "SP" if 14 in fa_eligible else ("RP" if 15 in fa_eligible else "P")
             pitcher_data = fa_starts_map.get(fa_name, {"starts": 0, "startDates": []})
@@ -604,9 +623,10 @@ def get_league_data(team_id: int, week: int) -> dict:
                 "name":           fa_name,
                 "team":           team_abbrev,
                 "slot":           fa_slot,
-                "injuryStatus":   inj_label_map.get(raw_inj, raw_inj),
+                "injuryStatus":   inj_label,
                 "percentOwned":   round(player.get("ownership", {}).get("percentOwned", 0), 1),
-                "projFpts":       fa_proj_fpts.get(fa_name, 0.0),
+                # Zero-while-IL (Phase A): an IL'd FA can't pitch until activated.
+                "projFpts":       0.0 if inj_label in IL_ZERO_STATUSES else fa_proj_fpts.get(fa_name, 0.0),
                 "projBlend":      fa_proj_blend.get(fa_name, 0.0),
                 "starts":         pitcher_data["starts"],
                 "startDates":     pitcher_data["startDates"],
