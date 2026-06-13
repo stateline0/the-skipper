@@ -7,7 +7,7 @@
 //
 // Pass `showOwn` to render an Own% column (Free Agents view).
 
-import { useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 
 // ─── Types ──────────────────────────────────────────────────────────────────
@@ -234,6 +234,19 @@ export function IlPill({ status, estReturn, detail }: {
 }) {
   const ref = useRef<HTMLSpanElement>(null)
   const [pos, setPos] = useState<{ left: number; top?: number; bottom?: number } | null>(null)
+  // The popover is viewport-fixed, so it would detach from the pill on scroll —
+  // dismiss it instead (it re-anchors on the next tap). Capture phase catches
+  // scrolls inside the table's own scroll container too.
+  useEffect(() => {
+    if (!pos) return
+    const close = () => setPos(null)
+    window.addEventListener('scroll', close, true)
+    window.addEventListener('resize', close)
+    return () => {
+      window.removeEventListener('scroll', close, true)
+      window.removeEventListener('resize', close)
+    }
+  }, [pos])
   if (!status) return null
   const isIL = status.startsWith('IL')
   if (!isIL && status !== 'DTD' && status !== 'SUSP') return null
