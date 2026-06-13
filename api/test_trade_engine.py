@@ -61,6 +61,18 @@ def test_perceived_handles_missing_components():
     assert _perceived_value(empty, None, w) is None
 
 
+def test_perceived_recency_overreaction():
+    curve = _fit_log_curve([(1, 600), (10, 480), (50, 300), (100, 210), (200, 150)])
+    w = _trade_weights(0.5)
+    base = {"pos": "OF", "fullSeasonPace": 300, "draftPick": 50, "adp": None}
+    hot = {**base, "recentHeat": 0.3}
+    cold = {**base, "recentHeat": -0.3}
+    pv_hot = _perceived_value(hot, curve, w)
+    pv_base = _perceived_value(base, curve, w)
+    pv_cold = _perceived_value(cold, curve, w)
+    assert pv_hot > pv_base > pv_cold, (pv_hot, pv_base, pv_cold)
+
+
 def test_pos_group():
     assert _pos_group({"pos": "2B/SS"}) in ("SS", "2B")
     assert _pos_group({"posEligible": "SP"}) == "SP"

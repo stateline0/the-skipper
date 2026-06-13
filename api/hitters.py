@@ -1033,6 +1033,7 @@ def _lg_build_team(team, cd, hd, scoring, PRO_TEAM_MAP, year_int, week, pick_by_
             horizon = max(0, LEAGUE_FULL_SEASON_STARTS - gs)
             ros = round(per * horizon, 1)
             produced = per * gs
+            full_horizon = LEAGUE_FULL_SEASON_STARTS
         else:
             apps = int(cd.get("mlb_stats_current", {}).get(nk, {}).get("gamesPlayed", 0))
             tgr = _lg_games_remaining(cd.get("team_win_data", {}), team_abbrev)
@@ -1040,7 +1041,13 @@ def _lg_build_team(team, cd, hd, scoring, PRO_TEAM_MAP, year_int, week, pick_by_
             horizon = (apps * tgr / tgp) if (tgr and tgp) else 0
             ros = round(per * horizon, 1) if (tgr and tgp) else None
             produced = per * apps
+            full_horizon = apps + horizon
         sb_ros = round(season_base * horizon, 1) if (season_base is not None and horizon) else None
+        # Recent-form heat: how far the 60/40-blended rate runs above/below the
+        # de-lucked base. Opposing managers extrapolate it → feeds perceived value.
+        heat = max(-0.5, min(0.5, (per - season_base) / season_base)) if season_base else 0.0
+        full_pace = (round(season_base * full_horizon, 1) if (season_base is not None and full_horizon)
+                     else round(produced + (ros or 0), 1))
         pitchers.append({
             "name": name, "team": team_abbrev,
             "slot": _lg_slot_label(eligible, injured),
@@ -1048,7 +1055,7 @@ def _lg_build_team(team, cd, hd, scoring, PRO_TEAM_MAP, year_int, week, pick_by_
             "injuryStatus": "IL" if injured else "Active",
             "projFpts": round(per, 1), "rosFpts": ros,
             "seasonBaseRos": sb_ros,
-            "fullSeasonPace": round(produced + (ros or 0), 1),
+            "fullSeasonPace": full_pace, "recentHeat": round(heat, 3),
             "draftPick": pick_by_id.get(player.get("id")),
             "adp": (player.get("ownership") or {}).get("averageDraftPosition"),
             "seasonStats": ss,
@@ -1064,31 +1071,41 @@ def _lg_build_team(team, cd, hd, scoring, PRO_TEAM_MAP, year_int, week, pick_by_
         "name": p.get("fullName"), "team": PRO_TEAM_MAP.get(p.get("proTeamId", 0), ""),
         "gameDates": [],
     } for p, e in hitters_raw]
+    # Game logs unlock the 60/40 recent-form blend (the League view passed {});
+    # we keep the displayed ROS de-lucked but use the blend to derive recentHeat.
+    hitter_keys = [strip_accents(p.get("fullName")) for p, e in hitters_raw]
+    try:
+        hit_logs = load_hitter_game_logs(year_int, hd.get("hitting_current"), hitter_keys) if hitter_keys else {}
+    except Exception:
+        hit_logs = {}   # degrade to de-lucked (no recent-form heat) rather than 500
     hproj, hdet = get_projected_hitter_fpts(
         hitter_inputs, scoring=scoring,
         stat_current=hd.get("hitting_current"), stat_previous=hd.get("hitting_previous"),
         savant_current=hd.get("savant_batter_current"), savant_previous=hd.get("savant_batter_previous"),
-        game_logs={}, season=year_int, period=week,
+        game_logs=hit_logs, season=year_int, period=week,
     ) if hitter_inputs else ({}, None)
 
     batters = []
     for player, eligible in hitters_raw:
         name = player.get("fullName"); nk = strip_accents(name)
         team_abbrev = PRO_TEAM_MAP.get(player.get("proTeamId", 0), "")
-        per_game = hproj.get(name, {}).get("projPerGame", 0.0)
+        per_game = hproj.get(name, {}).get("projPerGame", 0.0)   # 60/40 blended
         bats = (player.get("batSide") or {}).get("code", "") if isinstance(player.get("batSide"), dict) else ""
         tgr = _lg_games_remaining(cd.get("team_win_data", {}), team_abbrev)
-        ros = round(per_game * tgr, 1) if tgr is not None else None
-        # seasonBase = de-lucked per-game rate before the recent-form blend.
+        # seasonBase = de-lucked per-game rate before the recent-form blend. The
+        # displayed ROS stays de-lucked (unchanged); the blend only drives heat.
         season_base = (hdet.get(name) or {}).get("seasonBase") if hdet else None
-        games_played = (LEAGUE_SEASON_GAMES - tgr) if tgr is not None else 0
+        base_rate = season_base if season_base is not None else per_game
+        ros = round(base_rate * tgr, 1) if tgr is not None else None
         sb_ros = round(season_base * tgr, 1) if (season_base is not None and tgr is not None) else None
+        heat = max(-0.5, min(0.5, (per_game - season_base) / season_base)) if season_base else 0.0
         batters.append({
             "name": name, "team": team_abbrev,
             "pos": _eligible_positions(eligible), "bats": bats,
-            "projPerGame": round(per_game, 1), "rosFpts": ros,
+            "projPerGame": round(base_rate, 1), "rosFpts": ros,
             "seasonBaseRos": sb_ros,
-            "fullSeasonPace": round(per_game * games_played + (ros or 0), 1),
+            "fullSeasonPace": round(base_rate * LEAGUE_SEASON_GAMES, 1),
+            "recentHeat": round(heat, 3),
             "draftPick": pick_by_id.get(player.get("id")),
             "adp": (player.get("ownership") or {}).get("averageDraftPosition"),
             "seasonStats": _season_line(hd.get("hitting_current", {}).get(nk, {})),
@@ -1177,6 +1194,7 @@ TRADE_SEASON_DAYS = 183            # ~opening day → late September
 TRADE_ACCEPT_CUSHION = 0.05        # bias proposals 5% perceived-favorable to them
 TRADE_EDGE_MIN = 8.0               # ROS FPTS edge below which a deal isn't worth it
 TRADE_FAIR_BAND = 0.08             # perceived imbalance within 8% reads as "fair"
+TRADE_RECENCY_OVERREACTION = 0.5   # managers extrapolate hot/cold streaks past their weight
 
 # Light positional-scarcity tilt on perceived value (deep pools < 1, scarce > 1).
 TRADE_SCARCITY_MULT = {
@@ -1240,6 +1258,10 @@ def _perceived_value(row, curve, weights):
     then apply the positional-scarcity tilt. Weights renormalize over whichever
     components are present (a player with no draft pick leans on production)."""
     prod = row.get("fullSeasonPace")
+    if prod is not None:
+        # Opposing managers extrapolate hot/cold streaks past their true weight —
+        # a hot player's production reads inflated, a slumping one depressed.
+        prod = prod * (1.0 + TRADE_RECENCY_OVERREACTION * (row.get("recentHeat") or 0.0))
     draft_v = curve(row.get("draftPick")) if curve else None
     adp_v = curve(row.get("adp")) if curve else None
     acc, wsum = 0.0, 0.0
