@@ -5,7 +5,7 @@
 // components (also used by the Free Agents Hitters view).
 
 import Head from 'next/head'
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   UIHitter, Weeks, MONTHS, buildDateRange, todayISO, hitterFromPayload,
   HitterScheduleGrid, HitterStatsTable,
@@ -48,20 +48,24 @@ export default function Hitters() {
     }).catch(() => setSelectedPeriod(1))
   }, [])
 
-  useEffect(() => {
+  // `fresh=1` forces a live recompute (bypassing the 30-min cache), which is
+  // what runs the per-day proj2h lock/upgrade for started games — so the
+  // Refresh button both updates in-game scoring and fires the baseline→
+  // factor-adjusted upgrade. A normal load is cache-OK (fast).
+  const fetchHitters = useCallback((fresh = false) => {
     if (selectedPeriod === null) return
-    let cancelled = false
     setLoading(true); setError('')
     localStorage.setItem('skipper_selected_period', String(selectedPeriod))
-    fetch(`/api/hitters?week=${selectedPeriod}`).then(r => r.json()).then(data => {
-      if (cancelled) return
-      if (data && data.ok) setLive(data)
-      else { setLive(null); setError(data?.error || 'Failed to load hitters') }
-    }).catch(e => {
-      if (!cancelled) { setLive(null); setError(e?.message || 'Failed to load hitters') }
-    }).finally(() => { if (!cancelled) setLoading(false) })
-    return () => { cancelled = true }
+    fetch(`/api/hitters?week=${selectedPeriod}${fresh ? '&fresh=1' : ''}`)
+      .then(r => r.json()).then(data => {
+        if (data && data.ok) setLive(data)
+        else { setLive(null); setError(data?.error || 'Failed to load hitters') }
+      }).catch(e => {
+        setLive(null); setError(e?.message || 'Failed to load hitters')
+      }).finally(() => setLoading(false))
   }, [selectedPeriod])
+
+  useEffect(() => { fetchHitters() }, [fetchHitters])
 
   const { hitters, weeks, weekDates, today, label } = useMemo(() => {
     if (!live) {
@@ -109,29 +113,44 @@ export default function Hitters() {
               {live?.teamName ? `${live.teamName} · ` : ''}{label || 'Daily projections'}
             </p>
           </div>
-          {matchupPeriods.length > 0 && (
-            <select
-              value={selectedPeriod ?? ''}
-              onChange={e => setSelectedPeriod(parseInt(e.target.value))}
+          <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+            {matchupPeriods.length > 0 && (
+              <select
+                value={selectedPeriod ?? ''}
+                onChange={e => setSelectedPeriod(parseInt(e.target.value))}
+                style={{
+                  fontFamily: 'var(--mono)', fontSize: 12, padding: '8px 12px',
+                  borderRadius: 'var(--radius)', border: '1.5px solid var(--border-strong)',
+                  background: 'var(--white)', color: 'var(--ink)', cursor: 'pointer', outline: 'none',
+                }}
+              >
+                {matchupPeriods.map(p => {
+                  const fmt = (iso: string) => {
+                    const [, m, d] = iso.split('-')
+                    return `${MONTHS[parseInt(m) - 1]} ${parseInt(d)}`
+                  }
+                  return (
+                    <option key={p.period} value={p.period}>
+                      {p.label} · {fmt(p.start)}–{fmt(p.end)}
+                    </option>
+                  )
+                })}
+              </select>
+            )}
+            <button
+              onClick={() => fetchHitters(true)} disabled={loading}
               style={{
-                fontFamily: 'var(--mono)', fontSize: 12, padding: '8px 12px',
-                borderRadius: 'var(--radius)', border: '1.5px solid var(--border-strong)',
-                background: 'var(--white)', color: 'var(--ink)', cursor: 'pointer', outline: 'none',
+                fontFamily: 'var(--sans)', fontSize: 13, fontWeight: 600,
+                padding: '9px 18px', borderRadius: 'var(--radius)',
+                cursor: loading ? 'not-allowed' : 'pointer',
+                border: '1.5px solid var(--border-strong)',
+                background: 'transparent', color: 'var(--ink)',
+                opacity: loading ? 0.5 : 1, transition: 'all 0.15s',
               }}
             >
-              {matchupPeriods.map(p => {
-                const fmt = (iso: string) => {
-                  const [, m, d] = iso.split('-')
-                  return `${MONTHS[parseInt(m) - 1]} ${parseInt(d)}`
-                }
-                return (
-                  <option key={p.period} value={p.period}>
-                    {p.label} · {fmt(p.start)}–{fmt(p.end)}
-                  </option>
-                )
-              })}
-            </select>
-          )}
+              {loading ? 'Refreshing...' : '↻ Refresh'}
+            </button>
+          </div>
         </div>
 
         {loading ? (
