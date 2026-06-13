@@ -7,7 +7,8 @@
 //
 // Pass `showOwn` to render an Own% column (Free Agents view).
 
-import { useMemo, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -224,13 +225,15 @@ function fmtReturn(iso?: string): string | null {
 // are red (projection zeroed until the return date); DTD/SUSP are amber (still
 // projecting). Self-guarding: only injury statuses render — anything else
 // (Active, Dropped, undefined) yields nothing. When an est. return date and/or
-// injury detail are known (Phase B), tapping/clicking the pill opens a popover
-// ("Est. return Jun 26 · Right Quadriceps (Strain)") — a tap target works on
-// touch where a hover title does not.
+// injury detail are known (Phase B), tapping the pill opens a popover
+// ("Est. return Jun 26" + injury detail). The popover renders through a portal
+// to <body> so it escapes the IL row's dimming (opacity:0.55 would otherwise
+// wash it out) and the table's horizontal scroll clipping.
 export function IlPill({ status, estReturn, detail }: {
   status?: string; estReturn?: string; detail?: string
 }) {
-  const [open, setOpen] = useState(false)
+  const ref = useRef<HTMLSpanElement>(null)
+  const [pos, setPos] = useState<{ top: number; left: number } | null>(null)
   if (!status) return null
   const isIL = status.startsWith('IL')
   if (!isIL && status !== 'DTD' && status !== 'SUSP') return null
@@ -247,19 +250,22 @@ export function IlPill({ status, estReturn, detail }: {
   if (!ret && !detail) {
     return <span style={pillStyle}>{status}</span>
   }
+  const toggle = (e: React.MouseEvent) => {
+    e.stopPropagation()
+    if (pos) { setPos(null); return }
+    const r = ref.current?.getBoundingClientRect()
+    if (r) setPos({ top: r.bottom + 4, left: r.left })
+  }
   return (
-    <span style={{ position: 'relative', display: 'inline-block' }}>
-      <span
-        onClick={(e) => { e.stopPropagation(); setOpen(o => !o) }}
-        style={{ ...pillStyle, cursor: 'pointer' }}
-      >{status}</span>
-      {open && (
+    <span ref={ref} onClick={toggle} style={{ ...pillStyle, cursor: 'pointer' }}>
+      {status}
+      {pos && typeof document !== 'undefined' && createPortal(
         <>
           {/* Tap-anywhere backdrop to dismiss (touch-friendly, no listeners). */}
-          <div onClick={(e) => { e.stopPropagation(); setOpen(false) }}
-               style={{ position: 'fixed', inset: 0, zIndex: 40 }} />
+          <div onClick={(e) => { e.stopPropagation(); setPos(null) }}
+               style={{ position: 'fixed', inset: 0, zIndex: 1000 }} />
           <div onClick={(e) => e.stopPropagation()} style={{
-            position: 'absolute', zIndex: 41, top: '100%', left: 0, marginTop: 4,
+            position: 'fixed', top: pos.top, left: pos.left, zIndex: 1001,
             background: 'var(--white)', border: '1px solid var(--border-strong)',
             borderRadius: 'var(--radius)', boxShadow: 'var(--shadow)', padding: '8px 10px',
             fontFamily: 'var(--mono)', fontSize: 11, whiteSpace: 'nowrap', textAlign: 'left',
@@ -268,7 +274,8 @@ export function IlPill({ status, estReturn, detail }: {
             {ret && <div style={{ fontWeight: 700, color: 'var(--ink)' }}>Est. return {ret}</div>}
             {detail && <div style={{ marginTop: ret ? 2 : 0 }}>{detail}</div>}
           </div>
-        </>
+        </>,
+        document.body,
       )}
     </span>
   )
