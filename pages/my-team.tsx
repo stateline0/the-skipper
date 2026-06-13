@@ -6,7 +6,7 @@ import StatsTable from '../components/StatsTable'
 
 type RosterTab = 'schedule' | 'stats'
 
-const CACHE_VERSION = 11 // bump this whenever the API response shape changes
+const CACHE_VERSION = 12 // bump this whenever the API response shape changes
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 interface RosterSP {

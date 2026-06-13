@@ -26,7 +26,9 @@ export interface UIHitter {
   avg: number; obp: number; slg: number
   hr: number; r: number; rbi: number; sb: number
   percentOwned?: number       // Free Agents view only
-  il?: string                 // typed injury label (IL10/IL15/IL60/DTD/SUSP) — FA view only
+  il?: string                 // typed injury label (IL10/IL15/IL60/DTD/SUSP)
+  estReturn?: string          // est. return date (YYYY-MM-DD) — Phase B injuries feed
+  injuryDetail?: string       // injury descriptor for the IL tooltip, e.g. "Right Quadriceps (Strain)"
   adv?: HitterAdvanced        // advanced Savant block (Stats tab)
 }
 
@@ -211,22 +213,35 @@ export function PosTags({ pos }: { pos: string }) {
   )
 }
 
+// Format an ISO date (YYYY-MM-DD) as "Jun 26" for the IL tooltip.
+function fmtReturn(iso?: string): string | null {
+  if (!iso || !/^\d{4}-\d{2}-\d{2}$/.test(iso)) return null
+  const [, m, d] = iso.split('-')
+  return `${MONTHS[parseInt(m) - 1]} ${parseInt(d)}`
+}
+
 // Injury-status pill on the name sub-line (IL10/IL15/IL60/DTD/SUSP). IL grades
-// are red (projection zeroed while shelved); DTD/SUSP are amber (still
+// are red (projection zeroed until the return date); DTD/SUSP are amber (still
 // projecting). Self-guarding: only injury statuses render — anything else
-// (Active, Dropped, undefined) yields nothing.
-export function IlPill({ status }: { status?: string }) {
+// (Active, Dropped, undefined) yields nothing. When an est. return date and/or
+// injury detail are known (Phase B), they surface as a hover tooltip, e.g.
+// "Est. return Jun 26 · Right Quadriceps (Strain)".
+export function IlPill({ status, estReturn, detail }: {
+  status?: string; estReturn?: string; detail?: string
+}) {
   if (!status) return null
   const isIL = status.startsWith('IL')
   if (!isIL && status !== 'DTD' && status !== 'SUSP') return null
   const style = isIL
     ? { background: 'var(--red-light)', color: 'var(--red)' }
     : { background: 'var(--amber-light)', color: 'var(--amber)' }
+  const ret = fmtReturn(estReturn)
+  const tip = [ret ? `Est. return ${ret}` : null, detail].filter(Boolean).join(' · ')
   return (
-    <span style={{
+    <span title={tip || undefined} style={{
       display: 'inline-block', fontSize: 9, fontWeight: 700, fontFamily: 'var(--mono)',
       padding: '1px 5px', borderRadius: 99, letterSpacing: '0.03em',
-      whiteSpace: 'nowrap', ...style,
+      whiteSpace: 'nowrap', cursor: tip ? 'help' : undefined, ...style,
     }}>{status}</span>
   )
 }
@@ -295,7 +310,7 @@ export function HitterScheduleGrid({ hitters, weeks, weekDates, today, showOwn, 
                   <div style={{ fontWeight: 600 }}>{h.name}</div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 5, flexWrap: 'wrap', marginTop: 2 }}>
                     <PosTags pos={h.pos} />
-                    <IlPill status={h.il} />
+                    <IlPill status={h.il} estReturn={h.estReturn} detail={h.injuryDetail} />
                     <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--ink-3)' }}>
                       {h.team}{h.bats ? ` · ${h.bats}HB` : ''}
                     </span>
@@ -478,7 +493,7 @@ export function HitterStatsTable({ hitters, weeks, showOwn, leagueAvg }: {
                   <div style={{ fontWeight: 600 }}>{h.name}</div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 5, flexWrap: 'wrap', marginTop: 2 }}>
                     <PosTags pos={h.pos} />
-                    <IlPill status={h.il} />
+                    <IlPill status={h.il} estReturn={h.estReturn} detail={h.injuryDetail} />
                     <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--ink-3)' }}>
                       {h.team}{h.bats ? ` · ${h.bats}HB` : ''}
                     </span>
@@ -527,6 +542,8 @@ export function hitterFromPayload(h: any, dates: string[]): { hitter: UIHitter; 
       hr: s.hr || 0, r: s.r || 0, rbi: s.rbi || 0, sb: s.sb || 0,
       percentOwned: h.percentOwned,
       il: h.injuryStatus && h.injuryStatus !== 'Active' ? h.injuryStatus : undefined,
+      estReturn: h.estReturn || undefined,
+      injuryDetail: h.injuryDetail || undefined,
       adv: h.advanced || undefined,
     },
     days,

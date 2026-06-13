@@ -22,6 +22,7 @@ from datetime import datetime, timedelta, timezone
 sys.path.insert(0, os.path.join(os.path.dirname(__file__)))
 from mlb import get_starts_for_players, MATCHUP_PERIODS
 from kv import get_all_locked_projections, cache_get, cache_set
+from injuries import get_injuries
 from fetcher import (
     get_headers_and_cookies, get_pro_team_map, period_has_started,
     get_actual_fpts, load_cached_data,
@@ -440,6 +441,9 @@ def get_league_data(team_id: int, week: int) -> dict:
     SP_ELIGIBLE = {14}
     RP_ELIGIBLE = {13}
     today_str   = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    # Phase B: real IL grade + est. return from the public injuries feed (joined
+    # by ESPN id). Degrades to {} (bare "IL") if the feed is unreachable.
+    injuries = get_injuries()
 
     for entry in roster_entries:
         pool_entry     = entry.get("playerPoolEntry", {})
@@ -453,6 +457,10 @@ def get_league_data(team_id: int, week: int) -> dict:
         injured      = player.get("injured", False)
         slot_label   = get_slot_label(eligible_slots, injured)
         status_label = get_status(injured)
+        # Phase B: upgrade the bare "IL" to the feed's typed grade + est. return.
+        inj          = injuries.get(player.get("id")) if injured else None
+        if inj and inj.get("grade"):
+            status_label = inj["grade"]
         pro_team_id  = player.get("proTeamId", 0)
         team_abbrev  = PRO_TEAM_MAP.get(pro_team_id, str(pro_team_id))
         player_name  = player.get("fullName", "Unknown")
@@ -490,6 +498,8 @@ def get_league_data(team_id: int, week: int) -> dict:
             "position":     position,
             "posEligible":  get_pos_eligible(eligible_slots),
             "injuryStatus": status_label,
+            "estReturn":    inj.get("returnDate") if inj else None,
+            "injuryDetail": inj.get("detail") if inj else None,
             "starts":       scheduled_starts,
             "startDates":   start_dates,
             "projFpts":     proj_fpts,
@@ -618,6 +628,11 @@ def get_league_data(team_id: int, week: int) -> dict:
             team_abbrev  = PRO_TEAM_MAP.get(pro_team_id, str(pro_team_id))
             raw_inj      = player.get("injuryStatus", "ACTIVE")
             inj_label    = INJ_LABEL_MAP.get(raw_inj, raw_inj)
+            # Phase B: prefer the injuries feed's grade + est. return (joined by
+            # ESPN id) over the kona label, which carries no return date.
+            fa_inj       = injuries.get(player.get("id"))
+            if fa_inj and fa_inj.get("grade"):
+                inj_label = fa_inj["grade"]
             fa_eligible  = set(player.get("eligibleSlots", []))
             fa_slot      = "SP" if 14 in fa_eligible else ("RP" if 15 in fa_eligible else "P")
             pitcher_data = fa_starts_map.get(fa_name, {"starts": 0, "startDates": []})
@@ -637,6 +652,8 @@ def get_league_data(team_id: int, week: int) -> dict:
                 "team":           team_abbrev,
                 "slot":           fa_slot,
                 "injuryStatus":   inj_label,
+                "estReturn":      fa_inj.get("returnDate") if fa_inj else None,
+                "injuryDetail":   fa_inj.get("detail") if fa_inj else None,
                 "posEligible":    get_pos_eligible(fa_eligible),
                 "percentOwned":   round(player.get("ownership", {}).get("percentOwned", 0), 1),
                 # Zero-while-IL (Phase A): an IL'd FA can't pitch until activated.
