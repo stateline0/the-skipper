@@ -904,7 +904,9 @@ LEAGUE_CACHE_TTL = 1800
 
 
 def _league_cache_key(year: int) -> str:
-    return f"cache:league-roster:{year}"
+    # v2: rows now carry trade-engine fields (surfaceRate/horizon/fullHorizon/
+    # recentHeat) — bump so stale pre-trade-engine payloads aren't served.
+    return f"cache:league-roster:v2:{year}"
 
 
 def _lg_safe_float(value, default: float = 0.0) -> float:
@@ -1056,6 +1058,8 @@ def _lg_build_team(team, cd, hd, scoring, PRO_TEAM_MAP, year_int, week, pick_by_
             "projFpts": round(per, 1), "rosFpts": ros,
             "seasonBaseRos": sb_ros,
             "fullSeasonPace": full_pace, "recentHeat": round(heat, 3),
+            "surfaceRate": round(per, 3), "horizon": round(horizon, 2),
+            "fullHorizon": round(full_horizon, 2),
             "draftPick": pick_by_id.get(player.get("id")),
             "adp": (player.get("ownership") or {}).get("averageDraftPosition"),
             "seasonStats": ss,
@@ -1106,6 +1110,8 @@ def _lg_build_team(team, cd, hd, scoring, PRO_TEAM_MAP, year_int, week, pick_by_
             "seasonBaseRos": sb_ros,
             "fullSeasonPace": round(base_rate * LEAGUE_SEASON_GAMES, 1),
             "recentHeat": round(heat, 3),
+            "surfaceRate": round(per_game, 3),
+            "horizon": (tgr if tgr is not None else 0), "fullHorizon": LEAGUE_SEASON_GAMES,
             "draftPick": pick_by_id.get(player.get("id")),
             "adp": (player.get("ownership") or {}).get("averageDraftPosition"),
             "seasonStats": _season_line(hd.get("hitting_current", {}).get(nk, {})),
@@ -1195,6 +1201,7 @@ TRADE_ACCEPT_CUSHION = 0.05        # bias proposals 5% perceived-favorable to th
 TRADE_EDGE_MIN = 8.0               # ROS FPTS edge below which a deal isn't worth it
 TRADE_FAIR_BAND = 0.08             # perceived imbalance within 8% reads as "fair"
 TRADE_RECENCY_OVERREACTION = 0.5   # managers extrapolate hot/cold streaks past their weight
+TRADE_SANITY_EDGE = 60.0           # ROS edge above which a "fair" deal is flagged suspect
 
 # Light positional-scarcity tilt on perceived value (deep pools < 1, scarce > 1).
 TRADE_SCARCITY_MULT = {
@@ -1254,23 +1261,28 @@ def _pos_group(row):
 
 
 def _perceived_value(row, curve, weights):
-    """Blend draft slot, in-season production, and ADP into one FPTS-equivalent,
-    then apply the positional-scarcity tilt. Weights renormalize over whichever
-    components are present (a player with no draft pick leans on production)."""
-    prod = row.get("fullSeasonPace")
-    if prod is not None:
-        # Opposing managers extrapolate hot/cold streaks past their true weight —
-        # a hot player's production reads inflated, a slumping one depressed.
-        prod = prod * (1.0 + TRADE_RECENCY_OVERREACTION * (row.get("recentHeat") or 0.0))
-    draft_v = curve(row.get("draftPick")) if curve else None
-    adp_v = curve(row.get("adp")) if curve else None
+    """Perceived rest-of-season value (FPTS) — same horizon/scale as model ROS,
+    so the fairness ratio is apples-to-apples with the edge. Blends, as RATES:
+    surface production (what they see, incl. recent-form overreaction), draft-slot
+    pedigree, and ADP; renormalizes over present components; × scarcity; × horizon."""
+    horizon, full_h = row.get("horizon"), row.get("fullHorizon")
+    if not horizon or not full_h:
+        return None
+    surface = row.get("surfaceRate")
+    if surface is not None:
+        # Opposing managers extrapolate hot/cold streaks past their true weight.
+        surface = surface * (1.0 + TRADE_RECENCY_OVERREACTION * (row.get("recentHeat") or 0.0))
+    # Draft / ADP curves return a full-season value → divide to a per-game rate.
+    draft_rate = (curve(row.get("draftPick")) / full_h) if (curve and row.get("draftPick")) else None
+    adp_rate = (curve(row.get("adp")) / full_h) if (curve and row.get("adp")) else None
     acc, wsum = 0.0, 0.0
-    for val, w in ((prod, weights["prod"]), (draft_v, weights["draft"]), (adp_v, weights["adp"])):
+    for val, w in ((surface, weights["prod"]), (draft_rate, weights["draft"]), (adp_rate, weights["adp"])):
         if val is not None:
             acc += w * val; wsum += w
     if wsum <= 0:
         return None
-    return round((acc / wsum) * TRADE_SCARCITY_MULT.get(_pos_group(row), 1.0), 1)
+    rate = (acc / wsum) * TRADE_SCARCITY_MULT.get(_pos_group(row), 1.0)
+    return round(rate * horizon, 1)
 
 
 def _classify_trade(edge, perc_give, perc_get):
@@ -1512,8 +1524,21 @@ def build_trade_finder(my_team_id, target_team_id=None, want_rationale=False,
                 for r2 in combinations(theirs, 2):
                     consider([g], list(r2), owner)
 
+    # Guardrail: greedily keep the best deal, then suppress any later proposal
+    # reusing a player already spent on either side — a diverse matching instead
+    # of "every one of my guys for the same target". Flag implausible edges.
     candidates.sort(key=lambda c: -c["score"])
-    top = candidates[:max_results]
+    used_give, used_get, top = set(), set(), []
+    for c in candidates:
+        gnames = {x["name"] for x in c["give"]}
+        rnames = {x["name"] for x in c["get"]}
+        if (gnames & used_give) or (rnames & used_get):
+            continue
+        c["suspect"] = c["edge"] > TRADE_SANITY_EDGE
+        top.append(c)
+        used_give |= gnames; used_get |= rnames
+        if len(top) >= max_results:
+            break
     result = {"proposals": top,
               "scanned": {"myTeam": my_team.get("name"),
                           "targets": [t.get("name") for t in targets],

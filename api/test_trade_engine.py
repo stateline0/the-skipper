@@ -45,31 +45,34 @@ def test_curve_none_on_sparse():
 def test_perceived_blend_draft_anchor_props_up_cold_player():
     curve = _fit_log_curve([(1, 600), (10, 480), (50, 300), (100, 210), (200, 150)])
     w = _trade_weights(0.5)
-    # Early-pick player slumping: draft anchor should keep perceived value above
-    # the raw cold production.
-    cold_early = {"pos": "OF", "fullSeasonPace": 180, "draftPick": 8, "adp": None}
+    # Early-pick player slumping: low surface rate but elite draft pedigree (#8).
+    # Perceived ROS should sit above the pure-surface ROS (surfaceRate × horizon).
+    cold_early = {"pos": "OF", "surfaceRate": 1.5, "horizon": 80, "fullHorizon": 162,
+                  "draftPick": 8, "adp": None}
     pv = _perceived_value(cold_early, curve, w)
-    assert pv is not None and pv > 180, pv
+    assert pv is not None and pv > 1.5 * 80, pv
 
 
 def test_perceived_handles_missing_components():
     w = _trade_weights(0.5)
-    # No curve and no draft pick → leans entirely on production, never crashes.
-    only_prod = {"pos": "1B", "fullSeasonPace": 300, "draftPick": None, "adp": None}
-    assert _perceived_value(only_prod, None, w) is not None
-    empty = {"pos": "1B", "fullSeasonPace": None, "draftPick": None, "adp": None}
-    assert _perceived_value(empty, None, w) is None
+    # No curve and no draft pick → leans entirely on surface rate, never crashes.
+    only_surface = {"pos": "1B", "surfaceRate": 3.0, "horizon": 90, "fullHorizon": 162,
+                    "draftPick": None, "adp": None}
+    assert _perceived_value(only_surface, None, w) is not None
+    # No horizon → can't scale to ROS → None (rather than a bogus number).
+    no_horizon = {"pos": "1B", "surfaceRate": 3.0, "draftPick": None, "adp": None}
+    assert _perceived_value(no_horizon, None, w) is None
 
 
 def test_perceived_recency_overreaction():
-    curve = _fit_log_curve([(1, 600), (10, 480), (50, 300), (100, 210), (200, 150)])
     w = _trade_weights(0.5)
-    base = {"pos": "OF", "fullSeasonPace": 300, "draftPick": 50, "adp": None}
+    base = {"pos": "OF", "surfaceRate": 3.0, "horizon": 80, "fullHorizon": 162,
+            "draftPick": None, "adp": None}
     hot = {**base, "recentHeat": 0.3}
     cold = {**base, "recentHeat": -0.3}
-    pv_hot = _perceived_value(hot, curve, w)
-    pv_base = _perceived_value(base, curve, w)
-    pv_cold = _perceived_value(cold, curve, w)
+    pv_hot = _perceived_value(hot, None, w)
+    pv_base = _perceived_value(base, None, w)
+    pv_cold = _perceived_value(cold, None, w)
     assert pv_hot > pv_base > pv_cold, (pv_hot, pv_base, pv_cold)
 
 

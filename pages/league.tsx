@@ -3,7 +3,7 @@ import { useState, useEffect, useMemo } from 'react'
 import StatsTable, { PITCHER_COLUMNS, ROS_COLUMN, PitcherColumn } from '../components/StatsTable'
 import { HitterStatsTable, UIHitter } from '../components/HitterTables'
 
-const CACHE_VERSION = 1 // bump when /api/league response shape changes
+const CACHE_VERSION = 2 // bump when /api/league response shape changes
 
 // League pitcher columns: a clean scouting line (no weekly Starts/Own%/schedule
 // columns), reusing the shared configs + the rest-of-season ROS column.
@@ -456,8 +456,9 @@ function FinderResults({ finder, onPick }: { finder: any; onPick: (p: any) => vo
               {p.get.map((x: any) => x.name).join(' + ')}
               <span style={{ color: 'var(--ink-3)' }}> · {p.with}</span>
             </span>
-            <span style={{ whiteSpace: 'nowrap', color: p.verdict === 'steal' ? 'var(--green)' : 'var(--ink)' }}>
-              {p.edge >= 0 ? '+' : ''}{p.edge} · {p.verdict}
+            <span style={{ whiteSpace: 'nowrap', color: p.verdict === 'steal' ? 'var(--green)' : 'var(--ink)' }}
+              title={p.suspect ? 'Large edge — sanity-check this one' : undefined}>
+              {p.edge >= 0 ? '+' : ''}{p.edge} · {p.verdict}{p.suspect ? ' ⚠' : ''}
             </span>
           </button>
         ))}
