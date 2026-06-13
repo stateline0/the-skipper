@@ -90,6 +90,11 @@ export default function League() {
   const [trade, setTrade] = useState<TradeResult | null>(null)
   const [tradeLoading, setTradeLoading] = useState(false)
   const [tradeErr, setTradeErr] = useState('')
+  // Finder state
+  const [finder, setFinder] = useState<any | null>(null)
+  const [finderLoading, setFinderLoading] = useState(false)
+  const [finderErr, setFinderErr] = useState('')
+  const [finderTarget, setFinderTarget] = useState<string>('') // '' = all teams
 
   useEffect(() => {
     const cacheKey = `league:v${CACHE_VERSION}`
@@ -154,6 +159,31 @@ export default function League() {
     } finally {
       setTradeLoading(false)
     }
+  }
+
+  async function findTrades() {
+    setFinderLoading(true); setFinderErr(''); setFinder(null)
+    try {
+      const r = await fetch('/api/hitters?view=trade', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ view: 'trade', mode: 'find', targetTeamId: finderTarget || 'all' }),
+      })
+      const d = await r.json()
+      if (d.error) setFinderErr(d.error)
+      else setFinder(d)
+    } catch (e: any) {
+      setFinderErr(e.message || 'Finder failed')
+    } finally {
+      setFinderLoading(false)
+    }
+  }
+
+  function applyProposal(p: any) {
+    setGive(p.give.map((x: any) => x.name))
+    setGet(p.get.map((x: any) => x.name))
+    setTrade(null); setTradeErr('')
+    if (typeof window !== 'undefined') window.scrollTo({ top: 0, behavior: 'smooth' })
   }
 
   const pickerSelect = (side: 'give' | 'get') => (
@@ -270,6 +300,36 @@ export default function League() {
           )}
 
           {trade && <TradeResultView trade={trade} />}
+
+          {/* Finder */}
+          <div style={{ borderTop: '1px dashed var(--border)', marginTop: 16, paddingTop: 14 }}>
+            <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+              <button
+                onClick={findTrades}
+                disabled={finderLoading}
+                style={{
+                  ...mono12, fontWeight: 600, padding: '8px 16px', borderRadius: 'var(--radius)',
+                  border: '1px solid var(--ink)', background: 'var(--white)', color: 'var(--ink)',
+                  cursor: finderLoading ? 'not-allowed' : 'pointer', opacity: finderLoading ? 0.6 : 1,
+                }}
+              >
+                {finderLoading ? 'Scanning…' : '✨ Find me a trade'}
+              </button>
+              <select
+                value={finderTarget}
+                onChange={e => setFinderTarget(e.target.value)}
+                style={{ ...mono12, padding: '7px 10px', borderRadius: 'var(--radius)', border: '1px solid var(--border-strong)', background: 'var(--white)', color: 'var(--ink)', cursor: 'pointer' }}
+              >
+                <option value="">All teams</option>
+                {teams.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+              </select>
+              <span style={{ ...mono12, color: 'var(--ink-3)', fontSize: 11 }}>
+                scans your roster for accept-worthy steals
+              </span>
+            </div>
+            {finderErr && <div style={{ ...mono12, color: 'var(--red)', marginTop: 10 }}>{finderErr}</div>}
+            {finder && <FinderResults finder={finder} onPick={applyProposal} />}
+          </div>
         </div>
       )}
 
@@ -357,6 +417,51 @@ function TradeResultView({ trade }: { trade: TradeResult }) {
           {trade.model.caveats.join(' ')}
         </div>
       )}
+    </div>
+  )
+}
+
+// ── Finder proposals list ───────────────────────────────────────────────
+function FinderResults({ finder, onPick }: { finder: any; onPick: (p: any) => void }) {
+  const mono = { fontFamily: 'var(--mono)', fontSize: 12 } as React.CSSProperties
+  const proposals: any[] = finder.proposals || []
+  if (proposals.length === 0) {
+    return (
+      <div style={{ ...mono, color: 'var(--ink-3)', marginTop: 12 }}>
+        No accept-worthy steals found{finder.scanned?.found === 0 ? '' : ` (${finder.scanned?.found} considered)`}.
+        Try a different target team or widen to all teams.
+      </div>
+    )
+  }
+  return (
+    <div style={{ marginTop: 12 }}>
+      <div style={{ ...mono, color: 'var(--ink-3)', marginBottom: 6 }}>
+        Top {proposals.length} of {finder.scanned?.found} — tap one to load it above
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+        {proposals.map((p, i) => (
+          <button
+            key={i}
+            onClick={() => onPick(p)}
+            style={{
+              ...mono, textAlign: 'left', padding: '8px 10px', borderRadius: 'var(--radius)',
+              border: '1px solid var(--border)', background: 'var(--white)', cursor: 'pointer',
+              display: 'flex', justifyContent: 'space-between', gap: 10, alignItems: 'center',
+            }}
+          >
+            <span>
+              <span style={{ color: 'var(--ink-3)' }}>give </span>
+              {p.give.map((x: any) => x.name).join(' + ')}
+              <span style={{ color: 'var(--ink-3)' }}> → get </span>
+              {p.get.map((x: any) => x.name).join(' + ')}
+              <span style={{ color: 'var(--ink-3)' }}> · {p.with}</span>
+            </span>
+            <span style={{ whiteSpace: 'nowrap', color: p.verdict === 'steal' ? 'var(--green)' : 'var(--ink)' }}>
+              {p.edge >= 0 ? '+' : ''}{p.edge} · {p.verdict}
+            </span>
+          </button>
+        ))}
+      </div>
     </div>
   )
 }

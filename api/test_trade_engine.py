@@ -15,7 +15,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 
 from hitters import (  # noqa: E402
     _trade_weights, _fit_log_curve, _perceived_value, _pos_group,
-    _classify_trade, TRADE_EDGE_MIN,
+    _classify_trade, _finder_rank, TRADE_EDGE_MIN,
 )
 
 
@@ -96,6 +96,17 @@ def test_classify_steal_win_lopsided_avoid_marginal():
     # Tiny edge → marginal.
     marg = _classify_trade(edge=TRADE_EDGE_MIN - 1, perc_give=300, perc_get=300)
     assert marg["verdict"] == "marginal"
+
+
+def test_finder_rank_keeps_steals_and_wins():
+    keep, score, cls = _finder_rank(edge=30, perc_give=320, perc_get=295)  # steal
+    assert keep and cls["verdict"] == "steal" and score == 35.0
+    keep2, score2, _ = _finder_rank(edge=30, perc_give=300, perc_get=300)  # fair win
+    assert keep2 and score2 == 30.0
+    keep3, _, _ = _finder_rank(edge=30, perc_give=200, perc_get=320)       # lopsided → drop
+    assert not keep3
+    keep4, _, _ = _finder_rank(edge=-5, perc_give=300, perc_get=300)       # losing → drop
+    assert not keep4
 
 
 if __name__ == "__main__":

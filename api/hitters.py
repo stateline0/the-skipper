@@ -1422,6 +1422,136 @@ def _trade_rationale(result):
         return f"(rationale unavailable: {type(e).__name__})"
 
 
+# ──────────────────────────────────────────────────────────────────────────
+# Trade finder — Phase 3. Deterministic scan of 1-for-1 / 2-for-1 swaps between
+# your roster and other teams, keeping only deals you win on ROS that still read
+# fair (or favorable) to them — the same accept-worthy steals the evaluator
+# scores, surfaced automatically with every underlying number.
+# ──────────────────────────────────────────────────────────────────────────
+
+TRADE_FINDER_POOL_CAP = 20    # per-team players considered (top by model ROS)
+TRADE_FINDER_MAX = 12         # proposals returned
+
+
+def _finder_rank(edge, perc_give, perc_get):
+    """Keep deals you win on ROS that they'd accept; steals score above fair wins."""
+    cls = _classify_trade(edge, perc_give, perc_get)
+    keep = cls["verdict"] in ("steal", "win")
+    score = round(edge + (5.0 if cls["verdict"] == "steal" else 0.0), 1)
+    return keep, score, cls
+
+
+def build_trade_finder(my_team_id, target_team_id=None, want_rationale=False,
+                       max_results=TRADE_FINDER_MAX):
+    from itertools import combinations
+    payload = _league_response()
+    teams = payload.get("teams", [])
+    if not teams:
+        return {"error": "League payload is empty."}
+    idx = _flatten_league(payload)
+    pts = [(r.get("draftPick"), r.get("fullSeasonPace")) for r in idx.values()
+           if r.get("draftPick") and r.get("fullSeasonPace")]
+    curve = _fit_log_curve(pts)
+    p = _trade_season_progress()
+    weights = _trade_weights(p)
+
+    def enrich_team(t):
+        out = []
+        for grp in ("pitchers", "batters"):
+            for pl in t.get(grp, []):
+                model = pl.get("seasonBaseRos")
+                if model is None:
+                    model = pl.get("rosFpts")
+                pv = _perceived_value(pl, curve, weights)
+                if model is None or pv is None:
+                    continue
+                out.append({"name": pl.get("name"), "pos": pl.get("pos") or pl.get("posEligible"),
+                            "model": round(model, 1), "perceived": pv,
+                            "injured": (pl.get("injuryStatus") or "").upper() not in ("", "ACTIVE")})
+        out.sort(key=lambda x: -x["model"])
+        return out[:TRADE_FINDER_POOL_CAP]
+
+    my_team = next((t for t in teams if t.get("id") == my_team_id), None)
+    if my_team is None:
+        return {"error": f"Team id {my_team_id} not found — set ESPN_TEAM_ID or pass ?myTeam=",
+                "teams": [{"id": t.get("id"), "name": t.get("name")} for t in teams]}
+    mine = enrich_team(my_team)
+    targets = [t for t in teams if t.get("id") != my_team_id
+               and (target_team_id is None or t.get("id") == target_team_id)]
+    all_teams_scan = target_team_id is None
+
+    candidates = []
+
+    def consider(give_rows, get_rows, owner):
+        mg = sum(x["model"] for x in give_rows)
+        mt = sum(x["model"] for x in get_rows)
+        edge = round(mt - mg, 1)
+        if edge < TRADE_EDGE_MIN:          # cheap reject before classifying
+            return
+        pg = sum(x["perceived"] for x in give_rows)
+        pt = sum(x["perceived"] for x in get_rows)
+        keep, score, cls = _finder_rank(edge, pg, pt)
+        if not keep:
+            return
+        candidates.append({"with": owner, "give": give_rows, "get": get_rows,
+                           "edge": edge, "perceivedBalance": cls["perceivedBalance"],
+                           "verdict": cls["verdict"], "score": score})
+
+    for t in targets:
+        theirs = enrich_team(t)
+        owner = t.get("name")
+        for g in mine:
+            for r in theirs:
+                consider([g], [r], owner)
+        for g2 in combinations(mine, 2):
+            for r in theirs:
+                consider(list(g2), [r], owner)
+        # 1-for-2 only on a focused single-team scan (keeps the all-teams sweep bounded)
+        if not all_teams_scan:
+            for g in mine:
+                for r2 in combinations(theirs, 2):
+                    consider([g], list(r2), owner)
+
+    candidates.sort(key=lambda c: -c["score"])
+    top = candidates[:max_results]
+    result = {"proposals": top,
+              "scanned": {"myTeam": my_team.get("name"),
+                          "targets": [t.get("name") for t in targets],
+                          "found": len(candidates)},
+              "model": {"seasonProgress": round(p, 3), "draftCurveFit": curve is not None,
+                        "weights": {k: round(v, 3) for k, v in weights.items()}}}
+    if want_rationale and top:
+        result["rationale"] = _finder_rationale(top, my_team.get("name"))
+    return result
+
+
+def _finder_rationale(proposals, my_team_name):
+    try:
+        import anthropic
+    except Exception:
+        return ""
+    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    if not api_key:
+        return ""
+    lines = [f"You are a fantasy baseball trade strategist for {my_team_name}. Below are "
+             "candidate trades that gain rest-of-season FPTS while reading fair/favorable "
+             "to the other manager (model = de-lucked ROS truth; perceived = how they price "
+             "players). Rank the best 5 and give a one-line pitch for each.\n"]
+    for i, c in enumerate(proposals[:10], 1):
+        g = ", ".join(x["name"] for x in c["give"])
+        r = ", ".join(x["name"] for x in c["get"])
+        lines.append(f"{i}. with {c['with']}: give {g} → get {r} "
+                     f"(edge {c['edge']:+}, perceived {c['perceivedBalance']:+}, {c['verdict']})")
+    try:
+        client = anthropic.Anthropic(api_key=api_key)
+        model = os.environ.get("CLAUDE_MODEL", "claude-sonnet-4-6")
+        msg = client.messages.create(model=model, max_tokens=800,
+                                     messages=[{"role": "user", "content": "\n".join(lines)}])
+        return "".join(b.text for b in msg.content if hasattr(b, "text"))
+    except Exception as e:
+        return f"(rationale unavailable: {type(e).__name__})"
+
+
 class handler(BaseHTTPRequestHandler):
     def do_GET(self):
         qs      = parse_qs(urlparse(self.path).query)
@@ -1442,12 +1572,18 @@ class handler(BaseHTTPRequestHandler):
             self.wfile.write(json.dumps(body).encode())
             return
 
-        # Trade evaluator — GET form for quick testing:
+        # Trade evaluator / finder — GET form for quick testing:
         #   ?view=trade&give=Name A,Name B&get=Name C&rationale=0
+        #   ?view=trade&mode=find[&team=<id>][&myTeam=<id>][&rationale=1]
         if qs.get("view", [""])[0] == "trade":
+            want = qs.get("rationale", ["0"])[0] in ("1", "true")
+            if qs.get("mode", [""])[0] == "find":
+                my_tid = int((qs.get("myTeam", [""])[0] or os.environ.get("ESPN_TEAM_ID", "0")) or 0)
+                tgt = qs.get("team", [""])[0]
+                self._send_finder(my_tid, int(tgt) if tgt.isdigit() else None, want)
+                return
             give = [g for g in (qs.get("give", [""])[0]).split(",") if g.strip()]
             get_ = [g for g in (qs.get("get", [""])[0]).split(",") if g.strip()]
-            want = qs.get("rationale", ["0"])[0] in ("1", "true")
             self._send_trade(give, get_, qs.get("team", [None])[0], want)
             return
 
@@ -1507,8 +1643,14 @@ class handler(BaseHTTPRequestHandler):
         except Exception:
             data = {}
         if qs.get("view", [""])[0] == "trade" or data.get("view") == "trade":
+            want = bool(data.get("rationale"))
+            if data.get("mode") == "find" or qs.get("mode", [""])[0] == "find":
+                my_tid = int(data.get("myTeam") or os.environ.get("ESPN_TEAM_ID", "0") or 0)
+                tgt = data.get("targetTeamId")
+                self._send_finder(my_tid, int(tgt) if str(tgt).isdigit() else None, want)
+                return
             self._send_trade(data.get("give", []), data.get("get", []),
-                             data.get("withTeamId"), bool(data.get("rationale")))
+                             data.get("withTeamId"), want)
             return
         self._send_json(404, {"error": "Unknown POST endpoint"})
 
@@ -1522,6 +1664,15 @@ class handler(BaseHTTPRequestHandler):
     def _send_trade(self, give, get_, team, want_rationale):
         try:
             body = build_trade_eval(give or [], get_ or [], team, want_rationale)
+        except Exception as e:
+            import traceback
+            body = {"error": f"{type(e).__name__}: {e}",
+                    "traceback": traceback.format_exc()[-1500:]}
+        self._send_json(200 if "error" not in body else 400, body)
+
+    def _send_finder(self, my_team_id, target_team_id, want_rationale):
+        try:
+            body = build_trade_finder(my_team_id, target_team_id, want_rationale)
         except Exception as e:
             import traceback
             body = {"error": f"{type(e).__name__}: {e}",
