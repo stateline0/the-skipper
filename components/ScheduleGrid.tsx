@@ -4,6 +4,7 @@
 
 import { useMemo, useEffect } from 'react'
 import ProjectionTooltip, { ProjectionBreakdown } from './ProjectionTooltip'
+import { IlPill } from './HitterTables'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -578,7 +579,15 @@ export default function ScheduleGrid({
 
                 {/* Pitcher name */}
                 <td style={{ ...cellStyle, textAlign: 'left', paddingLeft: 10, fontWeight: 600 }}>
-                  {pitcher.name}
+                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+                    {pitcher.name}
+                    {/* Typed FA labels only; rostered bare "IL" is already
+                        shown by the slot badge, so don't double it up. */}
+                    {pitcher.injuryStatus && pitcher.injuryStatus !== 'Active'
+                      && pitcher.injuryStatus !== 'IL' && (
+                      <IlPill status={pitcher.injuryStatus} />
+                    )}
+                  </span>
                 </td>
 
                 {/* Team */}

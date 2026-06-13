@@ -47,14 +47,18 @@ from projection_hitter import (
 
 
 def _build_days(name, team, game_dates, schedule, base, hands, splits, overall_ops,
-                opp_savant, league_xwoba, weather_map, today_iso, actuals=None):
+                opp_savant, league_xwoba, weather_map, today_iso, actuals=None,
+                il_zero=False):
     """Per-day cells with the matchup factor stack:
       Phase 6 — platoon (batter vs the day's probable-starter hand)
       Phase 7 — opposing-starter quality (their xwOBA-against vs league)
       Phase 4 — park factor (host park; applied directly, un-inverted)
       Phase 5 — weather (host park, future days; warm = more offense)
     day proj = base × Π(factors); each factor is {label, mult} so the frontend
-    popover lists Base → factors → Proj."""
+    popover lists Base → factors → Proj.
+    il_zero: player is on the IL (IL10/IL15/IL60) — every day gains an
+    IL ×0 factor so proj is 0 and the popover explains why. Past days'
+    actuals are untouched."""
     days = []
     for d in game_dates:
         game = schedule.get(d, {}).get(team, {})
@@ -92,6 +96,9 @@ def _build_days(name, team, game_dates, schedule, base, hands, splits, overall_o
                     label = f"Weather ({round(temp)}°F)" if temp else "Weather"
                     factors.append({"label": label, "mult": round(wf, 3)})
                     mult *= wf
+        if il_zero:
+            factors.append({"label": "IL", "mult": 0.0})
+            mult = 0.0
         av = (actuals.get(name) or {}).get(d) if actuals else None
         days.append({
             "date": d,
@@ -159,6 +166,17 @@ def _lock_started_days(season, period, name, days, model, today_iso, existing):
 
 # ESPN baseball lineup/eligible slot IDs. Hitters occupy 0–12; pitchers 13–15.
 HITTER_SLOTS = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12}
+
+# FA injuryStatus display labels + zero-while-IL set (Phase A, June 13).
+# Mirrors api/espn.py's INJ_LABEL_MAP / IL_ZERO_STATUSES (small intentional
+# duplicate — the two modules don't otherwise import each other). DTD keeps
+# projecting; unknown statuses fall through unzeroed.
+FA_INJ_LABEL_MAP = {
+    "ACTIVE": "Active", "NORMAL": "Active",
+    "TEN_DAY_DL": "IL10", "FIFTEEN_DAY_DL": "IL15", "SIXTY_DAY_DL": "IL60",
+    "DAY_TO_DAY": "DTD", "SUSPENSION": "SUSP",
+}
+FA_IL_ZERO_STATUSES = {"IL10", "IL15", "IL60"}
 
 # Label + display order keyed by the player's current lineupSlotId, to match
 # ESPN's roster ordering exactly: C, 1B, 2B, 3B, SS, MI(2B/SS), CI(1B/3B), OF,
@@ -549,7 +567,8 @@ def get_hitter_data(team_id: int, week: int) -> dict:
         # Per-day cells with the matchup factor stack (Phase 6 platoon + Phase 7 opp SP).
         days = _build_days(name, h["team"], h["gameDates"], schedule, per_game,
                            hands, splits, overall_ops, pitch_savant, league_xwoba,
-                           weather_map, today_iso, actual_fpts)
+                           weather_map, today_iso, actual_fpts,
+                           il_zero=(h["pos"] == "IL"))
         # Freeze each started game's projection for the accuracy dashboard.
         hit_locks_new += _lock_started_days(
             year_int, week, name, days,
@@ -646,9 +665,11 @@ def _fetch_fa_hitters(base, headers, cookies, PRO_TEAM_MAP, current_week,
                 continue
             team_abbrev = PRO_TEAM_MAP.get(player.get("proTeamId", 0), "")
             own = round(float(player.get("ownership", {}).get("percentOwned", 0) or 0), 1)
+            inj = FA_INJ_LABEL_MAP.get(player.get("injuryStatus", "ACTIVE"),
+                                       player.get("injuryStatus", "ACTIVE"))
             meta.append({
                 "name": name, "team": team_abbrev,
-                "pos": _eligible_positions(eligible), "ownPct": own,
+                "pos": _eligible_positions(eligible), "ownPct": own, "inj": inj,
                 "gameDates": [d for d in period_dates if team_abbrev and team_abbrev in schedule.get(d, {})],
             })
 
@@ -675,10 +696,12 @@ def _fetch_fa_hitters(base, headers, cookies, PRO_TEAM_MAP, current_week,
             bats = (hands.get(strip_accents(h["name"])) or {}).get("bats", "")
             days = _build_days(h["name"], h["team"], h["gameDates"], schedule, per_game,
                                hands, fa_splits, overall_ops, pitch_savant, league_xwoba,
-                               weather_map, today_iso, fa_actuals)
+                               weather_map, today_iso, fa_actuals,
+                               il_zero=(h["inj"] in FA_IL_ZERO_STATUSES))
             out.append({
                 "name": h["name"], "team": h["team"], "pos": h["pos"], "bats": bats,
                 "percentOwned": h["ownPct"],
+                "injuryStatus": h["inj"],
                 "projFpts": round(sum(d["proj"] for d in days), 1), "projPerGame": round(per_game, 1),
                 "actualFpts": round(sum(d["actual"] for d in days if d.get("actual") is not None), 1),
                 "games": p.get("games", len(h["gameDates"])),
@@ -720,7 +743,8 @@ HITTER_CACHE_TTL = 1800  # 30 min
 #   v21: gate weather on game status (scheduled), not UTC date (today boundary).
 #   v22: capture actual/live FPTS per day (roster) — status + actual on day cells.
 #   v23: FA actuals computed from game logs by category (ESPN can't expose them).
-HITTER_CACHE_VERSION = 23
+#   v24: Phase A IL-awareness — FA injuryStatus label + IL ×0 day factor (roster + FA).
+HITTER_CACHE_VERSION = 24
 
 
 def _cache_key(team_id: int, week: int) -> str:
