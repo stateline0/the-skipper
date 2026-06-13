@@ -4,7 +4,7 @@
 
 import { useMemo, useEffect } from 'react'
 import ProjectionTooltip, { ProjectionBreakdown } from './ProjectionTooltip'
-import { IlPill } from './HitterTables'
+import { IlPill, PosTags } from './HitterTables'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -30,6 +30,7 @@ interface Pitcher {
   // Free agents also have these:
   percentOwned?: number
   injuryStatus?: string
+  posEligible?: string            // SP/RP eligibility for the name-subline pills
   checked?: boolean
 }
 
@@ -577,17 +578,13 @@ export default function ScheduleGrid({
               >
                 {renderPrefix?.(pitcher, i)}
 
-                {/* Pitcher name */}
-                <td style={{ ...cellStyle, textAlign: 'left', paddingLeft: 10, fontWeight: 600 }}>
-                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
-                    {pitcher.name}
-                    {/* Typed FA labels only; rostered bare "IL" is already
-                        shown by the slot badge, so don't double it up. */}
-                    {pitcher.injuryStatus && pitcher.injuryStatus !== 'Active'
-                      && pitcher.injuryStatus !== 'IL' && (
-                      <IlPill status={pitcher.injuryStatus} />
-                    )}
-                  </span>
+                {/* Pitcher name + eligibility/injury pill subline */}
+                <td style={{ ...cellStyle, textAlign: 'left', paddingLeft: 10 }}>
+                  <div style={{ fontWeight: 600 }}>{pitcher.name}</div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 5, flexWrap: 'wrap', marginTop: 2 }}>
+                    <PosTags pos={pitcher.posEligible || pitcher.slot} />
+                    <IlPill status={pitcher.injuryStatus} />
+                  </div>
                 </td>
 
                 {/* Team */}

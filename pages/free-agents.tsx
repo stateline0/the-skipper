@@ -7,7 +7,7 @@ import {
   HitterScheduleGrid, HitterStatsTable,
 } from '../components/HitterTables'
 
-const CACHE_VERSION = 9 // bump this whenever the API response shape changes
+const CACHE_VERSION = 10 // bump this whenever the API response shape changes
 
 // Canonical hitter positions for the Free Agents position filter. A hitter's
 // pos may be composite (e.g. "2B/SS"), so matching splits on "/". UTIL is a
