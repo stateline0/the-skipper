@@ -30,6 +30,7 @@ export interface UIHitter {
   il?: string                 // typed injury label (IL10/IL15/IL60/DTD/SUSP)
   estReturn?: string          // est. return date (YYYY-MM-DD) — Phase B injuries feed
   injuryDetail?: string       // injury descriptor for the IL tooltip, e.g. "Right Quadriceps (Strain)"
+  rosFpts?: number            // rest-of-season FPTS estimate (League viewer)
   adv?: HitterAdvanced        // advanced Savant block (Stats tab)
 }
 
@@ -94,6 +95,7 @@ function sortVal(h: UIHitter, weeks: Weeks, key: string): number | null {
       return a.length ? a.reduce((s, g) => s + (g.actual || 0), 0) : null
     }
     case 'projWk': return week.reduce((a, g) => a + g.proj, 0)
+    case 'ros':    return h.rosFpts ?? null
     case 'projG':  return h.projG
     case 'own':    return h.percentOwned ?? null
     case 'ops':    return (h.obp || 0) + (h.slg || 0)
@@ -501,8 +503,9 @@ function DayPopover({ g, oppLabel, dnp }: { g: DayGame; oppLabel: string; dnp?: 
 
 // ─── Stats table (with advanced Savant columns) ───────────────────────────────
 
-export function HitterStatsTable({ hitters, weeks, showOwn, leagueAvg }: {
+export function HitterStatsTable({ hitters, weeks, showOwn, leagueAvg, seasonView }: {
   hitters: UIHitter[]; weeks: Weeks; showOwn?: boolean; leagueAvg?: HitterAdvanced
+  seasonView?: boolean   // League viewer: swap the weekly Proj-wk column for a rest-of-season ROS column
 }) {
   const { sorted, key, dir, onSort } = useSortedHitters(hitters, weeks)
   const cellStyle: React.CSSProperties = {
@@ -532,7 +535,8 @@ export function HitterStatsTable({ hitters, weeks, showOwn, leagueAvg }: {
             {th('Brl%', 'barrel', 'center', undefined, subPct(la.barrelPct))}
             {th('EV', 'ev', 'center', undefined, subNum(la.evAvg))}
             {th('Proj/G', 'projG')}
-            {th('Proj wk', 'projWk')}
+            {seasonView ? th('ROS', 'ros', 'center', 'Rest-of-season FPTS: Proj/G × team games remaining')
+                        : th('Proj wk', 'projWk')}
             {showOwn && th('Own%', 'own')}
           </tr>
         </thead>
@@ -566,7 +570,9 @@ export function HitterStatsTable({ hitters, weeks, showOwn, leagueAvg }: {
                 <td style={num({ color: 'var(--ink-2)' })}>{pct(adv.barrelPct)}</td>
                 <td style={num({ color: 'var(--ink-2)' })}>{adv.evAvg === undefined ? '—' : adv.evAvg.toFixed(1)}</td>
                 <td style={num({ fontWeight: 700 })}>{h.projG.toFixed(1)}</td>
-                <td style={num({ fontWeight: 700, color: 'var(--green)' })}>{projWk.toFixed(1)}</td>
+                {seasonView
+                  ? <td style={num({ fontWeight: 700, color: 'var(--green)' })}>{h.rosFpts == null ? '—' : h.rosFpts.toFixed(0)}</td>
+                  : <td style={num({ fontWeight: 700, color: 'var(--green)' })}>{projWk.toFixed(1)}</td>}
                 {showOwn && <td style={num({ color: 'var(--ink-3)', fontSize: 12 })}>{h.percentOwned ?? 0}%</td>}
               </tr>
             )

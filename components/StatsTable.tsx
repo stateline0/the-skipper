@@ -58,6 +58,7 @@ export interface Pitcher {
   injuryStatus?: string           // typed IL label (IL10/IL15/IL60/DTD/SUSP)
   estReturn?: string              // est. return date (YYYY-MM-DD) — Phase B injuries feed
   injuryDetail?: string           // injury descriptor for the IL tooltip
+  rosFpts?: number                // rest-of-season FPTS estimate (League viewer)
   posEligible?: string            // SP/RP eligibility for the name-subline pills
   seasonStats?: SeasonStats | null
   savantExpected?: SavantExpected | null
@@ -614,6 +615,18 @@ export const SV_COLUMN: PitcherColumn = {
   render: (p) => (
     <NumOrDash value={p.seasonStats?.sv} render={(v) => (
       <span style={{ fontFamily: 'var(--mono)', fontWeight: 700 }}>{v}</span>
+    )} />
+  ),
+}
+
+// Rest-of-season FPTS estimate (League viewer): per-start proj × remaining
+// starts (Pace horizon) for starters, appearance-prorated for relievers.
+export const ROS_COLUMN: PitcherColumn = {
+  key: 'ros', label: 'ROS', minWidth: 64,
+  sortValue: (p) => p.rosFpts ?? -Infinity,
+  render: (p) => (
+    <NumOrDash value={p.rosFpts} render={(v) => (
+      <span style={{ fontFamily: 'var(--mono)', fontWeight: 700, color: 'var(--green)' }}>{v.toFixed(0)}</span>
     )} />
   ),
 }
