@@ -62,7 +62,7 @@ export default function League() {
     if (cached) {
       try { setData(JSON.parse(cached)); setLoading(false) } catch {}
     }
-    fetch('/api/league')
+    fetch('/api/hitters?view=league')
       .then(r => r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))
       .then((d: LeagueData) => {
         if (d && (d as any).error) throw new Error((d as any).error)
