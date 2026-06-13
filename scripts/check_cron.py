@@ -43,8 +43,10 @@ TOKEN = os.environ.get("KV_REST_API_TOKEN", "")
 OK = "✓"    # ✓
 WARN = "⚠"  # ⚠
 
-# Backlog thresholds for a healthy hitter pass.
-HITTERS_MIN, HITTERS_MAX = 250, 350
+# Healthy hitter-pass band. The cron locks every hitter on a team playing
+# today (full rosters, not just starting lineups), so a full slate runs ~600,
+# not the ~250-350 starting-lineup count the band was first guessed at.
+HITTERS_MIN, HITTERS_MAX = 250, 650
 
 
 def _cmd(*args):
@@ -135,7 +137,7 @@ def classify_proj2h(rec: dict) -> str:
     return "other"
 
 
-def spot_check_proj2h(dates: list) -> None:
+def spot_check_proj2h(dates: list, today: str) -> None:
     """Tally proj2h lock upgrade-states per date across the whole keyspace."""
     print(f"\n{'='*72}\nproj2h upgrade spot-check (proj2h:*:{{date}})\n{'='*72}")
     print("  baseline = cron lock not yet upgraded | upgraded = page upgraded it "
@@ -152,9 +154,12 @@ def spot_check_proj2h(dates: list) -> None:
         if total == 0:
             print(f"  {date}  (no proj2h locks)")
             continue
-        # A lingering baseline count on a past date = upgrade never fired there.
+        # A lingering baseline count is only a problem on a PAST date — it means
+        # the Hitters page never upgraded those locks before the games ended.
+        # Today's baselines are expected (the upgrade fires on the first page
+        # load after each game starts), so don't flag them.
         note = (f"  {WARN} {counts['baseline']} still baseline"
-                if counts["baseline"] else "")
+                if counts["baseline"] and date < today else "")
         print(f"  {date}  total={total}  upgraded={counts['upgraded']}  "
               f"baseline={counts['baseline']}  native={counts['native']}  "
               f"other={counts['other']}{note}")
@@ -203,7 +208,7 @@ def main() -> None:
     print(f"all-MLB cron diagnostic — last {args.days} days "
           f"(through {dates[0]} UTC), READ-ONLY")
     dump_summaries(dates)
-    spot_check_proj2h(dates)
+    spot_check_proj2h(dates, dates[0])
     if args.slugs:
         drill_slugs(args.slugs, dates)
     print(f"\n{'='*72}\nDone. Paste this back and I'll read it against the P0 "
