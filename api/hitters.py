@@ -992,7 +992,8 @@ def _lg_team_meta(team: dict, members_by_id: dict) -> dict:
             "owner": owner, "record": record}
 
 
-def _lg_build_team(team, cd, hd, scoring, PRO_TEAM_MAP, year_int, week):
+def _lg_build_team(team, cd, hd, scoring, PRO_TEAM_MAP, year_int, week, pick_by_id=None):
+    pick_by_id = pick_by_id or {}
     entries = team.get("roster", {}).get("entries", [])
     pitchers_raw, hitters_raw = [], []
     for entry in entries:
@@ -1025,19 +1026,32 @@ def _lg_build_team(team, cd, hd, scoring, PRO_TEAM_MAP, year_int, week):
         ss = _lg_pitcher_season_stats(cd.get("mlb_stats_current", {}).get(nk, {}))
         gs = (ss or {}).get("gs", 0); per = fpts_per_start.get(name, 0.0)
         team_abbrev = PRO_TEAM_MAP.get(player.get("proTeamId", 0), "")
+        # seasonBase = the de-lucked per-start rate BEFORE the 60/40 recent-form
+        # blend — the basis for the trade engine's "model ROS value" axis.
+        season_base = (_pd.get(name) or {}).get("seasonBase")
         if 14 in eligible:
-            ros = round(per * max(0, LEAGUE_FULL_SEASON_STARTS - gs), 1)
+            horizon = max(0, LEAGUE_FULL_SEASON_STARTS - gs)
+            ros = round(per * horizon, 1)
+            produced = per * gs
         else:
             apps = int(cd.get("mlb_stats_current", {}).get(nk, {}).get("gamesPlayed", 0))
             tgr = _lg_games_remaining(cd.get("team_win_data", {}), team_abbrev)
             tgp = (cd.get("team_win_data", {}).get(team_abbrev) or {}).get("games", 0)
-            ros = round(per * apps * tgr / tgp, 1) if (tgr and tgp) else None
+            horizon = (apps * tgr / tgp) if (tgr and tgp) else 0
+            ros = round(per * horizon, 1) if (tgr and tgp) else None
+            produced = per * apps
+        sb_ros = round(season_base * horizon, 1) if (season_base is not None and horizon) else None
         pitchers.append({
             "name": name, "team": team_abbrev,
             "slot": _lg_slot_label(eligible, injured),
             "posEligible": _lg_pos_eligible(eligible),
             "injuryStatus": "IL" if injured else "Active",
-            "projFpts": round(per, 1), "rosFpts": ros, "seasonStats": ss,
+            "projFpts": round(per, 1), "rosFpts": ros,
+            "seasonBaseRos": sb_ros,
+            "fullSeasonPace": round(produced + (ros or 0), 1),
+            "draftPick": pick_by_id.get(player.get("id")),
+            "adp": (player.get("ownership") or {}).get("averageDraftPosition"),
+            "seasonStats": ss,
             "savantExpected": _lg_pitcher_savant(
                 cd.get("savant_current", {}).get(nk, {}),
                 cd.get("savant_statcast_current", {}).get(nk, {}),
@@ -1050,7 +1064,7 @@ def _lg_build_team(team, cd, hd, scoring, PRO_TEAM_MAP, year_int, week):
         "name": p.get("fullName"), "team": PRO_TEAM_MAP.get(p.get("proTeamId", 0), ""),
         "gameDates": [],
     } for p, e in hitters_raw]
-    hproj, _ = get_projected_hitter_fpts(
+    hproj, hdet = get_projected_hitter_fpts(
         hitter_inputs, scoring=scoring,
         stat_current=hd.get("hitting_current"), stat_previous=hd.get("hitting_previous"),
         savant_current=hd.get("savant_batter_current"), savant_previous=hd.get("savant_batter_previous"),
@@ -1065,10 +1079,18 @@ def _lg_build_team(team, cd, hd, scoring, PRO_TEAM_MAP, year_int, week):
         bats = (player.get("batSide") or {}).get("code", "") if isinstance(player.get("batSide"), dict) else ""
         tgr = _lg_games_remaining(cd.get("team_win_data", {}), team_abbrev)
         ros = round(per_game * tgr, 1) if tgr is not None else None
+        # seasonBase = de-lucked per-game rate before the recent-form blend.
+        season_base = (hdet.get(name) or {}).get("seasonBase") if hdet else None
+        games_played = (LEAGUE_SEASON_GAMES - tgr) if tgr is not None else 0
+        sb_ros = round(season_base * tgr, 1) if (season_base is not None and tgr is not None) else None
         batters.append({
             "name": name, "team": team_abbrev,
             "pos": _eligible_positions(eligible), "bats": bats,
             "projPerGame": round(per_game, 1), "rosFpts": ros,
+            "seasonBaseRos": sb_ros,
+            "fullSeasonPace": round(per_game * games_played + (ros or 0), 1),
+            "draftPick": pick_by_id.get(player.get("id")),
+            "adp": (player.get("ownership") or {}).get("averageDraftPosition"),
             "seasonStats": _season_line(hd.get("hitting_current", {}).get(nk, {})),
             "advanced": _advanced_line(name, hd.get("savant_batter_current", {}),
                                        hd.get("savant_batter_statcast_current", {})),
@@ -1086,7 +1108,8 @@ def build_league_rosters() -> dict:
     PRO_TEAM_MAP = get_pro_team_map(headers, cookies)
     base = (f"https://lm-api-reads.fantasy.espn.com/apis/v3/games/flb"
             f"/seasons/{year}/segments/0/leagues/{league_id}")
-    r = requests.get(base, params=[("view", "mRoster"), ("view", "mTeam"), ("view", "mSettings")],
+    r = requests.get(base, params=[("view", "mRoster"), ("view", "mTeam"),
+                                   ("view", "mSettings"), ("view", "mDraftDetail")],
                      cookies=cookies, headers=headers, timeout=20)
     if r.status_code in (401, 403):
         raise Exception(f"ESPN returned HTTP {r.status_code} — auth failed (check ESPN_S2/ESPN_SWID).")
@@ -1096,12 +1119,19 @@ def build_league_rosters() -> dict:
     week = data.get("scoringPeriodId", 1)
     members_by_id = {m.get("id"): (m.get("displayName") or "").strip() for m in data.get("members", [])}
     scoring = parse_hitter_scoring(data)
+    # Draft slot → the trade engine's strongest perceived-value anchor. Static for
+    # the season; comes free on the same league fetch via the mDraftDetail view.
+    pick_by_id = {}
+    for pk in ((data.get("draftDetail") or {}).get("picks") or []):
+        pid, ov = pk.get("playerId"), pk.get("overallPickNumber")
+        if pid and ov:
+            pick_by_id[pid] = ov
     cd = load_cached_data(year_int)
     hd = load_hitter_stats(year_int)
     teams_out = []
     for team in data.get("teams", []):
         teams_out.append({**_lg_team_meta(team, members_by_id),
-                          **_lg_build_team(team, cd, hd, scoring, PRO_TEAM_MAP, year_int, week)})
+                          **_lg_build_team(team, cd, hd, scoring, PRO_TEAM_MAP, year_int, week, pick_by_id)})
     teams_out.sort(key=lambda t: t["name"].lower())
     return {"teams": teams_out, "week": week, "generatedAt": datetime.utcnow().isoformat() + "Z"}
 
@@ -1122,6 +1152,254 @@ def _league_response() -> dict:
     return payload
 
 
+# ──────────────────────────────────────────────────────────────────────────
+# Trade engine — Phase 2 (perceived-value arbitrage)
+#
+# Two axes per player, kept deliberately separate:
+#   • model ROS value — de-lucked rest-of-season FPTS (seasonBaseRos: the
+#     Savant-de-lucked rate × remaining-games horizon, WITHOUT the 60/40
+#     recent-form blend). This is the truth.
+#   • perceived value — what an opposing manager prices the player at: a
+#     time-varying blend of draft slot (their own league-draft anchor),
+#     current full-season production, and ADP, with a light positional-scarcity
+#     tilt. Expressed in FPTS-equivalent so the edge reads in one currency.
+#
+# The Skipper edge = balance the PERCEIVED axis (so a trade looks fair and the
+# other manager accepts) while winning the MODEL axis (real ROS FPTS gained).
+#
+# v1 scope: replacement-level netting and a numeric IL haircut are deferred to
+# v1.1 (injured players are flagged, not yet discounted); preseason-proj
+# reach/fall is v2 (FanGraphs CSV). These show up in summary.model.caveats.
+# ──────────────────────────────────────────────────────────────────────────
+
+TRADE_SEASON_OPEN = datetime(2026, 3, 25)
+TRADE_SEASON_DAYS = 183            # ~opening day → late September
+TRADE_ACCEPT_CUSHION = 0.05        # bias proposals 5% perceived-favorable to them
+TRADE_EDGE_MIN = 8.0               # ROS FPTS edge below which a deal isn't worth it
+TRADE_FAIR_BAND = 0.08             # perceived imbalance within 8% reads as "fair"
+
+# Light positional-scarcity tilt on perceived value (deep pools < 1, scarce > 1).
+TRADE_SCARCITY_MULT = {
+    "C": 1.06, "SS": 1.04, "2B": 1.02, "3B": 1.00, "1B": 0.98,
+    "OF": 0.98, "DH": 0.96, "SP": 1.00, "RP": 1.00, "P": 1.00,
+}
+
+
+def _trade_season_progress():
+    """Season fraction elapsed (0..1) — drives the time-varying weights."""
+    try:
+        elapsed = (datetime.now() - TRADE_SEASON_OPEN).days
+    except Exception:
+        elapsed = 0
+    return max(0.0, min(1.0, elapsed / TRADE_SEASON_DAYS))
+
+
+def _trade_weights(p):
+    """Time-varying perceived-value weights. Early season anchors on the draft;
+    perception migrates toward in-season production as p (progress) grows."""
+    w_prod = max(0.30, min(0.75, 0.30 + 0.45 * p))
+    w_anchor = 1.0 - w_prod
+    return {"prod": w_prod, "draft": w_anchor * 0.8, "adp": w_anchor * 0.2}
+
+
+def _fit_log_curve(points):
+    """OLS log-log fit value ≈ exp(b0 + b1·ln(pick)). Returns curve(pick)→value,
+    or None if too few/degenerate points. Used to turn a draft slot (or ADP)
+    into an FPTS-equivalent value with the right convex decay."""
+    import math
+    pts = [(math.log(pk), math.log(v)) for pk, v in points
+           if pk and pk > 0 and v and v > 0]
+    n = len(pts)
+    if n < 4:
+        return None
+    sx = sum(x for x, _ in pts); sy = sum(y for _, y in pts)
+    sxx = sum(x * x for x, _ in pts); sxy = sum(x * y for x, y in pts)
+    denom = n * sxx - sx * sx
+    if abs(denom) < 1e-9:
+        return None
+    slope = (n * sxy - sx * sy) / denom
+    intercept = (sy - slope * sx) / n
+
+    def curve(pick):
+        if not pick or pick <= 0:
+            return None
+        return math.exp(intercept + slope * math.log(pick))
+    return curve
+
+
+def _pos_group(row):
+    pos = (row.get("pos") or row.get("posEligible") or "").upper()
+    for g in ("C", "SS", "2B", "3B", "1B", "OF", "DH", "SP", "RP"):
+        if g in pos:
+            return g
+    return "P" if "P" in pos else (pos.split("/")[0] if pos else "")
+
+
+def _perceived_value(row, curve, weights):
+    """Blend draft slot, in-season production, and ADP into one FPTS-equivalent,
+    then apply the positional-scarcity tilt. Weights renormalize over whichever
+    components are present (a player with no draft pick leans on production)."""
+    prod = row.get("fullSeasonPace")
+    draft_v = curve(row.get("draftPick")) if curve else None
+    adp_v = curve(row.get("adp")) if curve else None
+    acc, wsum = 0.0, 0.0
+    for val, w in ((prod, weights["prod"]), (draft_v, weights["draft"]), (adp_v, weights["adp"])):
+        if val is not None:
+            acc += w * val; wsum += w
+    if wsum <= 0:
+        return None
+    return round((acc / wsum) * TRADE_SCARCITY_MULT.get(_pos_group(row), 1.0), 1)
+
+
+def _classify_trade(edge, perc_give, perc_get):
+    """Deterministic verdict. `give` is what we send the counterparty, so THEY
+    perceive a win when perc_give ≥ perc_get. The cushion sweetens that for them."""
+    perc_balance = round(perc_give - perc_get, 1)
+    perc_ratio = perc_give / max(perc_get, 1.0)
+    fair = perc_ratio >= (1.0 - TRADE_FAIR_BAND)
+    sweetened = perc_ratio >= (1.0 + TRADE_ACCEPT_CUSHION)
+    if edge >= TRADE_EDGE_MIN and fair:
+        verdict = "steal" if sweetened else "win"
+    elif edge >= TRADE_EDGE_MIN and not fair:
+        verdict = "lopsided"
+    elif edge <= -TRADE_EDGE_MIN:
+        verdict = "avoid"
+    else:
+        verdict = "marginal"
+    return {"perceivedBalance": perc_balance, "perceivedRatio": round(perc_ratio, 3),
+            "fairToThem": fair, "sweetened": sweetened, "verdict": verdict}
+
+
+def _flatten_league(payload):
+    """name(normalized) → enriched player row, across all teams & both groups."""
+    idx = {}
+    for t in payload.get("teams", []):
+        owner = t.get("name", "")
+        for grp in ("pitchers", "batters"):
+            for pl in t.get(grp, []):
+                idx[strip_accents(pl.get("name", ""))] = {**pl, "owner": owner, "kind": grp}
+    return idx
+
+
+def _resolve_players(names, idx):
+    found, missing = [], []
+    for nm in names:
+        row = idx.get(strip_accents(nm or ""))
+        if row:
+            found.append(row)
+        else:
+            missing.append(nm)
+    return found, missing
+
+
+def build_trade_eval(give_players, get_players, with_team_id=None, want_rationale=False):
+    """Evaluate a give/get trade on both axes. Returns per-player + per-side
+    numbers, a deterministic verdict, and (optionally) a Claude pitch."""
+    payload = _league_response()
+    idx = _flatten_league(payload)
+    give_rows, give_missing = _resolve_players(give_players, idx)
+    get_rows, get_missing = _resolve_players(get_players, idx)
+    if give_missing or get_missing:
+        return {"error": "Unrecognized player name(s)",
+                "unmatched": give_missing + get_missing,
+                "hint": "Use full names exactly as they appear in the League view."}
+    if not give_rows or not get_rows:
+        return {"error": "Both sides of the trade need at least one player."}
+
+    # Fit the draft-value curve from every rostered player with a pick + pace.
+    pts = [(r.get("draftPick"), r.get("fullSeasonPace")) for r in idx.values()
+           if r.get("draftPick") and r.get("fullSeasonPace")]
+    curve = _fit_log_curve(pts)
+    p = _trade_season_progress()
+    weights = _trade_weights(p)
+
+    def enrich(r):
+        model = r.get("seasonBaseRos")
+        if model is None:
+            model = r.get("rosFpts")          # fallback if de-lucked base missing
+        pv = _perceived_value(r, curve, weights)
+        injured = (r.get("injuryStatus") or "").upper() not in ("", "ACTIVE")
+        # ROS FPTS earned per unit of perceived value — scale-robust arbitrage
+        # signal. High = undervalued (acquire); low = overvalued (move).
+        ratio = round(model / pv, 3) if (model is not None and pv) else None
+        return {"name": r.get("name"), "owner": r.get("owner"), "team": r.get("team"),
+                "pos": r.get("pos") or r.get("posEligible"),
+                "modelRos": round(model, 1) if model is not None else None,
+                "perceived": pv, "blendedRos": r.get("rosFpts"),
+                "draftPick": r.get("draftPick"), "valueRatio": ratio,
+                "injured": injured, "injuryStatus": r.get("injuryStatus")}
+
+    give_e = [enrich(r) for r in give_rows]
+    get_e = [enrich(r) for r in get_rows]
+    _s = lambda rows, k: round(sum((x.get(k) or 0) for x in rows), 1)
+    model_give, model_get = _s(give_e, "modelRos"), _s(get_e, "modelRos")
+    perc_give, perc_get = _s(give_e, "perceived"), _s(get_e, "perceived")
+
+    edge = round(model_get - model_give, 1)
+    cls = _classify_trade(edge, perc_give, perc_get)
+    blurb = {
+        "steal": f"Steal — you gain {edge:+} ROS FPTS and they perceive it as a win.",
+        "win": f"Good deal — {edge:+} ROS FPTS and it reads as fair to them.",
+        "lopsided": f"{edge:+} ROS FPTS for you, but you're perceived as winning by "
+                    f"{abs(cls['perceivedBalance'])} — they may balk. Sweeten it.",
+        "avoid": f"Pass — you lose {abs(edge)} ROS FPTS.",
+        "marginal": f"Marginal — only {edge:+} ROS FPTS; not worth the roster churn.",
+    }[cls["verdict"]]
+
+    caveats = ["Replacement-level netting is deferred to v1.1."]
+    if any(x["injured"] for x in give_e + get_e):
+        caveats.append("Injured players are flagged but not yet numerically discounted (v1.1).")
+    if not any(r.get("adp") for r in idx.values()):
+        caveats.append("ADP unavailable from the roster feed; draft slot carries the anchor.")
+
+    result = {
+        "give": give_e, "get": get_e,
+        "summary": {"modelGive": model_give, "modelGet": model_get, "edge": edge,
+                    "perceivedGive": perc_give, "perceivedGet": perc_get,
+                    "blurb": blurb, **cls},
+        "model": {"seasonProgress": round(p, 3),
+                  "weights": {k: round(v, 3) for k, v in weights.items()},
+                  "draftCurveFit": curve is not None, "draftCurvePoints": len(pts),
+                  "cushion": TRADE_ACCEPT_CUSHION, "caveats": caveats},
+        "week": payload.get("week"),
+    }
+    if want_rationale:
+        result["rationale"] = _trade_rationale(result)
+    return result
+
+
+def _trade_rationale(result):
+    """Optional Claude pitch — mirrors api/analyze.py's client pattern."""
+    try:
+        import anthropic
+    except Exception:
+        return ""
+    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    if not api_key:
+        return ""
+    s = result["summary"]
+    give_s = ", ".join(f"{x['name']} (model {x['modelRos']}, perceived {x['perceived']})" for x in result["give"])
+    get_s = ", ".join(f"{x['name']} (model {x['modelRos']}, perceived {x['perceived']})" for x in result["get"])
+    prompt = (
+        "You are a sharp fantasy baseball trade analyst. Two axes matter: MODEL "
+        "ROS FPTS (the truth) and PERCEIVED value (what the other manager prices "
+        "players at, anchored on draft slot + current stats). Advise whether to "
+        "send this offer and how to pitch it so the other manager accepts. Be "
+        "specific and reference the numbers.\n\n"
+        f"You GIVE: {give_s}\nYou GET: {get_s}\n"
+        f"Your ROS edge: {s['edge']:+} FPTS. Perceived balance (their view): "
+        f"{s['perceivedBalance']:+}. Verdict: {s['verdict']}."
+    )
+    try:
+        client = anthropic.Anthropic(api_key=api_key)
+        model = os.environ.get("CLAUDE_MODEL", "claude-sonnet-4-6")
+        msg = client.messages.create(model=model, max_tokens=600,
+                                     messages=[{"role": "user", "content": prompt}])
+        return "".join(b.text for b in msg.content if hasattr(b, "text"))
+    except Exception as e:
+        return f"(rationale unavailable: {type(e).__name__})"
+
+
 class handler(BaseHTTPRequestHandler):
     def do_GET(self):
         qs      = parse_qs(urlparse(self.path).query)
@@ -1140,6 +1418,15 @@ class handler(BaseHTTPRequestHandler):
             self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             self.wfile.write(json.dumps(body).encode())
+            return
+
+        # Trade evaluator — GET form for quick testing:
+        #   ?view=trade&give=Name A,Name B&get=Name C&rationale=0
+        if qs.get("view", [""])[0] == "trade":
+            give = [g for g in (qs.get("give", [""])[0]).split(",") if g.strip()]
+            get_ = [g for g in (qs.get("get", [""])[0]).split(",") if g.strip()]
+            want = qs.get("rationale", ["0"])[0] in ("1", "true")
+            self._send_trade(give, get_, qs.get("team", [None])[0], want)
             return
 
         env_tid = os.environ.get("ESPN_TEAM_ID", "")
@@ -1190,8 +1477,37 @@ class handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def do_POST(self):
+        qs = parse_qs(urlparse(self.path).query)
+        try:
+            length = int(self.headers.get("Content-Length", 0))
+            data = json.loads(self.rfile.read(length) or b"{}")
+        except Exception:
+            data = {}
+        if qs.get("view", [""])[0] == "trade" or data.get("view") == "trade":
+            self._send_trade(data.get("give", []), data.get("get", []),
+                             data.get("withTeamId"), bool(data.get("rationale")))
+            return
+        self._send_json(404, {"error": "Unknown POST endpoint"})
+
+    def _send_json(self, status, body):
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.end_headers()
+        self.wfile.write(json.dumps(body).encode())
+
+    def _send_trade(self, give, get_, team, want_rationale):
+        try:
+            body = build_trade_eval(give or [], get_ or [], team, want_rationale)
+        except Exception as e:
+            import traceback
+            body = {"error": f"{type(e).__name__}: {e}",
+                    "traceback": traceback.format_exc()[-1500:]}
+        self._send_json(200 if "error" not in body else 400, body)
+
     def do_OPTIONS(self):
         self.send_response(200)
         self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Methods", "GET, OPTIONS")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
         self.end_headers()

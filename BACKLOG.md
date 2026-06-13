@@ -166,8 +166,28 @@ rosters** — opposing rosters are downloaded today and discarded.
   NOT a standalone `api/league.py`** — see the Vercel-bundling note in *Infra
   notes* below. Follow-ups deferred: preselect the user's own team in the
   selector (needs an `/api/config` fetch).
-- [ ] **Phase 2 — Trade evaluator** (~1–2 sessions; **prereq: hitters in AI
-  recommendations**). `api/trade.py` `{give, get, withTeamId}` →
+- [~] **Phase 2 — Trade evaluator — v1 shipped (perceived-value arbitrage).**
+  Served as **`/api/hitters?view=trade`** (GET for testing + POST `{give, get,
+  withTeamId, rationale}`), NOT a standalone `api/trade.py` (Vercel-bundling
+  note). Two axes per player: **model ROS** (`seasonBaseRos` = de-lucked rate ×
+  remaining horizon, no 60/40 blend) and **perceived value** (`PVI`,
+  FPTS-equivalent). **PVI = time-varying blend** (`p = season progress`,
+  draft→production migration) of **league draft slot** (via an OLS log-log
+  draft-value curve fit from `mDraftDetail` picks × full-season pace),
+  **in-season production**, **ADP** (best-effort), with a light positional-
+  scarcity tilt. Deterministic verdict (steal / win / lopsided / avoid /
+  marginal) with a **5% acceptance cushion** biasing perceived balance to the
+  counterparty (draft endowment effect); optional Claude pitch (analyze.py
+  pattern). Per-player `valueRatio` (ROS FPTS per perceived point) flags buy/
+  sell. Unit tests in `api/test_trade_engine.py` (8/8). **The FantasySP scrape
+  idea is dead** (Cloudflare-walled — confirmed via `scripts/fsp_probe.py`); our
+  own draft-anchored perceived-value model replaces it and matches the league's
+  points scoring. **v1.1 follow-ups:** FA replacement-level netting; numeric IL
+  haircut (injured players flagged, not yet discounted); starts-cap awareness.
+  **v2:** preseason proj FPTS (FanGraphs CSV → reach/fall anchor); League-page
+  checkbox → "Evaluate trade" drawer (frontend). **Verify in prod:** POST a
+  give/get to `/api/hitters?view=trade` and confirm `draftCurveFit: true`.
+  - *Original spec (remaining items fold into v1.1/v2 above):*
   - **Trade value = de-lucked ROS minus per-position replacement.** The skill
     base is already Savant-de-lucked (xBA/xERA for pitchers, xwOBA for
     hitters); for the ROS horizon, use the **season-skill base WITHOUT the
