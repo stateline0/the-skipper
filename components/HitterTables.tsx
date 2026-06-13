@@ -224,25 +224,53 @@ function fmtReturn(iso?: string): string | null {
 // are red (projection zeroed until the return date); DTD/SUSP are amber (still
 // projecting). Self-guarding: only injury statuses render — anything else
 // (Active, Dropped, undefined) yields nothing. When an est. return date and/or
-// injury detail are known (Phase B), they surface as a hover tooltip, e.g.
-// "Est. return Jun 26 · Right Quadriceps (Strain)".
+// injury detail are known (Phase B), tapping/clicking the pill opens a popover
+// ("Est. return Jun 26 · Right Quadriceps (Strain)") — a tap target works on
+// touch where a hover title does not.
 export function IlPill({ status, estReturn, detail }: {
   status?: string; estReturn?: string; detail?: string
 }) {
+  const [open, setOpen] = useState(false)
   if (!status) return null
   const isIL = status.startsWith('IL')
   if (!isIL && status !== 'DTD' && status !== 'SUSP') return null
   const style = isIL
     ? { background: 'var(--red-light)', color: 'var(--red)' }
     : { background: 'var(--amber-light)', color: 'var(--amber)' }
+  const pillStyle: React.CSSProperties = {
+    display: 'inline-block', fontSize: 9, fontWeight: 700, fontFamily: 'var(--mono)',
+    padding: '1px 5px', borderRadius: 99, letterSpacing: '0.03em',
+    whiteSpace: 'nowrap', ...style,
+  }
   const ret = fmtReturn(estReturn)
-  const tip = [ret ? `Est. return ${ret}` : null, detail].filter(Boolean).join(' · ')
+  // No extra info → a plain, non-interactive pill.
+  if (!ret && !detail) {
+    return <span style={pillStyle}>{status}</span>
+  }
   return (
-    <span title={tip || undefined} style={{
-      display: 'inline-block', fontSize: 9, fontWeight: 700, fontFamily: 'var(--mono)',
-      padding: '1px 5px', borderRadius: 99, letterSpacing: '0.03em',
-      whiteSpace: 'nowrap', cursor: tip ? 'help' : undefined, ...style,
-    }}>{status}</span>
+    <span style={{ position: 'relative', display: 'inline-block' }}>
+      <span
+        onClick={(e) => { e.stopPropagation(); setOpen(o => !o) }}
+        style={{ ...pillStyle, cursor: 'pointer' }}
+      >{status}</span>
+      {open && (
+        <>
+          {/* Tap-anywhere backdrop to dismiss (touch-friendly, no listeners). */}
+          <div onClick={(e) => { e.stopPropagation(); setOpen(false) }}
+               style={{ position: 'fixed', inset: 0, zIndex: 40 }} />
+          <div onClick={(e) => e.stopPropagation()} style={{
+            position: 'absolute', zIndex: 41, top: '100%', left: 0, marginTop: 4,
+            background: 'var(--white)', border: '1px solid var(--border-strong)',
+            borderRadius: 'var(--radius)', boxShadow: 'var(--shadow)', padding: '8px 10px',
+            fontFamily: 'var(--mono)', fontSize: 11, whiteSpace: 'nowrap', textAlign: 'left',
+            color: 'var(--ink-2)',
+          }}>
+            {ret && <div style={{ fontWeight: 700, color: 'var(--ink)' }}>Est. return {ret}</div>}
+            {detail && <div style={{ marginTop: ret ? 2 : 0 }}>{detail}</div>}
+          </div>
+        </>
+      )}
+    </span>
   )
 }
 
