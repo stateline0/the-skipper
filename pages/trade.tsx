@@ -16,7 +16,7 @@ interface TradeSidePlayer {
   draftPick: number | null; valueRatio: number | null
   injured: boolean; injuryStatus: string | null
   breakdown?: {
-    model: { baseRate: number | null; horizon: number | null; recentHeat: number | null; note: string }
+    model: { baseRate: number | null; horizon: number | null; unit?: string; recentHeat: number | null; note: string }
     perceived: { perceived: number; horizon: number; scarcityMult: number; recentHeat: number;
       components: PerceivedComponent[] } | null
   }
@@ -48,7 +48,8 @@ function modelLines(p: TradeSidePlayer): string[] {
   const lines = [`Model value — ${p.modelRos} pts`,
     `Our honest estimate of his value the rest of the season.`]
   if (m?.baseRate != null && m?.horizon != null) {
-    lines.push(`${m.baseRate} projected pts/game × ${m.horizon} games left = ${p.modelRos}`)
+    const unit = m.unit || 'game'
+    lines.push(`${m.baseRate} projected pts/${unit} × ${m.horizon} ${unit}s left = ${p.modelRos}`)
   }
   lines.push(`Based on Statcast "de-lucked" stats, so a hot or cold streak doesn't move it.`)
   return lines

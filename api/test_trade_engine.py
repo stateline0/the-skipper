@@ -15,8 +15,21 @@ sys.path.insert(0, os.path.dirname(__file__))
 
 from hitters import (  # noqa: E402
     _trade_weights, _fit_log_curve, _perceived_value, _perceived_components,
-    _pos_group, _classify_trade, _finder_rank, TRADE_EDGE_MIN,
+    _pos_group, _classify_trade, _finder_rank, _sp_remaining_starts, TRADE_EDGE_MIN,
 )
+
+
+def test_sp_remaining_starts_caps_late_starters():
+    # Healthy mid-season starter: limited by starts-to-full, not the calendar.
+    assert _sp_remaining_starts(gs=14, team_games_remaining=90) == round(90 / 5.1, 1)
+    # Late starter (e.g. returnee, gs=6): 32-6=26 is impossible with 90 games left
+    # → capped to the calendar-feasible ~17.6, NOT 26.
+    capped = _sp_remaining_starts(gs=6, team_games_remaining=90)
+    assert capped < 26 and capped == round(90 / 5.1, 1)
+    # Late season: starts-to-full is the binding limit.
+    assert _sp_remaining_starts(gs=30, team_games_remaining=20) == 2.0
+    # No team data → fall back to starts-to-full.
+    assert _sp_remaining_starts(gs=6, team_games_remaining=None) == 26.0
 
 
 def test_weights_sum_to_one():

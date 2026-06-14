@@ -899,6 +899,7 @@ def scoring_debug(team_id: int) -> dict:
 
 LEAGUE_SEASON_GAMES = 162
 LEAGUE_FULL_SEASON_STARTS = 32   # mirrors StatsTable.tsx FULL_SEASON_STARTS
+GAMES_PER_ROTATION_TURN = 5.1    # team games per starter turn (162 / ~32 starts)
 LEAGUE_PITCHER_SLOTS = {13, 14}  # 14=SP, 13=RP
 LEAGUE_CACHE_TTL = 1800
 
@@ -906,7 +907,7 @@ LEAGUE_CACHE_TTL = 1800
 def _league_cache_key(year: int) -> str:
     # v2: rows now carry trade-engine fields (surfaceRate/horizon/fullHorizon/
     # recentHeat) — bump so stale pre-trade-engine payloads aren't served.
-    return f"cache:league-roster:v3:{year}"
+    return f"cache:league-roster:v4:{year}"
 
 
 def _lg_safe_float(value, default: float = 0.0) -> float:
@@ -982,6 +983,16 @@ def _lg_games_remaining(team_win_data: dict, abbrev: str):
     return max(0, LEAGUE_SEASON_GAMES - int(info.get("games", 0)))
 
 
+def _sp_remaining_starts(gs, team_games_remaining):
+    """Remaining starts for an SP = min(starts to a full slate, calendar-feasible
+    starts). A late starter (low gs) can't physically reach 32, so cap by the
+    team's games left ÷ rotation turn — otherwise ROS is badly over-projected."""
+    to_full = max(0, LEAGUE_FULL_SEASON_STARTS - gs)
+    if team_games_remaining is None:
+        return float(to_full)
+    return round(min(to_full, team_games_remaining / GAMES_PER_ROTATION_TURN), 1)
+
+
 def _lg_team_meta(team: dict, members_by_id: dict) -> dict:
     name = (team.get("name") or
             f"{team.get('location', '')} {team.get('nickname', '')}").strip()
@@ -1033,7 +1044,11 @@ def _lg_build_team(team, cd, hd, scoring, PRO_TEAM_MAP, year_int, week, pick_by_
         # blend — the basis for the trade engine's "model ROS value" axis.
         season_base = (_pd.get(name) or {}).get("seasonBase")
         if 14 in eligible:
-            horizon = max(0, LEAGUE_FULL_SEASON_STARTS - gs)
+            # Remaining starts = min(starts to reach a full slate, calendar-feasible
+            # starts). A late starter (low gs) can't physically reach 32 — cap by the
+            # team's games left ÷ rotation turn so ROS isn't over-projected.
+            tgr = _lg_games_remaining(cd.get("team_win_data", {}), team_abbrev)
+            horizon = _sp_remaining_starts(gs, tgr)
             ros = round(per * horizon, 1)
             produced = per * gs
             full_horizon = LEAGUE_FULL_SEASON_STARTS
@@ -1061,6 +1076,7 @@ def _lg_build_team(team, cd, hd, scoring, PRO_TEAM_MAP, year_int, week, pick_by_
             "fullSeasonPace": full_pace, "recentHeat": round(heat, 3),
             "surfaceRate": round(per, 3), "horizon": round(horizon, 2),
             "fullHorizon": round(full_horizon, 2),
+            "horizonUnit": "start" if 14 in eligible else "appearance",
             "draftPick": pick_by_id.get(player.get("id")),
             "adp": (player.get("ownership") or {}).get("averageDraftPosition"),
             "ownPct": own_by_id.get(player.get("id")),
@@ -1114,6 +1130,7 @@ def _lg_build_team(team, cd, hd, scoring, PRO_TEAM_MAP, year_int, week, pick_by_
             "recentHeat": round(heat, 3),
             "surfaceRate": round(per_game, 3),
             "horizon": (tgr if tgr is not None else 0), "fullHorizon": LEAGUE_SEASON_GAMES,
+            "horizonUnit": "game",
             "draftPick": pick_by_id.get(player.get("id")),
             "adp": (player.get("ownership") or {}).get("averageDraftPosition"),
             "ownPct": own_by_id.get(player.get("id")),
@@ -1438,6 +1455,7 @@ def build_trade_eval(give_players, get_players, with_team_id=None, want_rational
                 "injured": injured, "injuryStatus": r.get("injuryStatus"),
                 "breakdown": {
                     "model": {"baseRate": base_rate, "horizon": round(hz, 1) if hz else None,
+                              "unit": r.get("horizonUnit", "game"),
                               "recentHeat": r.get("recentHeat"),
                               "note": "Savant de-lucked rate × remaining horizon (no recent-form blend)"},
                     "perceived": comp,
