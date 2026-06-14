@@ -42,21 +42,49 @@ const VERDICT_COLOR: Record<string, string> = {
   avoid: 'var(--red)',
 }
 
-function modelTip(p: TradeSidePlayer): string {
+function modelLines(p: TradeSidePlayer): string[] {
   const m = p.breakdown?.model
   const lines = [`Model ${p.modelRos} — de-lucked rest-of-season FPTS`]
   if (m?.baseRate != null && m?.horizon != null) lines.push(`= ${m.baseRate}/game × ${m.horizon} remaining`)
   if (m?.note) lines.push(m.note)
-  return lines.join('\n')
+  return lines
 }
-function perceivedTip(p: TradeSidePlayer): string {
+function perceivedLines(p: TradeSidePlayer): string[] {
   const c = p.breakdown?.perceived
-  if (!c) return `Perceived ${p.perceived}`
+  if (!c) return [`Perceived ${p.perceived}`]
   const lines = [`Perceived ${c.perceived} — how the other manager prices the rest of season`, `horizon ${c.horizon}`]
   c.components.forEach(x => lines.push(`• ${x.label}: rate ${x.rate} × ${(x.weight * 100).toFixed(0)}% → ${x.ros}`))
   if (c.scarcityMult !== 1) lines.push(`positional scarcity ×${c.scarcityMult}`)
   if (c.recentHeat) lines.push(`recent heat ${c.recentHeat > 0 ? '+' : ''}${c.recentHeat} → inflates surface production`)
-  return lines.join('\n')
+  return lines
+}
+
+// A real hover/click tooltip cell (native title= is slow + unreliable in Safari).
+function StatCell({ value, lines }: { value: React.ReactNode; lines: string[] }) {
+  const [open, setOpen] = useState(false)
+  return (
+    <td
+      style={{ textAlign: 'right', position: 'relative', cursor: 'help' }}
+      onMouseEnter={() => setOpen(true)}
+      onMouseLeave={() => setOpen(false)}
+      onClick={() => setOpen(o => !o)}
+    >
+      <span style={{ textDecoration: 'underline dotted var(--ink-3)' }}>{value}</span>
+      {open && lines.length > 0 && (
+        <div style={{
+          position: 'absolute', right: 0, top: '100%', marginTop: 4, zIndex: 50,
+          width: 250, textAlign: 'left', whiteSpace: 'normal',
+          background: 'var(--white)', border: '1px solid var(--border-strong)',
+          borderRadius: 'var(--radius)', boxShadow: 'var(--shadow)', padding: '8px 10px',
+          fontFamily: 'var(--mono)', fontSize: 11, lineHeight: 1.5, color: 'var(--ink)',
+        }}>
+          {lines.map((l, i) => (
+            <div key={i} style={{ color: i === 0 ? 'var(--ink)' : 'var(--ink-3)', fontWeight: i === 0 ? 600 : 400 }}>{l}</div>
+          ))}
+        </div>
+      )}
+    </td>
+  )
 }
 
 const card: React.CSSProperties = {
@@ -327,8 +355,8 @@ function TradeResultView({ trade }: { trade: TradeResult }) {
                 {p.name}{p.injured ? ' 🩹' : ''}
                 <span style={{ color: 'var(--ink-3)' }}> · {p.pos}{p.draftPick ? ` · #${p.draftPick}` : ''}</span>
               </td>
-              <td style={{ textAlign: 'right', cursor: 'help', textDecoration: 'underline dotted var(--ink-3)' }} title={modelTip(p)}>{p.modelRos ?? '—'}</td>
-              <td style={{ textAlign: 'right', cursor: 'help', textDecoration: 'underline dotted var(--ink-3)' }} title={perceivedTip(p)}>{p.perceived ?? '—'}</td>
+              <StatCell value={p.modelRos ?? '—'} lines={modelLines(p)} />
+              <StatCell value={p.perceived ?? '—'} lines={perceivedLines(p)} />
               <td style={{ textAlign: 'right' }}>{p.valueRatio ?? '—'}</td>
             </tr>
           ))}
