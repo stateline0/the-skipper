@@ -170,6 +170,23 @@ def test_weights_include_market_and_sum_to_one():
     assert _trade_weights(1.0)["market"] > _trade_weights(0.0)["market"]  # migrates up
 
 
+def test_zero_season_base_falls_back_to_blended():
+    # Pitcher with no de-lucked season base (seasonBaseRos rounds to 0) but a real
+    # blended projection (rosFpts, what the League view shows) — Model must use the
+    # blend, not collapse to 0, and perceived form must read the live line.
+    curve = _fit_log_curve([(1, 600), (10, 480), (50, 300), (100, 210), (200, 150)])
+    w = _trade_weights(0.44)
+    rep = {"SP": 5.0}
+    floors = {"draft": 250, "own": 250, "adp": None}
+    sasaki = {"pos": "SP", "seasonBaseRos": 0.0, "rosFpts": 93.6, "horizon": 12, "fullHorizon": 32,
+              "surfaceRate": 7.8, "recentHeat": 0.0, "ownershipRank": 50, "adp": None}
+    model_net, _, model_raw, *_ = _net_values(sasaki, curve, w, rep, floors)
+    assert model_raw == 93.6 and model_net > 0, (model_raw, model_net)
+    c = _perceived_components(sasaki, curve, w, 5.0, floors)
+    form = next(x for x in c["components"] if x["label"] == "Recent & season form")
+    assert form["ros"] > 0
+
+
 def test_undrafted_draft_floor_drags_perceived_down():
     curve = _fit_log_curve([(1, 600), (10, 480), (50, 300), (100, 210), (200, 150)])
     w = _trade_weights(0.44)

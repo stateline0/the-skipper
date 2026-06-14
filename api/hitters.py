@@ -1331,7 +1331,7 @@ def _perceived_components(row, curve, weights, rep_rate=0.0, floors=None):
     # surfaceRate is a 60/40 season/recent blend; the de-lucked seasonBase rate is
     # the streak-free season. Damp surfaceRate's tilt away from seasonBase so the
     # season is weighted ~2.5x recent (net recent share ≈ 0.4 × DAMP ≈ 0.28).
-    season_base = (row.get("seasonBaseRos") / horizon) if (row.get("seasonBaseRos") is not None) else None
+    season_base = (row.get("seasonBaseRos") / horizon) if row.get("seasonBaseRos") else None
     if surface is not None and season_base is not None:
         form_rate = season_base + TRADE_RECENT_FORM_DAMP * (surface - season_base)
     else:
@@ -1452,8 +1452,8 @@ def _net_values(r, curve, weights, rep_rates, floors=None):
     rate × horizon; perceived is already over-replacement per component. Returns
     (model_net, perceived_net, model_raw, rep_ros, rep_rate, comp)."""
     model_raw = r.get("seasonBaseRos")
-    if model_raw is None:
-        model_raw = r.get("rosFpts")          # fallback if de-lucked base missing
+    if not model_raw:                     # 0.0 or None → no de-lucked base; use blended ROS
+        model_raw = r.get("rosFpts")      # (matches what the League view shows)
     hz = r.get("horizon")
     rep_rate = rep_rates.get(_pos_group(r))
     rep_ros = round(rep_rate * hz, 1) if (rep_rate is not None and hz) else 0.0
