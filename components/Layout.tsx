@@ -10,6 +10,7 @@ const NAV_ITEMS = [
   { href: '/hitters',          label: 'Hitters',           icon: '🏏' },
   { href: '/free-agents',      label: 'Free Agents',       icon: '🔍' },
   { href: '/league',           label: 'League',            icon: '🏟️' },
+  { href: '/trade',            label: 'Trade Lab',         icon: '🔁' },
   { href: '/accuracy',         label: 'Accuracy',          icon: '📊' },
   { href: '/recommendations',  label: 'Recommendations',   icon: '🤖' },
 ]

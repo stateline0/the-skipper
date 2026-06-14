@@ -3,7 +3,7 @@ import { useState, useEffect, useMemo } from 'react'
 import StatsTable, { PITCHER_COLUMNS, ROS_COLUMN, PitcherColumn } from '../components/StatsTable'
 import { HitterStatsTable, UIHitter } from '../components/HitterTables'
 
-const CACHE_VERSION = 1 // bump when /api/league response shape changes
+const CACHE_VERSION = 2 // bump when /api/league response shape changes
 
 // League pitcher columns: a clean scouting line (no weekly Starts/Own%/schedule
 // columns), reusing the shared configs + the rest-of-season ROS column.
