@@ -145,6 +145,21 @@ def test_weights_include_market_and_sum_to_one():
     assert _trade_weights(1.0)["market"] > _trade_weights(0.0)["market"]  # migrates up
 
 
+def test_undrafted_draft_floor_drags_perceived_down():
+    curve = _fit_log_curve([(1, 600), (10, 480), (50, 300), (100, 210), (200, 150)])
+    w = _trade_weights(0.44)
+    base = {"pos": "SP", "horizon": 18, "fullHorizon": 32, "surfaceRate": 12.0,
+            "recentHeat": 0.3, "adp": None, "ownershipRank": 150, "ownPct": 40}
+    drafted = {**base, "draftPick": 20}
+    undrafted = {**base, "draftFloor": 300}  # no draftPick → uses the floor
+    # Undrafted still gets a Draft pedigree component (not dropped), labeled as such.
+    comp = _perceived_components(undrafted, curve, w)
+    draft_part = next((c for c in comp["components"] if c["label"] == "Draft pedigree"), None)
+    assert draft_part is not None and draft_part["detail"] == "undrafted — waiver add"
+    # And being undrafted drags perceived BELOW a well-drafted version of the player.
+    assert _perceived_value(undrafted, curve, w) < _perceived_value(drafted, curve, w)
+
+
 def test_finder_rank_keeps_steals_and_wins():
     keep, score, cls = _finder_rank(edge=30, perc_give=320, perc_get=295)  # steal
     assert keep and cls["verdict"] == "steal" and score == 35.0

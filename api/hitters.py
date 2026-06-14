@@ -1327,18 +1327,22 @@ def _perceived_components(row, curve, weights):
     surface_adj = surface * (1.0 + TRADE_RECENCY_OVERREACTION * heat) if surface is not None else None
     # Draft / market / ADP curves return a full-season value → divide to a rate.
     # Market = current ownership rank, treated as a "live draft position".
-    draft_rate = (curve(row.get("draftPick")) / full_h) if (curve and row.get("draftPick")) else None
+    # Undrafted players use a draft FLOOR (just past the last pick) so being
+    # undrafted is a low-pedigree drag, not a free pass that inflates production.
+    draft_pick = row.get("draftPick") or row.get("draftFloor")
+    draft_rate = (curve(draft_pick) / full_h) if (curve and draft_pick) else None
     market_rate = (curve(row.get("ownershipRank")) / full_h) if (curve and row.get("ownershipRank")) else None
     adp_rate = (curve(row.get("adp")) / full_h) if (curve and row.get("adp")) else None
     # Human-readable input for each signal so the tooltip explains itself.
     own_rank, own_pct = row.get("ownershipRank"), row.get("ownPct")
     market_detail = (f"#{own_rank} most-owned"
                      + (f", {own_pct}% rostered" if own_pct is not None else "")) if own_rank else None
+    draft_detail = (f"drafted #{row.get('draftPick')}" if row.get("draftPick")
+                    else ("undrafted — waiver add" if draft_pick else None))
     parts, acc, wsum = [], 0.0, 0.0
     for label, detail, val, w in (
             ("Recent & season form", "what he's actually doing", surface_adj, weights["prod"]),
-            ("Draft pedigree", (f"drafted #{row.get('draftPick')}" if row.get("draftPick") else None),
-             draft_rate, weights["draft"]),
+            ("Draft pedigree", draft_detail, draft_rate, weights["draft"]),
             ("Live ownership", market_detail, market_rate, weights.get("market", 0.0)),
             ("Preseason ADP", (f"ADP {row.get('adp')}" if row.get("adp") else None),
              adp_rate, weights["adp"])):
@@ -1370,6 +1374,19 @@ def _assign_ownership_ranks(rows):
                     key=lambda r: -r["ownPct"])
     for i, r in enumerate(ranked, 1):
         r["ownershipRank"] = i
+
+
+def _assign_draft_floor(rows):
+    """Undrafted players get a draftFloor = just past the last actual pick, so the
+    draft-pedigree anchor reads 'worst slot' (a drag) instead of being dropped —
+    which would otherwise renormalize weight onto current production."""
+    drafted = [r.get("draftPick") for r in rows if r.get("draftPick")]
+    if not drafted:
+        return
+    floor = round(max(drafted) * 1.05)
+    for r in rows:
+        if not r.get("draftPick"):
+            r["draftFloor"] = floor
 
 
 def _classify_trade(edge, perc_give, perc_get):
@@ -1419,6 +1436,7 @@ def build_trade_eval(give_players, get_players, with_team_id=None, want_rational
     payload = _league_response()
     idx = _flatten_league(payload)
     _assign_ownership_ranks(list(idx.values()))   # live-market anchor
+    _assign_draft_floor(list(idx.values()))       # undrafted = worst pedigree
     give_rows, give_missing = _resolve_players(give_players, idx)
     get_rows, get_missing = _resolve_players(get_players, idx)
     if give_missing or get_missing:
@@ -1563,8 +1581,9 @@ def build_trade_finder(my_team_id, target_team_id=None, want_rationale=False,
     idx = _flatten_league(payload)
     # Rank the actual payload rows (enrich_team reads them directly) for the
     # live-market anchor; the curve is fit off the flattened copies.
-    _assign_ownership_ranks([pl for t in teams for grp in ("pitchers", "batters")
-                             for pl in t.get(grp, [])])
+    _all_players = [pl for t in teams for grp in ("pitchers", "batters") for pl in t.get(grp, [])]
+    _assign_ownership_ranks(_all_players)
+    _assign_draft_floor(_all_players)
     pts = [(r.get("draftPick"), r.get("fullSeasonPace")) for r in idx.values()
            if r.get("draftPick") and r.get("fullSeasonPace")]
     curve = _fit_log_curve(pts)
