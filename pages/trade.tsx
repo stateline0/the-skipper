@@ -59,21 +59,28 @@ function perceivedLines(p: TradeSidePlayer): string[] {
   return lines
 }
 
-// A real hover/click tooltip cell (native title= is slow + unreliable in Safari).
+// A real hover/click tooltip cell. Desktop: hover (mouse pointer only). Touch:
+// tap to toggle, tap anywhere else to dismiss. Native title= was slow/unreliable.
 function StatCell({ value, lines }: { value: React.ReactNode; lines: string[] }) {
   const [open, setOpen] = useState(false)
+  useEffect(() => {
+    if (!open) return
+    const close = () => setOpen(false)
+    document.addEventListener('click', close)
+    return () => document.removeEventListener('click', close)
+  }, [open])
   return (
     <td
-      style={{ textAlign: 'right', position: 'relative', cursor: 'help' }}
-      onMouseEnter={() => setOpen(true)}
-      onMouseLeave={() => setOpen(false)}
-      onClick={() => setOpen(o => !o)}
+      style={{ textAlign: 'right', position: 'relative', cursor: 'pointer' }}
+      onPointerEnter={e => { if (e.pointerType === 'mouse') setOpen(true) }}
+      onPointerLeave={e => { if (e.pointerType === 'mouse') setOpen(false) }}
+      onClick={e => { e.stopPropagation(); setOpen(o => !o) }}
     >
       <span style={{ textDecoration: 'underline dotted var(--ink-3)' }}>{value}</span>
       {open && lines.length > 0 && (
         <div style={{
           position: 'absolute', right: 0, top: '100%', marginTop: 4, zIndex: 50,
-          width: 250, textAlign: 'left', whiteSpace: 'normal',
+          width: 250, maxWidth: 'calc(100vw - 40px)', textAlign: 'left', whiteSpace: 'normal',
           background: 'var(--white)', border: '1px solid var(--border-strong)',
           borderRadius: 'var(--radius)', boxShadow: 'var(--shadow)', padding: '8px 10px',
           fontFamily: 'var(--mono)', fontSize: 11, lineHeight: 1.5, color: 'var(--ink)',
@@ -94,6 +101,18 @@ const card: React.CSSProperties = {
 }
 const mono12: React.CSSProperties = { fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--ink)' }
 
+// Stack two-column layouts on narrow screens (phones).
+function useIsNarrow(bp = 720) {
+  const [narrow, setNarrow] = useState(false)
+  useEffect(() => {
+    const check = () => setNarrow(window.innerWidth < bp)
+    check()
+    window.addEventListener('resize', check)
+    return () => window.removeEventListener('resize', check)
+  }, [bp])
+  return narrow
+}
+
 export default function TradeLab() {
   const [data, setData] = useState<LeagueData | null>(null)
   const [loading, setLoading] = useState(true)
@@ -109,6 +128,7 @@ export default function TradeLab() {
   const [finderLoading, setFinderLoading] = useState(false)
   const [finderErr, setFinderErr] = useState('')
   const [finderTarget, setFinderTarget] = useState<string>('') // '' = all teams
+  const narrow = useIsNarrow()
 
   useEffect(() => {
     const cacheKey = `league:v${CACHE_VERSION}`
@@ -256,7 +276,7 @@ export default function TradeLab() {
       {teams.length > 0 && (
         <>
           <div style={card}>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: narrow ? '1fr' : '1fr 1fr', gap: 16 }}>
               <div>
                 <div style={{ ...mono12, color: 'var(--ink-3)', marginBottom: 6 }}>You give →</div>
                 {pickerSelect('give')}
@@ -334,6 +354,7 @@ export default function TradeLab() {
 function TradeResultView({ trade }: { trade: TradeResult }) {
   const s = trade.summary
   const color = VERDICT_COLOR[s.verdict] || 'var(--ink)'
+  const narrow = useIsNarrow()
   const mono = { fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--ink)' } as React.CSSProperties
 
   const sideTable = (label: string, rows: TradeSidePlayer[]) => (
@@ -375,7 +396,7 @@ function TradeResultView({ trade }: { trade: TradeResult }) {
         {s.sweetened ? ' · sweetened' : ''}
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginTop: 14 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: narrow ? '1fr' : '1fr 1fr', gap: narrow ? 18 : 16, marginTop: 14 }}>
         {sideTable('You give →', trade.give)}
         {sideTable('You get ←', trade.get)}
       </div>
