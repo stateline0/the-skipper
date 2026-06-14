@@ -13,12 +13,15 @@ interface PerceivedComponent { label: string; detail?: string | null; rate: numb
 interface TradeSidePlayer {
   name: string; owner: string; team: string; pos: string
   modelRos: number | null; perceived: number | null; blendedRos: number | null
+  modelRaw?: number | null; perceivedRaw?: number | null; replacement?: number
   draftPick: number | null; valueRatio: number | null
   injured: boolean; injuryStatus: string | null
   breakdown?: {
-    model: { baseRate: number | null; horizon: number | null; unit?: string; recentHeat: number | null; note: string }
+    model: { baseRate: number | null; horizon: number | null; unit?: string; recentHeat: number | null;
+      raw?: number | null; replacement?: number; net?: number | null; note: string }
     perceived: { perceived: number; horizon: number; scarcityMult: number; recentHeat: number;
       components: PerceivedComponent[] } | null
+    replacement?: number; perceivedRaw?: number | null; perceivedNet?: number | null
   }
 }
 interface TradeResult {
@@ -43,22 +46,25 @@ const VERDICT_COLOR: Record<string, string> = {
 }
 
 // Plain-language breakdowns: each line names the input and what it contributes.
+// All values are OVER REPLACEMENT (what a freely-available player at the spot is worth).
 function modelLines(p: TradeSidePlayer): string[] {
   const m = p.breakdown?.model
-  const lines = [`Model value — ${p.modelRos} pts`,
-    `Our honest estimate of his value the rest of the season.`]
+  const lines = [`Model value — ${p.modelRos} pts over replacement`,
+    `What he's truly worth the rest of the season, beyond a freely-available ${p.pos || 'player'}.`]
   if (m?.baseRate != null && m?.horizon != null) {
     const unit = m.unit || 'game'
-    lines.push(`${m.baseRate} projected pts/${unit} × ${m.horizon} ${unit}s left = ${p.modelRos}`)
+    lines.push(`${m.baseRate} projected pts/${unit} × ${m.horizon} ${unit}s left = ${m.raw} raw`)
   }
-  lines.push(`Based on Statcast "de-lucked" stats, so a hot or cold streak doesn't move it.`)
+  if (m?.replacement != null) lines.push(`− replacement level (${m.replacement}) = ${p.modelRos}`)
+  lines.push(`Statcast "de-lucked" — a hot or cold streak doesn't move it.`)
   return lines
 }
 function perceivedLines(p: TradeSidePlayer): string[] {
   const c = p.breakdown?.perceived
+  const b = p.breakdown
   if (!c) return [`Perceived value — ${p.perceived} pts`]
-  const lines = [`Perceived value — ${c.perceived} pts`,
-    `Roughly what the other manager thinks he's worth — a blend of signals, each with a share of the call:`]
+  const lines = [`Perceived value — ${p.perceived} pts over replacement`,
+    `What the other manager likely values him at — a blend of signals, each with a share:`]
   c.components.forEach(x => {
     const det = x.detail ? ` (${x.detail})` : ''
     lines.push(`${x.label}${det} — ${Math.round(x.weight * 100)}% → ${Math.round(x.ros)} pts`)
@@ -69,6 +75,9 @@ function perceivedLines(p: TradeSidePlayer): string[] {
   }
   if (c.recentHeat) {
     lines.push(`He's running ${c.recentHeat > 0 ? 'hot' : 'cold'} lately (${c.recentHeat > 0 ? '+' : ''}${Math.round(c.recentHeat * 100)}%), which ${c.recentHeat > 0 ? 'inflates' : 'deflates'} the form signal.`)
+  }
+  if (b?.perceivedRaw != null && b?.replacement != null) {
+    lines.push(`subtotal ${Math.round(b.perceivedRaw)} − replacement ${b.replacement} = ${p.perceived}`)
   }
   return lines
 }

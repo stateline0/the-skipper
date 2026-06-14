@@ -1250,6 +1250,7 @@ TRADE_EDGE_MIN = 8.0               # ROS FPTS edge below which a deal isn't wort
 TRADE_FAIR_BAND = 0.08             # perceived imbalance within 8% reads as "fair"
 TRADE_RECENCY_OVERREACTION = 0.5   # managers extrapolate hot/cold streaks past their weight
 TRADE_SANITY_EDGE = 60.0           # ROS edge above which a "fair" deal is flagged suspect
+TRADE_REPLACEMENT_PCTILE = 0.25    # per-position replacement = this percentile of rostered rates
 
 # Light positional-scarcity tilt on perceived value (deep pools < 1, scarce > 1).
 TRADE_SCARCITY_MULT = {
@@ -1389,6 +1390,49 @@ def _assign_draft_floor(rows):
             r["draftFloor"] = floor
 
 
+def _percentile(values, q):
+    s = sorted(values)
+    if not s:
+        return None
+    if len(s) == 1:
+        return s[0]
+    idx = q * (len(s) - 1)
+    lo = int(idx)
+    frac = idx - lo
+    return s[lo] + frac * (s[lo + 1] - s[lo]) if lo + 1 < len(s) else s[lo]
+
+
+def _replacement_rates(rows, pctile=TRADE_REPLACEMENT_PCTILE):
+    """Per-position replacement = the `pctile` of rostered players' de-lucked
+    per-unit rates (seasonBaseRos ÷ horizon). A freely-available player at that
+    position is worth about this much; netting it out makes value 'over
+    replacement' so elite players tower over streamers (and positional scarcity
+    falls out — a scarce position has a lower replacement bar)."""
+    groups = {}
+    for r in rows:
+        sb, hz = r.get("seasonBaseRos"), r.get("horizon")
+        if sb is None or not hz:
+            continue
+        groups.setdefault(_pos_group(r), []).append(sb / hz)
+    return {g: _percentile(rates, pctile) for g, rates in groups.items() if rates}
+
+
+def _net_values(r, curve, weights, rep_rates):
+    """Value over replacement for a player on both axes. Returns
+    (model_net, perceived_net, model_raw, perceived_raw, rep_ros, rep_rate, comp)."""
+    model_raw = r.get("seasonBaseRos")
+    if model_raw is None:
+        model_raw = r.get("rosFpts")          # fallback if de-lucked base missing
+    comp = _perceived_components(r, curve, weights)
+    pv_raw = comp["perceived"] if comp else None
+    hz = r.get("horizon")
+    rep_rate = rep_rates.get(_pos_group(r))
+    rep_ros = round(rep_rate * hz, 1) if (rep_rate is not None and hz) else 0.0
+    model_net = round(max(0.0, model_raw - rep_ros), 1) if model_raw is not None else None
+    pv_net = round(max(0.0, pv_raw - rep_ros), 1) if pv_raw is not None else None
+    return model_net, pv_net, model_raw, pv_raw, rep_ros, rep_rate, comp
+
+
 def _classify_trade(edge, perc_give, perc_get):
     """Deterministic verdict. `give` is what we send the counterparty, so THEY
     perceive a win when perc_give ≥ perc_get. The cushion sweetens that for them."""
@@ -1450,33 +1494,34 @@ def build_trade_eval(give_players, get_players, with_team_id=None, want_rational
     pts = [(r.get("draftPick"), r.get("fullSeasonPace")) for r in idx.values()
            if r.get("draftPick") and r.get("fullSeasonPace")]
     curve = _fit_log_curve(pts)
+    rep_rates = _replacement_rates(list(idx.values()))   # per-position replacement
     p = _trade_season_progress()
     weights = _trade_weights(p)
 
     def enrich(r):
-        model = r.get("seasonBaseRos")
-        if model is None:
-            model = r.get("rosFpts")          # fallback if de-lucked base missing
-        comp = _perceived_components(r, curve, weights)
-        pv = comp["perceived"] if comp else None
+        model_net, pv_net, model_raw, pv_raw, rep_ros, rep_rate, comp = _net_values(r, curve, weights, rep_rates)
         injured = (r.get("injuryStatus") or "").upper() not in ("", "ACTIVE")
-        # ROS FPTS earned per unit of perceived value — scale-robust arbitrage
-        # signal. High = undervalued (acquire); low = overvalued (move).
-        ratio = round(model / pv, 3) if (model is not None and pv) else None
+        # Value-over-replacement ROS per perceived point — the buy/sell signal.
+        ratio = round(model_net / pv_net, 3) if (model_net and pv_net) else None
         hz = r.get("horizon")
-        base_rate = round(model / hz, 2) if (model is not None and hz) else None
+        base_rate = round(model_raw / hz, 2) if (model_raw is not None and hz) else None
+        unit = r.get("horizonUnit", "game")
         return {"name": r.get("name"), "owner": r.get("owner"), "team": r.get("team"),
                 "pos": r.get("pos") or r.get("posEligible"),
-                "modelRos": round(model, 1) if model is not None else None,
-                "perceived": pv, "blendedRos": r.get("rosFpts"),
-                "draftPick": r.get("draftPick"), "valueRatio": ratio,
-                "injured": injured, "injuryStatus": r.get("injuryStatus"),
+                "modelRos": model_net, "perceived": pv_net,
+                "modelRaw": round(model_raw, 1) if model_raw is not None else None,
+                "perceivedRaw": pv_raw, "replacement": rep_ros,
+                "replacementRate": round(rep_rate, 2) if rep_rate is not None else None,
+                "blendedRos": r.get("rosFpts"), "draftPick": r.get("draftPick"),
+                "valueRatio": ratio, "injured": injured, "injuryStatus": r.get("injuryStatus"),
                 "breakdown": {
                     "model": {"baseRate": base_rate, "horizon": round(hz, 1) if hz else None,
-                              "unit": r.get("horizonUnit", "game"),
-                              "recentHeat": r.get("recentHeat"),
+                              "unit": unit, "recentHeat": r.get("recentHeat"),
+                              "raw": round(model_raw, 1) if model_raw is not None else None,
+                              "replacement": rep_ros, "net": model_net,
                               "note": "Savant de-lucked rate × remaining horizon (no recent-form blend)"},
                     "perceived": comp,
+                    "replacement": rep_ros, "perceivedRaw": pv_raw, "perceivedNet": pv_net,
                 }}
 
     give_e = [enrich(r) for r in give_rows]
@@ -1496,7 +1541,7 @@ def build_trade_eval(give_players, get_players, with_team_id=None, want_rational
         "marginal": f"Marginal — only {edge:+} ROS FPTS; not worth the roster churn.",
     }[cls["verdict"]]
 
-    caveats = ["Replacement-level netting is deferred to v1.1."]
+    caveats = ["Values are over replacement level (a freely-available player at each position)."]
     if any(x["injured"] for x in give_e + get_e):
         caveats.append("Injured players are flagged but not yet numerically discounted (v1.1).")
     if not any(r.get("adp") for r in idx.values()):
@@ -1587,6 +1632,7 @@ def build_trade_finder(my_team_id, target_team_id=None, want_rationale=False,
     pts = [(r.get("draftPick"), r.get("fullSeasonPace")) for r in idx.values()
            if r.get("draftPick") and r.get("fullSeasonPace")]
     curve = _fit_log_curve(pts)
+    rep_rates = _replacement_rates(_all_players)   # per-position replacement
     p = _trade_season_progress()
     weights = _trade_weights(p)
 
@@ -1594,14 +1640,11 @@ def build_trade_finder(my_team_id, target_team_id=None, want_rationale=False,
         out = []
         for grp in ("pitchers", "batters"):
             for pl in t.get(grp, []):
-                model = pl.get("seasonBaseRos")
-                if model is None:
-                    model = pl.get("rosFpts")
-                pv = _perceived_value(pl, curve, weights)
-                if model is None or pv is None:
+                model_net, pv_net, *_ = _net_values(pl, curve, weights, rep_rates)
+                if model_net is None or pv_net is None:
                     continue
                 out.append({"name": pl.get("name"), "pos": pl.get("pos") or pl.get("posEligible"),
-                            "model": round(model, 1), "perceived": pv,
+                            "model": model_net, "perceived": pv_net,
                             "injured": (pl.get("injuryStatus") or "").upper() not in ("", "ACTIVE")})
         out.sort(key=lambda x: -x["model"])
         return out[:TRADE_FINDER_POOL_CAP]

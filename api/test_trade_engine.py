@@ -15,8 +15,29 @@ sys.path.insert(0, os.path.dirname(__file__))
 
 from hitters import (  # noqa: E402
     _trade_weights, _fit_log_curve, _perceived_value, _perceived_components,
-    _pos_group, _classify_trade, _finder_rank, _sp_remaining_starts, TRADE_EDGE_MIN,
+    _pos_group, _classify_trade, _finder_rank, _sp_remaining_starts,
+    _percentile, _replacement_rates, _net_values, TRADE_EDGE_MIN,
 )
+
+
+def test_percentile_interpolates():
+    assert _percentile([10, 20, 30, 40], 0.25) == 17.5
+    assert _percentile([5], 0.25) == 5
+    assert _percentile([], 0.5) is None
+
+
+def test_replacement_netting_widens_elite_vs_streamer():
+    curve = _fit_log_curve([(1, 600), (10, 480), (50, 300), (100, 210), (200, 150)])
+    w = _trade_weights(0.44)
+    pool = [{"pos": "OF", "seasonBaseRos": r * 100, "horizon": 100, "fullHorizon": 162,
+             "surfaceRate": r, "draftPick": dp, "recentHeat": 0}
+            for r, dp in [(4.0, 5), (2.0, 80), (1.5, 150), (1.0, 250)]]
+    rep = _replacement_rates(pool, pctile=0.25)
+    assert "OF" in rep
+    elite_net, _, elite_raw, *_ = _net_values(pool[0], curve, w, rep)
+    streamer_net, _, streamer_raw, *_ = _net_values(pool[2], curve, w, rep)
+    # Over replacement, the elite player towers far more than raw FPTS suggests.
+    assert (elite_raw / streamer_raw) < (elite_net / streamer_net)
 
 
 def test_sp_remaining_starts_caps_late_starters():
