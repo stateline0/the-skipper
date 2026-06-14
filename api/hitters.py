@@ -1314,26 +1314,36 @@ def _pos_group(row):
     return "P" if "P" in pos else (pos.split("/")[0] if pos else "")
 
 
-def _perceived_components(row, curve, weights):
+def _perceived_components(row, curve, weights, rep_rate=0.0, floors=None):
     """Perceived rest-of-season value (FPTS) with its factor breakdown — same
     horizon/scale as model ROS, so the fairness ratio is apples-to-apples with
-    the edge. Blends, as RATES: surface production (what they see, incl. recent-
-    form overreaction), draft-slot pedigree, ADP; renorms over present
-    components; × scarcity; × horizon. Returns None if there's nothing to value."""
+    the edge. Every signal is OVER REPLACEMENT (production above the position's
+    replacement rate; draft/ownership/ADP slots over the waiver-line slot in
+    `floors`); renorms over present components; × scarcity; × horizon. Returns
+    None if there's nothing to value."""
     horizon, full_h = row.get("horizon"), row.get("fullHorizon")
     if not horizon or not full_h:
         return None
+    floors = floors or {}
     heat = row.get("recentHeat") or 0.0
     surface = row.get("surfaceRate")
     surface_adj = surface * (1.0 + TRADE_RECENCY_OVERREACTION * heat) if surface is not None else None
-    # Draft / market / ADP curves return a full-season value → divide to a rate.
+    # Every signal is measured OVER its replacement level — the waiver line — so
+    # an elite slot towers and a freely-available one nets to ~0:
+    #   • production  → rate above the position's replacement rate
+    #   • draft/own/ADP → curve value of this slot minus the replacement slot's
     # Market = current ownership rank, treated as a "live draft position".
-    # Undrafted players use a draft FLOOR (just past the last pick) so being
-    # undrafted is a low-pedigree drag, not a free pass that inflates production.
+    prod_rate = max(0.0, surface_adj - (rep_rate or 0.0)) if surface_adj is not None else None
+
+    def _anchor(slot, floor_slot):
+        if not curve or not slot or not floor_slot:
+            return None
+        return max(0.0, curve(slot) - curve(floor_slot)) / full_h
+
     draft_pick = row.get("draftPick") or row.get("draftFloor")
-    draft_rate = (curve(draft_pick) / full_h) if (curve and draft_pick) else None
-    market_rate = (curve(row.get("ownershipRank")) / full_h) if (curve and row.get("ownershipRank")) else None
-    adp_rate = (curve(row.get("adp")) / full_h) if (curve and row.get("adp")) else None
+    draft_rate = _anchor(draft_pick, floors.get("draft"))
+    market_rate = _anchor(row.get("ownershipRank"), floors.get("own"))
+    adp_rate = _anchor(row.get("adp"), floors.get("adp"))
     # Human-readable input for each signal so the tooltip explains itself.
     own_rank, own_pct = row.get("ownershipRank"), row.get("ownPct")
     market_detail = (f"#{own_rank} most-owned"
@@ -1342,7 +1352,7 @@ def _perceived_components(row, curve, weights):
                     else ("undrafted — waiver add" if draft_pick else None))
     parts, acc, wsum = [], 0.0, 0.0
     for label, detail, val, w in (
-            ("Recent & season form", "what he's actually doing", surface_adj, weights["prod"]),
+            ("Recent & season form", "production over replacement", prod_rate, weights["prod"]),
             ("Draft pedigree", draft_detail, draft_rate, weights["draft"]),
             ("Live ownership", market_detail, market_rate, weights.get("market", 0.0)),
             ("Preseason ADP", (f"ADP {row.get('adp')}" if row.get("adp") else None),
@@ -1362,8 +1372,8 @@ def _perceived_components(row, curve, weights):
             "scarcityMult": mult, "recentHeat": round(heat, 3), "components": parts}
 
 
-def _perceived_value(row, curve, weights):
-    b = _perceived_components(row, curve, weights)
+def _perceived_value(row, curve, weights, rep_rate=0.0, floors=None):
+    b = _perceived_components(row, curve, weights, rep_rate, floors)
     return b["perceived"] if b else None
 
 
@@ -1417,20 +1427,32 @@ def _replacement_rates(rows, pctile=TRADE_REPLACEMENT_PCTILE):
     return {g: _percentile(rates, pctile) for g, rates in groups.items() if rates}
 
 
-def _net_values(r, curve, weights, rep_rates):
-    """Value over replacement for a player on both axes. Returns
-    (model_net, perceived_net, model_raw, perceived_raw, rep_ros, rep_rate, comp)."""
+def _anchor_floors(rows):
+    """Replacement 'slot' for each curve anchor — the waiver line. Each draft /
+    ownership / ADP anchor is scored OVER its floor, so an elite slot towers and
+    a freely-available one nets to ~0. Call after _assign_ownership_ranks."""
+    drafted = [r.get("draftPick") for r in rows if r.get("draftPick")]
+    ranks = [r.get("ownershipRank") for r in rows if r.get("ownershipRank")]
+    adps = [r.get("adp") for r in rows if r.get("adp")]
+    return {"draft": round(max(drafted) * 1.05) if drafted else None,
+            "own": max(ranks) if ranks else None,
+            "adp": round(max(adps) * 1.05) if adps else None}
+
+
+def _net_values(r, curve, weights, rep_rates, floors=None):
+    """Value over replacement on both axes. Model nets the position replacement
+    rate × horizon; perceived is already over-replacement per component. Returns
+    (model_net, perceived_net, model_raw, rep_ros, rep_rate, comp)."""
     model_raw = r.get("seasonBaseRos")
     if model_raw is None:
         model_raw = r.get("rosFpts")          # fallback if de-lucked base missing
-    comp = _perceived_components(r, curve, weights)
-    pv_raw = comp["perceived"] if comp else None
     hz = r.get("horizon")
     rep_rate = rep_rates.get(_pos_group(r))
     rep_ros = round(rep_rate * hz, 1) if (rep_rate is not None and hz) else 0.0
+    comp = _perceived_components(r, curve, weights, rep_rate or 0.0, floors)
+    pv_net = comp["perceived"] if comp else None
     model_net = round(max(0.0, model_raw - rep_ros), 1) if model_raw is not None else None
-    pv_net = round(max(0.0, pv_raw - rep_ros), 1) if pv_raw is not None else None
-    return model_net, pv_net, model_raw, pv_raw, rep_ros, rep_rate, comp
+    return model_net, pv_net, model_raw, rep_ros, rep_rate, comp
 
 
 def _classify_trade(edge, perc_give, perc_get):
@@ -1495,11 +1517,12 @@ def build_trade_eval(give_players, get_players, with_team_id=None, want_rational
            if r.get("draftPick") and r.get("fullSeasonPace")]
     curve = _fit_log_curve(pts)
     rep_rates = _replacement_rates(list(idx.values()))   # per-position replacement
+    floors = _anchor_floors(list(idx.values()))          # waiver-line slot per anchor
     p = _trade_season_progress()
     weights = _trade_weights(p)
 
     def enrich(r):
-        model_net, pv_net, model_raw, pv_raw, rep_ros, rep_rate, comp = _net_values(r, curve, weights, rep_rates)
+        model_net, pv_net, model_raw, rep_ros, rep_rate, comp = _net_values(r, curve, weights, rep_rates, floors)
         injured = (r.get("injuryStatus") or "").upper() not in ("", "ACTIVE")
         # Value-over-replacement ROS per perceived point — the buy/sell signal.
         ratio = round(model_net / pv_net, 3) if (model_net and pv_net) else None
@@ -1510,7 +1533,7 @@ def build_trade_eval(give_players, get_players, with_team_id=None, want_rational
                 "pos": r.get("pos") or r.get("posEligible"),
                 "modelRos": model_net, "perceived": pv_net,
                 "modelRaw": round(model_raw, 1) if model_raw is not None else None,
-                "perceivedRaw": pv_raw, "replacement": rep_ros,
+                "replacement": rep_ros,
                 "replacementRate": round(rep_rate, 2) if rep_rate is not None else None,
                 "blendedRos": r.get("rosFpts"), "draftPick": r.get("draftPick"),
                 "valueRatio": ratio, "injured": injured, "injuryStatus": r.get("injuryStatus"),
@@ -1521,7 +1544,6 @@ def build_trade_eval(give_players, get_players, with_team_id=None, want_rational
                               "replacement": rep_ros, "net": model_net,
                               "note": "Savant de-lucked rate × remaining horizon (no recent-form blend)"},
                     "perceived": comp,
-                    "replacement": rep_ros, "perceivedRaw": pv_raw, "perceivedNet": pv_net,
                 }}
 
     give_e = [enrich(r) for r in give_rows]
@@ -1633,6 +1655,7 @@ def build_trade_finder(my_team_id, target_team_id=None, want_rationale=False,
            if r.get("draftPick") and r.get("fullSeasonPace")]
     curve = _fit_log_curve(pts)
     rep_rates = _replacement_rates(_all_players)   # per-position replacement
+    floors = _anchor_floors(_all_players)          # waiver-line slot per anchor
     p = _trade_season_progress()
     weights = _trade_weights(p)
 
@@ -1640,7 +1663,7 @@ def build_trade_finder(my_team_id, target_team_id=None, want_rationale=False,
         out = []
         for grp in ("pitchers", "batters"):
             for pl in t.get(grp, []):
-                model_net, pv_net, *_ = _net_values(pl, curve, weights, rep_rates)
+                model_net, pv_net, *_ = _net_values(pl, curve, weights, rep_rates, floors)
                 if model_net is None or pv_net is None:
                     continue
                 out.append({"name": pl.get("name"), "pos": pl.get("pos") or pl.get("posEligible"),

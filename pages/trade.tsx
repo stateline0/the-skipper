@@ -13,7 +13,7 @@ interface PerceivedComponent { label: string; detail?: string | null; rate: numb
 interface TradeSidePlayer {
   name: string; owner: string; team: string; pos: string
   modelRos: number | null; perceived: number | null; blendedRos: number | null
-  modelRaw?: number | null; perceivedRaw?: number | null; replacement?: number
+  modelRaw?: number | null; replacement?: number
   draftPick: number | null; valueRatio: number | null
   injured: boolean; injuryStatus: string | null
   breakdown?: {
@@ -21,7 +21,6 @@ interface TradeSidePlayer {
       raw?: number | null; replacement?: number; net?: number | null; note: string }
     perceived: { perceived: number; horizon: number; scarcityMult: number; recentHeat: number;
       components: PerceivedComponent[] } | null
-    replacement?: number; perceivedRaw?: number | null; perceivedNet?: number | null
   }
 }
 interface TradeResult {
@@ -61,10 +60,9 @@ function modelLines(p: TradeSidePlayer): string[] {
 }
 function perceivedLines(p: TradeSidePlayer): string[] {
   const c = p.breakdown?.perceived
-  const b = p.breakdown
   if (!c) return [`Perceived value — ${p.perceived} pts`]
   const lines = [`Perceived value — ${p.perceived} pts over replacement`,
-    `What the other manager likely values him at — a blend of signals, each with a share:`]
+    `What the other manager likely values him at, beyond a waiver pickup — a blend of signals, each over its replacement slot:`]
   c.components.forEach(x => {
     const det = x.detail ? ` (${x.detail})` : ''
     lines.push(`${x.label}${det} — ${Math.round(x.weight * 100)}% → ${Math.round(x.ros)} pts`)
@@ -75,9 +73,6 @@ function perceivedLines(p: TradeSidePlayer): string[] {
   }
   if (c.recentHeat) {
     lines.push(`He's running ${c.recentHeat > 0 ? 'hot' : 'cold'} lately (${c.recentHeat > 0 ? '+' : ''}${Math.round(c.recentHeat * 100)}%), which ${c.recentHeat > 0 ? 'inflates' : 'deflates'} the form signal.`)
-  }
-  if (b?.perceivedRaw != null && b?.replacement != null) {
-    lines.push(`subtotal ${Math.round(b.perceivedRaw)} − replacement ${b.replacement} = ${p.perceived}`)
   }
   return lines
 }

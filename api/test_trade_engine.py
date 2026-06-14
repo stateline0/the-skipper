@@ -81,10 +81,10 @@ def test_perceived_blend_draft_anchor_props_up_cold_player():
     w = _trade_weights(0.5)
     # Early-pick player slumping: low surface rate but elite draft pedigree (#8).
     # Perceived ROS should sit above the pure-surface ROS (surfaceRate × horizon).
-    cold_early = {"pos": "OF", "surfaceRate": 1.5, "horizon": 80, "fullHorizon": 162,
+    cold_early = {"pos": "OF", "surfaceRate": 1.0, "horizon": 80, "fullHorizon": 162,
                   "draftPick": 8, "adp": None}
-    pv = _perceived_value(cold_early, curve, w)
-    assert pv is not None and pv > 1.5 * 80, pv
+    pv = _perceived_value(cold_early, curve, w, 0.0, {"draft": 250})
+    assert pv is not None and pv > 1.0 * 80, pv
 
 
 def test_perceived_handles_missing_components():
@@ -140,7 +140,7 @@ def test_perceived_components_breakdown():
     w = _trade_weights(0.5)
     row = {"pos": "SP", "horizon": 18, "fullHorizon": 32, "surfaceRate": 12.0,
            "recentHeat": 0.2, "draftPick": 10, "adp": None}
-    b = _perceived_components(row, curve, w)
+    b = _perceived_components(row, curve, w, 0.0, {"draft": 250})
     assert b and b["perceived"] > 0
     labels = [c["label"] for c in b["components"]]
     assert "Recent & season form" in labels and "Draft pedigree" in labels
@@ -156,7 +156,8 @@ def test_market_anchor_lifts_hyped_low_draft_player():
     hyped = {"pos": "SP", "horizon": 18, "fullHorizon": 32, "surfaceRate": 10.0,
              "recentHeat": 0.0, "draftPick": 210, "adp": None, "ownershipRank": 5}
     no_market = {**hyped, "ownershipRank": None}
-    assert _perceived_value(hyped, curve, w) > _perceived_value(no_market, curve, w)
+    floors = {"draft": 250, "own": 250, "adp": None}
+    assert _perceived_value(hyped, curve, w, 0.0, floors) > _perceived_value(no_market, curve, w, 0.0, floors)
 
 
 def test_weights_include_market_and_sum_to_one():
@@ -173,12 +174,15 @@ def test_undrafted_draft_floor_drags_perceived_down():
             "recentHeat": 0.3, "adp": None, "ownershipRank": 150, "ownPct": 40}
     drafted = {**base, "draftPick": 20}
     undrafted = {**base, "draftFloor": 300}  # no draftPick → uses the floor
-    # Undrafted still gets a Draft pedigree component (not dropped), labeled as such.
-    comp = _perceived_components(undrafted, curve, w)
+    floors = {"draft": 300, "own": 300, "adp": None}
+    # Undrafted still gets a Draft pedigree component (not dropped), labeled as such,
+    # but scored at the floor it nets to ~0.
+    comp = _perceived_components(undrafted, curve, w, 0.0, floors)
     draft_part = next((c for c in comp["components"] if c["label"] == "Draft pedigree"), None)
     assert draft_part is not None and draft_part["detail"] == "undrafted — waiver add"
+    assert draft_part["ros"] == 0.0
     # And being undrafted drags perceived BELOW a well-drafted version of the player.
-    assert _perceived_value(undrafted, curve, w) < _perceived_value(drafted, curve, w)
+    assert _perceived_value(undrafted, curve, w, 0.0, floors) < _perceived_value(drafted, curve, w, 0.0, floors)
 
 
 def test_finder_rank_keeps_steals_and_wins():
