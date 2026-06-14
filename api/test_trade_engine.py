@@ -98,16 +98,19 @@ def test_perceived_handles_missing_components():
     assert _perceived_value(no_horizon, None, w) is None
 
 
-def test_perceived_recency_overreaction():
+def test_perceived_form_leans_on_season():
     w = _trade_weights(0.5)
-    base = {"pos": "OF", "surfaceRate": 3.0, "horizon": 80, "fullHorizon": 162,
-            "draftPick": None, "adp": None}
-    hot = {**base, "recentHeat": 0.3}
-    cold = {**base, "recentHeat": -0.3}
-    pv_hot = _perceived_value(hot, None, w)
-    pv_base = _perceived_value(base, None, w)
-    pv_cold = _perceived_value(cold, None, w)
+    # Same de-lucked season talent (3.0/game); hot has a higher surface line, cold
+    # lower. Perceived form moves with the streak but is damped toward the season.
+    def row(surface):
+        return {"pos": "OF", "surfaceRate": surface, "seasonBaseRos": 3.0 * 80,
+                "horizon": 80, "fullHorizon": 162, "draftPick": None, "adp": None}
+    pv_hot = _perceived_value(row(3.6), None, w)
+    pv_base = _perceived_value(row(3.0), None, w)
+    pv_cold = _perceived_value(row(2.4), None, w)
     assert pv_hot > pv_base > pv_cold, (pv_hot, pv_base, pv_cold)
+    # Damped: a +0.6/game hot streak moves perceived form less than 0.6 × horizon.
+    assert (pv_hot - pv_base) < 0.6 * 80
 
 
 def test_pos_group():

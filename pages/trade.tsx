@@ -72,7 +72,7 @@ function perceivedLines(p: TradeSidePlayer): string[] {
     lines.push(`× ${c.scarcityMult} (${dir})`)
   }
   if (c.recentHeat) {
-    lines.push(`He's running ${c.recentHeat > 0 ? 'hot' : 'cold'} lately (${c.recentHeat > 0 ? '+' : ''}${Math.round(c.recentHeat * 100)}%), which ${c.recentHeat > 0 ? 'inflates' : 'deflates'} the form signal.`)
+    lines.push(`Running ${c.recentHeat > 0 ? 'hot' : 'cold'} lately (${c.recentHeat > 0 ? '+' : ''}${Math.round(c.recentHeat * 100)}%), but the form signal is weighted ~2.5× toward the full-2026 line, so it only nudges it ${c.recentHeat > 0 ? 'up' : 'down'}.`)
   }
   return lines
 }

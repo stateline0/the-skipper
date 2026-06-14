@@ -1248,7 +1248,7 @@ TRADE_SEASON_DAYS = 183            # ~opening day → late September
 TRADE_ACCEPT_CUSHION = 0.05        # bias proposals 5% perceived-favorable to them
 TRADE_EDGE_MIN = 8.0               # ROS FPTS edge below which a deal isn't worth it
 TRADE_FAIR_BAND = 0.08             # perceived imbalance within 8% reads as "fair"
-TRADE_RECENCY_OVERREACTION = 0.5   # managers extrapolate hot/cold streaks past their weight
+TRADE_RECENT_FORM_DAMP = 0.7       # damp surfaceRate's recent tilt → season ~2.5x recent in form
 TRADE_SANITY_EDGE = 60.0           # ROS edge above which a "fair" deal is flagged suspect
 TRADE_REPLACEMENT_PCTILE = 0.25    # per-position replacement = this percentile of rostered rates
 
@@ -1327,13 +1327,21 @@ def _perceived_components(row, curve, weights, rep_rate=0.0, floors=None):
     floors = floors or {}
     heat = row.get("recentHeat") or 0.0
     surface = row.get("surfaceRate")
-    surface_adj = surface * (1.0 + TRADE_RECENCY_OVERREACTION * heat) if surface is not None else None
+    # Perceived FORM leans on the full-2026 line, not the hot/cold streak.
+    # surfaceRate is a 60/40 season/recent blend; the de-lucked seasonBase rate is
+    # the streak-free season. Damp surfaceRate's tilt away from seasonBase so the
+    # season is weighted ~2.5x recent (net recent share ≈ 0.4 × DAMP ≈ 0.28).
+    season_base = (row.get("seasonBaseRos") / horizon) if (row.get("seasonBaseRos") is not None) else None
+    if surface is not None and season_base is not None:
+        form_rate = season_base + TRADE_RECENT_FORM_DAMP * (surface - season_base)
+    else:
+        form_rate = surface
     # Every signal is measured OVER its replacement level — the waiver line — so
     # an elite slot towers and a freely-available one nets to ~0:
-    #   • production  → rate above the position's replacement rate
+    #   • production  → season-weighted form rate above the position's replacement
     #   • draft/own/ADP → curve value of this slot minus the replacement slot's
     # Market = current ownership rank, treated as a "live draft position".
-    prod_rate = max(0.0, surface_adj - (rep_rate or 0.0)) if surface_adj is not None else None
+    prod_rate = max(0.0, form_rate - (rep_rate or 0.0)) if form_rate is not None else None
 
     def _anchor(slot, floor_slot):
         if not curve or not slot or not floor_slot:
