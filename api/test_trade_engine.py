@@ -14,8 +14,8 @@ import sys
 sys.path.insert(0, os.path.dirname(__file__))
 
 from hitters import (  # noqa: E402
-    _trade_weights, _fit_log_curve, _perceived_value, _pos_group,
-    _classify_trade, _finder_rank, TRADE_EDGE_MIN,
+    _trade_weights, _fit_log_curve, _perceived_value, _perceived_components,
+    _pos_group, _classify_trade, _finder_rank, TRADE_EDGE_MIN,
 )
 
 
@@ -99,6 +99,19 @@ def test_classify_steal_win_lopsided_avoid_marginal():
     # Tiny edge → marginal.
     marg = _classify_trade(edge=TRADE_EDGE_MIN - 1, perc_give=300, perc_get=300)
     assert marg["verdict"] == "marginal"
+
+
+def test_perceived_components_breakdown():
+    curve = _fit_log_curve([(1, 600), (10, 480), (50, 300), (100, 210), (200, 150)])
+    w = _trade_weights(0.5)
+    row = {"pos": "SP", "horizon": 18, "fullHorizon": 32, "surfaceRate": 12.0,
+           "recentHeat": 0.2, "draftPick": 10, "adp": None}
+    b = _perceived_components(row, curve, w)
+    assert b and b["perceived"] > 0
+    labels = [c["label"] for c in b["components"]]
+    assert "Surface production" in labels and "Draft pedigree" in labels
+    # component ROS contributions should reconstruct the perceived total
+    assert abs(sum(c["ros"] for c in b["components"]) - b["perceived"]) < 1.0
 
 
 def test_finder_rank_keeps_steals_and_wins():

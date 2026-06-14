@@ -27,11 +27,34 @@ interface LeagueTeam {
 interface LeagueData { teams: LeagueTeam[]; week: number; generatedAt: string }
 
 // ── Trade Lab types (mirror /api/hitters?view=trade) ──────────────────────
+interface PerceivedComponent { label: string; rate: number; weight: number; ros: number }
 interface TradeSidePlayer {
   name: string; owner: string; team: string; pos: string
   modelRos: number | null; perceived: number | null; blendedRos: number | null
   draftPick: number | null; valueRatio: number | null
   injured: boolean; injuryStatus: string | null
+  breakdown?: {
+    model: { baseRate: number | null; horizon: number | null; recentHeat: number | null; note: string }
+    perceived: { perceived: number; horizon: number; scarcityMult: number; recentHeat: number;
+      components: PerceivedComponent[] } | null
+  }
+}
+
+function modelTip(p: TradeSidePlayer): string {
+  const m = p.breakdown?.model
+  const lines = [`Model ${p.modelRos} — de-lucked rest-of-season FPTS`]
+  if (m?.baseRate != null && m?.horizon != null) lines.push(`= ${m.baseRate}/game × ${m.horizon} remaining`)
+  if (m?.note) lines.push(m.note)
+  return lines.join('\n')
+}
+function perceivedTip(p: TradeSidePlayer): string {
+  const c = p.breakdown?.perceived
+  if (!c) return `Perceived ${p.perceived}`
+  const lines = [`Perceived ${c.perceived} — how the other manager prices the rest of season`, `horizon ${c.horizon}`]
+  c.components.forEach(x => lines.push(`• ${x.label}: rate ${x.rate} × ${(x.weight * 100).toFixed(0)}% → ${x.ros}`))
+  if (c.scarcityMult !== 1) lines.push(`positional scarcity ×${c.scarcityMult}`)
+  if (c.recentHeat) lines.push(`recent heat ${c.recentHeat > 0 ? '+' : ''}${c.recentHeat} → inflates surface production`)
+  return lines.join('\n')
 }
 interface TradeResult {
   give: TradeSidePlayer[]; get: TradeSidePlayer[]
@@ -211,8 +234,8 @@ export default function League() {
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 8, minHeight: 8 }}>
         {sel.map(n => (
           <span key={n} style={{
-            ...mono12, display: 'inline-flex', alignItems: 'center', gap: 6,
-            background: 'var(--bg, #f4f4f2)', border: '1px solid var(--border)',
+            ...mono12, color: 'var(--ink)', display: 'inline-flex', alignItems: 'center', gap: 6,
+            background: 'rgba(127,127,127,0.18)', border: '1px solid var(--border)',
             borderRadius: 999, padding: '3px 8px',
           }}>
             {n}
@@ -374,9 +397,9 @@ function TradeResultView({ trade }: { trade: TradeResult }) {
         <thead>
           <tr style={{ color: 'var(--ink-3)', textAlign: 'right' }}>
             <th style={{ textAlign: 'left', fontWeight: 500 }}>Player</th>
-            <th style={{ fontWeight: 500 }} title="De-lucked rest-of-season FPTS">Model</th>
-            <th style={{ fontWeight: 500 }} title="What the other manager prices them at">Perceived</th>
-            <th style={{ fontWeight: 500 }} title="ROS FPTS per perceived point — high = undervalued">Ratio</th>
+            <th style={{ fontWeight: 500 }} title="De-lucked rest-of-season FPTS — hover a value for the breakdown">Model</th>
+            <th style={{ fontWeight: 500 }} title="What the other manager prices them at — hover a value for the breakdown">Perceived</th>
+            <th style={{ fontWeight: 500 }} title="ROS FPTS per perceived point — high = undervalued (acquire)">Ratio</th>
           </tr>
         </thead>
         <tbody>
@@ -386,8 +409,8 @@ function TradeResultView({ trade }: { trade: TradeResult }) {
                 {p.name}{p.injured ? ' 🩹' : ''}
                 <span style={{ color: 'var(--ink-3)' }}> · {p.pos}{p.draftPick ? ` · #${p.draftPick}` : ''}</span>
               </td>
-              <td style={{ textAlign: 'right' }}>{p.modelRos ?? '—'}</td>
-              <td style={{ textAlign: 'right' }}>{p.perceived ?? '—'}</td>
+              <td style={{ textAlign: 'right', cursor: 'help', textDecoration: 'underline dotted var(--ink-3)' }} title={modelTip(p)}>{p.modelRos ?? '—'}</td>
+              <td style={{ textAlign: 'right', cursor: 'help', textDecoration: 'underline dotted var(--ink-3)' }} title={perceivedTip(p)}>{p.perceived ?? '—'}</td>
               <td style={{ textAlign: 'right' }}>{p.valueRatio ?? '—'}</td>
             </tr>
           ))}

@@ -1260,29 +1260,43 @@ def _pos_group(row):
     return "P" if "P" in pos else (pos.split("/")[0] if pos else "")
 
 
-def _perceived_value(row, curve, weights):
-    """Perceived rest-of-season value (FPTS) — same horizon/scale as model ROS,
-    so the fairness ratio is apples-to-apples with the edge. Blends, as RATES:
-    surface production (what they see, incl. recent-form overreaction), draft-slot
-    pedigree, and ADP; renormalizes over present components; × scarcity; × horizon."""
+def _perceived_components(row, curve, weights):
+    """Perceived rest-of-season value (FPTS) with its factor breakdown — same
+    horizon/scale as model ROS, so the fairness ratio is apples-to-apples with
+    the edge. Blends, as RATES: surface production (what they see, incl. recent-
+    form overreaction), draft-slot pedigree, ADP; renorms over present
+    components; × scarcity; × horizon. Returns None if there's nothing to value."""
     horizon, full_h = row.get("horizon"), row.get("fullHorizon")
     if not horizon or not full_h:
         return None
+    heat = row.get("recentHeat") or 0.0
     surface = row.get("surfaceRate")
-    if surface is not None:
-        # Opposing managers extrapolate hot/cold streaks past their true weight.
-        surface = surface * (1.0 + TRADE_RECENCY_OVERREACTION * (row.get("recentHeat") or 0.0))
+    surface_adj = surface * (1.0 + TRADE_RECENCY_OVERREACTION * heat) if surface is not None else None
     # Draft / ADP curves return a full-season value → divide to a per-game rate.
     draft_rate = (curve(row.get("draftPick")) / full_h) if (curve and row.get("draftPick")) else None
     adp_rate = (curve(row.get("adp")) / full_h) if (curve and row.get("adp")) else None
-    acc, wsum = 0.0, 0.0
-    for val, w in ((surface, weights["prod"]), (draft_rate, weights["draft"]), (adp_rate, weights["adp"])):
+    parts, acc, wsum = [], 0.0, 0.0
+    for label, val, w in (("Surface production", surface_adj, weights["prod"]),
+                          ("Draft pedigree", draft_rate, weights["draft"]),
+                          ("ADP", adp_rate, weights["adp"])):
         if val is not None:
             acc += w * val; wsum += w
+            parts.append({"label": label, "rate": round(val, 2), "rawWeight": w})
     if wsum <= 0:
         return None
-    rate = (acc / wsum) * TRADE_SCARCITY_MULT.get(_pos_group(row), 1.0)
-    return round(rate * horizon, 1)
+    mult = TRADE_SCARCITY_MULT.get(_pos_group(row), 1.0)
+    rate = (acc / wsum) * mult
+    for pt in parts:                       # normalize to present components + ROS contribution
+        pt["weight"] = round(pt["rawWeight"] / wsum, 3)
+        pt["ros"] = round(pt["rate"] * (pt["rawWeight"] / wsum) * mult * horizon, 1)
+        pt.pop("rawWeight", None)
+    return {"perceived": round(rate * horizon, 1), "horizon": round(horizon, 1),
+            "scarcityMult": mult, "recentHeat": round(heat, 3), "components": parts}
+
+
+def _perceived_value(row, curve, weights):
+    b = _perceived_components(row, curve, weights)
+    return b["perceived"] if b else None
 
 
 def _classify_trade(edge, perc_give, perc_get):
@@ -1351,17 +1365,26 @@ def build_trade_eval(give_players, get_players, with_team_id=None, want_rational
         model = r.get("seasonBaseRos")
         if model is None:
             model = r.get("rosFpts")          # fallback if de-lucked base missing
-        pv = _perceived_value(r, curve, weights)
+        comp = _perceived_components(r, curve, weights)
+        pv = comp["perceived"] if comp else None
         injured = (r.get("injuryStatus") or "").upper() not in ("", "ACTIVE")
         # ROS FPTS earned per unit of perceived value — scale-robust arbitrage
         # signal. High = undervalued (acquire); low = overvalued (move).
         ratio = round(model / pv, 3) if (model is not None and pv) else None
+        hz = r.get("horizon")
+        base_rate = round(model / hz, 2) if (model is not None and hz) else None
         return {"name": r.get("name"), "owner": r.get("owner"), "team": r.get("team"),
                 "pos": r.get("pos") or r.get("posEligible"),
                 "modelRos": round(model, 1) if model is not None else None,
                 "perceived": pv, "blendedRos": r.get("rosFpts"),
                 "draftPick": r.get("draftPick"), "valueRatio": ratio,
-                "injured": injured, "injuryStatus": r.get("injuryStatus")}
+                "injured": injured, "injuryStatus": r.get("injuryStatus"),
+                "breakdown": {
+                    "model": {"baseRate": base_rate, "horizon": round(hz, 1) if hz else None,
+                              "recentHeat": r.get("recentHeat"),
+                              "note": "Savant de-lucked rate × remaining horizon (no recent-form blend)"},
+                    "perceived": comp,
+                }}
 
     give_e = [enrich(r) for r in give_rows]
     get_e = [enrich(r) for r in get_rows]
