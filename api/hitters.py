@@ -1273,7 +1273,7 @@ def _trade_weights(p):
     pedigree slice itself migrates from draft slot (preseason consensus) to
     ownership rank (current market) over the year — catching prospects/breakouts
     that draft slot misses."""
-    w_prod = max(0.30, min(0.75, 0.30 + 0.45 * p))
+    w_prod = max(0.25, min(0.60, 0.25 + 0.35 * p))
     w_anchor = 1.0 - w_prod
     w_ped = w_anchor * 0.85            # draft + live-market pedigree
     return {"prod": w_prod, "draft": w_ped * (1.0 - p), "market": w_ped * p,
