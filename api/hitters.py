@@ -906,7 +906,7 @@ LEAGUE_CACHE_TTL = 1800
 def _league_cache_key(year: int) -> str:
     # v2: rows now carry trade-engine fields (surfaceRate/horizon/fullHorizon/
     # recentHeat) — bump so stale pre-trade-engine payloads aren't served.
-    return f"cache:league-roster:v2:{year}"
+    return f"cache:league-roster:v3:{year}"
 
 
 def _lg_safe_float(value, default: float = 0.0) -> float:
@@ -994,8 +994,9 @@ def _lg_team_meta(team: dict, members_by_id: dict) -> dict:
             "owner": owner, "record": record}
 
 
-def _lg_build_team(team, cd, hd, scoring, PRO_TEAM_MAP, year_int, week, pick_by_id=None):
+def _lg_build_team(team, cd, hd, scoring, PRO_TEAM_MAP, year_int, week, pick_by_id=None, own_by_id=None):
     pick_by_id = pick_by_id or {}
+    own_by_id = own_by_id or {}
     entries = team.get("roster", {}).get("entries", [])
     pitchers_raw, hitters_raw = [], []
     for entry in entries:
@@ -1062,6 +1063,7 @@ def _lg_build_team(team, cd, hd, scoring, PRO_TEAM_MAP, year_int, week, pick_by_
             "fullHorizon": round(full_horizon, 2),
             "draftPick": pick_by_id.get(player.get("id")),
             "adp": (player.get("ownership") or {}).get("averageDraftPosition"),
+            "ownPct": own_by_id.get(player.get("id")),
             "seasonStats": ss,
             "savantExpected": _lg_pitcher_savant(
                 cd.get("savant_current", {}).get(nk, {}),
@@ -1114,12 +1116,37 @@ def _lg_build_team(team, cd, hd, scoring, PRO_TEAM_MAP, year_int, week, pick_by_
             "horizon": (tgr if tgr is not None else 0), "fullHorizon": LEAGUE_SEASON_GAMES,
             "draftPick": pick_by_id.get(player.get("id")),
             "adp": (player.get("ownership") or {}).get("averageDraftPosition"),
+            "ownPct": own_by_id.get(player.get("id")),
             "seasonStats": _season_line(hd.get("hitting_current", {}).get(nk, {})),
             "advanced": _advanced_line(name, hd.get("savant_batter_current", {}),
                                        hd.get("savant_batter_statcast_current", {})),
         })
     batters.sort(key=lambda b: -(b["rosFpts"] or 0))
     return {"pitchers": pitchers, "batters": batters}
+
+
+def _fetch_ownership(base, headers, cookies, player_ids):
+    """percentOwned by playerId via a single scoped kona_player_info call — the
+    'live market' anchor for perceived value (catches hyped prospects / breakouts
+    that draft slot misses). Best-effort: returns {} on any failure."""
+    ids = list({pid for pid in player_ids if pid})
+    if not ids:
+        return {}
+    try:
+        xff = json.dumps({"players": {"filterIds": {"value": ids}}})
+        r = requests.get(base, params=[("view", "kona_player_info")], cookies=cookies,
+                         headers={**headers, "x-fantasy-filter": xff}, timeout=20)
+        if r.status_code != 200:
+            return {}
+        out = {}
+        for p in r.json().get("players", []):
+            own = ((p.get("player") or {}).get("ownership")) or p.get("ownership") or {}
+            pct = own.get("percentOwned")
+            if pct is not None:
+                out[p.get("id")] = round(float(pct), 1)
+        return out
+    except Exception:
+        return {}
 
 
 def build_league_rosters() -> dict:
@@ -1149,12 +1176,16 @@ def build_league_rosters() -> dict:
         pid, ov = pk.get("playerId"), pk.get("overallPickNumber")
         if pid and ov:
             pick_by_id[pid] = ov
+    # Live-market anchor: percentOwned for every rostered player (one kona call).
+    roster_ids = [e.get("playerId") for t in data.get("teams", [])
+                  for e in t.get("roster", {}).get("entries", []) if e.get("playerId")]
+    own_by_id = _fetch_ownership(base, headers, cookies, roster_ids)
     cd = load_cached_data(year_int)
     hd = load_hitter_stats(year_int)
     teams_out = []
     for team in data.get("teams", []):
         teams_out.append({**_lg_team_meta(team, members_by_id),
-                          **_lg_build_team(team, cd, hd, scoring, PRO_TEAM_MAP, year_int, week, pick_by_id)})
+                          **_lg_build_team(team, cd, hd, scoring, PRO_TEAM_MAP, year_int, week, pick_by_id, own_by_id)})
     teams_out.sort(key=lambda t: t["name"].lower())
     return {"teams": teams_out, "week": week, "generatedAt": datetime.utcnow().isoformat() + "Z"}
 
@@ -1221,10 +1252,15 @@ def _trade_season_progress():
 
 def _trade_weights(p):
     """Time-varying perceived-value weights. Early season anchors on the draft;
-    perception migrates toward in-season production as p (progress) grows."""
+    perception migrates toward in-season production as p (progress) grows. The
+    pedigree slice itself migrates from draft slot (preseason consensus) to
+    ownership rank (current market) over the year — catching prospects/breakouts
+    that draft slot misses."""
     w_prod = max(0.30, min(0.75, 0.30 + 0.45 * p))
     w_anchor = 1.0 - w_prod
-    return {"prod": w_prod, "draft": w_anchor * 0.8, "adp": w_anchor * 0.2}
+    w_ped = w_anchor * 0.85            # draft + live-market pedigree
+    return {"prod": w_prod, "draft": w_ped * (1.0 - p), "market": w_ped * p,
+            "adp": w_anchor * 0.15}
 
 
 def _fit_log_curve(points):
@@ -1272,12 +1308,15 @@ def _perceived_components(row, curve, weights):
     heat = row.get("recentHeat") or 0.0
     surface = row.get("surfaceRate")
     surface_adj = surface * (1.0 + TRADE_RECENCY_OVERREACTION * heat) if surface is not None else None
-    # Draft / ADP curves return a full-season value → divide to a per-game rate.
+    # Draft / market / ADP curves return a full-season value → divide to a rate.
+    # Market = current ownership rank, treated as a "live draft position".
     draft_rate = (curve(row.get("draftPick")) / full_h) if (curve and row.get("draftPick")) else None
+    market_rate = (curve(row.get("ownershipRank")) / full_h) if (curve and row.get("ownershipRank")) else None
     adp_rate = (curve(row.get("adp")) / full_h) if (curve and row.get("adp")) else None
     parts, acc, wsum = [], 0.0, 0.0
     for label, val, w in (("Surface production", surface_adj, weights["prod"]),
                           ("Draft pedigree", draft_rate, weights["draft"]),
+                          ("Market (ownership)", market_rate, weights.get("market", 0.0)),
                           ("ADP", adp_rate, weights["adp"])):
         if val is not None:
             acc += w * val; wsum += w
@@ -1297,6 +1336,16 @@ def _perceived_components(row, curve, weights):
 def _perceived_value(row, curve, weights):
     b = _perceived_components(row, curve, weights)
     return b["perceived"] if b else None
+
+
+def _assign_ownership_ranks(rows):
+    """Dense-rank rostered players by percentOwned (desc) and stash ownershipRank
+    on each row — the 'live draft position' the market anchor reads. No-op for
+    rows missing ownPct (anchor stays inactive for them)."""
+    ranked = sorted((r for r in rows if r.get("ownPct") is not None),
+                    key=lambda r: -r["ownPct"])
+    for i, r in enumerate(ranked, 1):
+        r["ownershipRank"] = i
 
 
 def _classify_trade(edge, perc_give, perc_get):
@@ -1345,6 +1394,7 @@ def build_trade_eval(give_players, get_players, with_team_id=None, want_rational
     numbers, a deterministic verdict, and (optionally) a Claude pitch."""
     payload = _league_response()
     idx = _flatten_league(payload)
+    _assign_ownership_ranks(list(idx.values()))   # live-market anchor
     give_rows, give_missing = _resolve_players(give_players, idx)
     get_rows, get_missing = _resolve_players(get_players, idx)
     if give_missing or get_missing:
@@ -1408,6 +1458,8 @@ def build_trade_eval(give_players, get_players, with_team_id=None, want_rational
         caveats.append("Injured players are flagged but not yet numerically discounted (v1.1).")
     if not any(r.get("adp") for r in idx.values()):
         caveats.append("ADP unavailable from the roster feed; draft slot carries the anchor.")
+    if not any(r.get("ownPct") is not None for r in idx.values()):
+        caveats.append("Ownership % unavailable — live-market anchor inactive (draft slot only).")
 
     result = {
         "give": give_e, "get": get_e,
@@ -1484,6 +1536,10 @@ def build_trade_finder(my_team_id, target_team_id=None, want_rationale=False,
     if not teams:
         return {"error": "League payload is empty."}
     idx = _flatten_league(payload)
+    # Rank the actual payload rows (enrich_team reads them directly) for the
+    # live-market anchor; the curve is fit off the flattened copies.
+    _assign_ownership_ranks([pl for t in teams for grp in ("pitchers", "batters")
+                             for pl in t.get(grp, [])])
     pts = [(r.get("draftPick"), r.get("fullSeasonPace")) for r in idx.values()
            if r.get("draftPick") and r.get("fullSeasonPace")]
     curve = _fit_log_curve(pts)

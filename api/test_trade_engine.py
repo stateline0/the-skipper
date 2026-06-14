@@ -114,6 +114,24 @@ def test_perceived_components_breakdown():
     assert abs(sum(c["ros"] for c in b["components"]) - b["perceived"]) < 1.0
 
 
+def test_market_anchor_lifts_hyped_low_draft_player():
+    curve = _fit_log_curve([(1, 600), (10, 480), (50, 300), (100, 210), (200, 150)])
+    w = _trade_weights(0.6)  # mid-late season: market anchor carries real weight
+    # Late-drafted but widely owned (hyped prospect): ownership rank lifts perceived
+    # above what the tiny draft anchor alone would give.
+    hyped = {"pos": "SP", "horizon": 18, "fullHorizon": 32, "surfaceRate": 10.0,
+             "recentHeat": 0.0, "draftPick": 210, "adp": None, "ownershipRank": 5}
+    no_market = {**hyped, "ownershipRank": None}
+    assert _perceived_value(hyped, curve, w) > _perceived_value(no_market, curve, w)
+
+
+def test_weights_include_market_and_sum_to_one():
+    for p in (0.0, 0.5, 1.0):
+        w = _trade_weights(p)
+        assert "market" in w and abs(sum(w.values()) - 1.0) < 1e-9, (p, w)
+    assert _trade_weights(1.0)["market"] > _trade_weights(0.0)["market"]  # migrates up
+
+
 def test_finder_rank_keeps_steals_and_wins():
     keep, score, cls = _finder_rank(edge=30, perc_give=320, perc_get=295)  # steal
     assert keep and cls["verdict"] == "steal" and score == 35.0
