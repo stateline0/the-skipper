@@ -9,7 +9,7 @@ interface LeagueTeamLite { id: number; name: string; record?: string; pitchers: 
 interface LeagueData { teams: LeagueTeamLite[]; week: number; generatedAt: string }
 
 // ── Trade types (mirror /api/hitters?view=trade) ──────────────────────────
-interface PerceivedComponent { label: string; rate: number; weight: number; ros: number }
+interface PerceivedComponent { label: string; detail?: string | null; rate: number; weight: number; ros: number }
 interface TradeSidePlayer {
   name: string; owner: string; team: string; pos: string
   modelRos: number | null; perceived: number | null; blendedRos: number | null
@@ -42,20 +42,33 @@ const VERDICT_COLOR: Record<string, string> = {
   avoid: 'var(--red)',
 }
 
+// Plain-language breakdowns: each line names the input and what it contributes.
 function modelLines(p: TradeSidePlayer): string[] {
   const m = p.breakdown?.model
-  const lines = [`Model ${p.modelRos} — de-lucked rest-of-season FPTS`]
-  if (m?.baseRate != null && m?.horizon != null) lines.push(`= ${m.baseRate}/game × ${m.horizon} remaining`)
-  if (m?.note) lines.push(m.note)
+  const lines = [`Model value — ${p.modelRos} pts`,
+    `Our honest estimate of his value the rest of the season.`]
+  if (m?.baseRate != null && m?.horizon != null) {
+    lines.push(`${m.baseRate} projected pts/game × ${m.horizon} games left = ${p.modelRos}`)
+  }
+  lines.push(`Based on Statcast "de-lucked" stats, so a hot or cold streak doesn't move it.`)
   return lines
 }
 function perceivedLines(p: TradeSidePlayer): string[] {
   const c = p.breakdown?.perceived
-  if (!c) return [`Perceived ${p.perceived}`]
-  const lines = [`Perceived ${c.perceived} — how the other manager prices the rest of season`, `horizon ${c.horizon}`]
-  c.components.forEach(x => lines.push(`• ${x.label}: rate ${x.rate} × ${(x.weight * 100).toFixed(0)}% → ${x.ros}`))
-  if (c.scarcityMult !== 1) lines.push(`positional scarcity ×${c.scarcityMult}`)
-  if (c.recentHeat) lines.push(`recent heat ${c.recentHeat > 0 ? '+' : ''}${c.recentHeat} → inflates surface production`)
+  if (!c) return [`Perceived value — ${p.perceived} pts`]
+  const lines = [`Perceived value — ${c.perceived} pts`,
+    `Roughly what the other manager thinks he's worth — a blend of signals, each with a share of the call:`]
+  c.components.forEach(x => {
+    const det = x.detail ? ` (${x.detail})` : ''
+    lines.push(`${x.label}${det} — ${Math.round(x.weight * 100)}% → ${Math.round(x.ros)} pts`)
+  })
+  if (c.scarcityMult !== 1) {
+    const dir = c.scarcityMult > 1 ? 'scarce position, nudged up' : 'deep position, nudged down'
+    lines.push(`× ${c.scarcityMult} (${dir})`)
+  }
+  if (c.recentHeat) {
+    lines.push(`He's running ${c.recentHeat > 0 ? 'hot' : 'cold'} lately (${c.recentHeat > 0 ? '+' : ''}${Math.round(c.recentHeat * 100)}%), which ${c.recentHeat > 0 ? 'inflates' : 'deflates'} the form signal.`)
+  }
   return lines
 }
 

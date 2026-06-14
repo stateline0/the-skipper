@@ -1313,14 +1313,21 @@ def _perceived_components(row, curve, weights):
     draft_rate = (curve(row.get("draftPick")) / full_h) if (curve and row.get("draftPick")) else None
     market_rate = (curve(row.get("ownershipRank")) / full_h) if (curve and row.get("ownershipRank")) else None
     adp_rate = (curve(row.get("adp")) / full_h) if (curve and row.get("adp")) else None
+    # Human-readable input for each signal so the tooltip explains itself.
+    own_rank, own_pct = row.get("ownershipRank"), row.get("ownPct")
+    market_detail = (f"#{own_rank} most-owned"
+                     + (f", {own_pct}% rostered" if own_pct is not None else "")) if own_rank else None
     parts, acc, wsum = [], 0.0, 0.0
-    for label, val, w in (("Surface production", surface_adj, weights["prod"]),
-                          ("Draft pedigree", draft_rate, weights["draft"]),
-                          ("Market (ownership)", market_rate, weights.get("market", 0.0)),
-                          ("ADP", adp_rate, weights["adp"])):
+    for label, detail, val, w in (
+            ("Recent & season form", "what he's actually doing", surface_adj, weights["prod"]),
+            ("Draft pedigree", (f"drafted #{row.get('draftPick')}" if row.get("draftPick") else None),
+             draft_rate, weights["draft"]),
+            ("Live ownership", market_detail, market_rate, weights.get("market", 0.0)),
+            ("Preseason ADP", (f"ADP {row.get('adp')}" if row.get("adp") else None),
+             adp_rate, weights["adp"])):
         if val is not None:
             acc += w * val; wsum += w
-            parts.append({"label": label, "rate": round(val, 2), "rawWeight": w})
+            parts.append({"label": label, "detail": detail, "rate": round(val, 2), "rawWeight": w})
     if wsum <= 0:
         return None
     mult = TRADE_SCARCITY_MULT.get(_pos_group(row), 1.0)

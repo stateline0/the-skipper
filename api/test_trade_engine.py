@@ -109,7 +109,7 @@ def test_perceived_components_breakdown():
     b = _perceived_components(row, curve, w)
     assert b and b["perceived"] > 0
     labels = [c["label"] for c in b["components"]]
-    assert "Surface production" in labels and "Draft pedigree" in labels
+    assert "Recent & season form" in labels and "Draft pedigree" in labels
     # component ROS contributions should reconstruct the perceived total
     assert abs(sum(c["ros"] for c in b["components"]) - b["perceived"]) < 1.0
 
