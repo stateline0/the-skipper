@@ -305,6 +305,19 @@ def fetch_probable_pitcher_ids(start_date, end_date) -> dict:
 
 
 def fetch_mlb_probables(start_date, end_date):
+    probables, _ = fetch_mlb_probables_and_schedule(start_date, end_date)
+    return probables
+
+
+def fetch_mlb_probables_and_schedule(start_date, end_date):
+    """Same statsapi request as fetch_mlb_probables, but also parses the
+    response into a schedule dict (fallback for when the ESPN scoreboard
+    returns nothing — see _merge_schedules in get_starts_for_players).
+
+    Returns (probables, schedule):
+      - probables: { "garrett crochet": ["2026-03-27"], ... }
+      - schedule:  { "2026-03-27": { "BOS": {opponent, is_home, status, win_prob}, ... } }
+    """
     try:
         r = requests.get(
             "https://statsapi.mlb.com/api/v1/schedule",
@@ -320,7 +333,7 @@ def fetch_mlb_probables(start_date, end_date):
         data = r.json()
     except Exception as e:
         print(f"[mlb.py] MLB Stats API fetch failed: {e}")
-        return {}
+        return {}, {}
 
     result = {}
     for date_entry in data.get("dates", []):
@@ -335,7 +348,60 @@ def fetch_mlb_probables(start_date, end_date):
                         result.setdefault(key, [])
                         if game_date not in result[key]:
                             result[key].append(game_date)
-    return result
+    return result, _build_mlb_schedule(data)
+
+
+# MLB abstractGameState -> our schedule status vocabulary
+_MLB_STATE_MAP = {"Preview": "scheduled", "Live": "in_progress", "Final": "final"}
+
+
+def _build_mlb_schedule(data) -> dict:
+    """Build a schedule dict (same shape fetch_espn_probables returns) from a
+    parsed statsapi /api/v1/schedule response. Degraded relative to the ESPN
+    scoreboard: no Vegas odds, no opponent starter, no live score/inning —
+    win_prob is None so the projection model falls through to its Pythagorean
+    path. Games with a team id missing from MLB_TEAM_ID_TO_ABBREV (e.g.
+    exhibitions) are skipped."""
+    schedule = {}
+    for date_entry in data.get("dates", []):
+        game_date = date_entry.get("date", "")
+        if not game_date:
+            continue
+        for game in date_entry.get("games", []):
+            home_id = game.get("teams", {}).get("home", {}).get("team", {}).get("id")
+            away_id = game.get("teams", {}).get("away", {}).get("team", {}).get("id")
+            home = MLB_TEAM_ID_TO_ABBREV.get(home_id)
+            away = MLB_TEAM_ID_TO_ABBREV.get(away_id)
+            if not home or not away:
+                continue
+            state  = game.get("status", {}).get("abstractGameState", "Preview")
+            status = _MLB_STATE_MAP.get(state, "scheduled")
+            schedule.setdefault(game_date, {})
+            schedule[game_date][home] = {
+                "opponent": away, "is_home": True,  "status": status, "win_prob": None,
+            }
+            schedule[game_date][away] = {
+                "opponent": home, "is_home": False, "status": status, "win_prob": None,
+            }
+    return schedule
+
+
+def _merge_schedules(espn_schedule: dict, mlb_schedule: dict) -> dict:
+    """Per-date merge: ESPN scoreboard days win verbatim (they carry odds,
+    opponent starters, and live detail); any day ESPN returned empty or
+    missing is filled from the MLB Stats API schedule. This keeps the grid
+    alive through ESPN scoreboard outages — the failure mode where every
+    cell rendered '—' while starts counts (MLB-sourced) still populated."""
+    merged = dict(espn_schedule)
+    filled = []
+    for date, day in mlb_schedule.items():
+        if not merged.get(date) and day:
+            merged[date] = day
+            filled.append(date)
+    if filled:
+        print(f"[mlb.py] ESPN scoreboard empty for {len(filled)} day(s) "
+              f"({', '.join(sorted(filled))}) — filled from MLB Stats API")
+    return merged
 
 
 # ---------------------------------------------------------------------------
@@ -423,10 +489,14 @@ def get_starts_for_players(player_names, matchup_period, team_map=None):
     # The two probable sources are independent (MLB Stats vs ESPN scoreboard) —
     # fetch them concurrently instead of back-to-back to halve the wall time.
     with ThreadPoolExecutor(max_workers=2) as ex:
-        mlb_future  = ex.submit(fetch_mlb_probables,  mp["start"], mp["end"])
+        mlb_future  = ex.submit(fetch_mlb_probables_and_schedule, mp["start"], mp["end"])
         espn_future = ex.submit(fetch_espn_probables, mp["start"], mp["end"])
-        mlb_data          = mlb_future.result()
-        fp_data, schedule = espn_future.result()
+        mlb_data, mlb_schedule = mlb_future.result()
+        fp_data, schedule      = espn_future.result()
+
+    # Days the ESPN scoreboard came back empty for are filled from the MLB
+    # schedule so one flaky source can't blank the whole grid.
+    schedule = _merge_schedules(schedule, mlb_schedule)
 
     pitcher_starts = build_pitcher_starts(mlb_data, fp_data, mp["start"], mp["end"])
 
