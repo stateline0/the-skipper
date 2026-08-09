@@ -553,6 +553,47 @@ def fetch_forecaster_probables() -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Cross-source start-conflict resolution.
+#
+# A starter pitches every ~5 days (~4 on short rest), so two sources listing
+# starts 1-3 days apart for the same pitcher are contradictory — typically a
+# stale Forecaster rotation guess sitting next to a confirmed date — and
+# without a guard both render, inflating Starts and Proj FPTS. Priority:
+# MLB confirmed > scoreboard > Forecaster; within a source, earlier date
+# first. Confirmed dates are never dropped, so a genuine short-rest start
+# reappears as soon as MLB confirms it.
+# ---------------------------------------------------------------------------
+
+MIN_START_GAP_DAYS = 4
+
+
+def resolve_start_conflicts(mlb_data, scoreboard_data, forecaster_data,
+                            min_gap_days=MIN_START_GAP_DAYS):
+    """Merge the two projected sources into one { name: [dates] } dict,
+    dropping any projected date that falls within min_gap_days of a
+    higher-priority (or already-accepted) date for the same pitcher.
+    mlb_data is consulted as the anchor set but returned untouched —
+    build_pitcher_starts still unions it in as the confirmed source."""
+    def _d(s):
+        return datetime.strptime(s, "%Y-%m-%d")
+
+    out = {}
+    for name in set(scoreboard_data) | set(forecaster_data):
+        kept = [_d(s) for s in mlb_data.get(name, [])]
+        accepted = []
+        for source_dates in (scoreboard_data.get(name, []),
+                             forecaster_data.get(name, [])):
+            for ds in sorted(set(source_dates)):
+                d = _d(ds)
+                if all(abs((d - k).days) >= min_gap_days for k in kept):
+                    kept.append(d)
+                    accepted.append(ds)
+        if accepted:
+            out[name] = sorted(accepted)
+    return out
+
+
+# ---------------------------------------------------------------------------
 # Public helper — called by espn.py to look up starts for a list of players.
 #
 # Given a matchup period and a list of full player names ("Luis Severino"),
@@ -577,29 +618,44 @@ def get_starts_for_players(player_names, matchup_period, team_map=None):
 
     mp = MATCHUP_PERIODS[matchup_period]
 
+    # The MLB fetch reaches back MIN_START_GAP_DAYS-1 days before the period
+    # so the conflict resolver can see the previous period's tail — statsapi
+    # lists starters for past dates, and it's the same single range request.
+    # Without this, a stale projection on the period's first days can't be
+    # checked against a real start just before the boundary. Anchor days
+    # never render: build_pitcher_starts clamps to the period, and they're
+    # pruned from the schedule fallback below.
+    anchor_start = (
+        datetime.strptime(mp["start"], "%Y-%m-%d")
+        - timedelta(days=MIN_START_GAP_DAYS - 1)
+    ).strftime("%Y-%m-%d")
+
     # The three probable sources are independent (MLB Stats vs ESPN scoreboard
     # vs Forecaster article) — fetch them concurrently instead of back-to-back.
     with ThreadPoolExecutor(max_workers=3) as ex:
-        mlb_future  = ex.submit(fetch_mlb_probables_and_schedule, mp["start"], mp["end"])
+        mlb_future  = ex.submit(fetch_mlb_probables_and_schedule, anchor_start, mp["end"])
         espn_future = ex.submit(fetch_espn_probables, mp["start"], mp["end"])
         fc_future   = ex.submit(fetch_forecaster_probables)
         mlb_data, mlb_schedule = mlb_future.result()
         fp_data, schedule      = espn_future.result()
         fc_data                = fc_future.result()
 
+    # Anchor-window days are for conflict resolution only — keep the schedule
+    # payload period-shaped. (ISO dates compare correctly as strings.)
+    mlb_schedule = {d: v for d, v in mlb_schedule.items() if d >= mp["start"]}
+
     # Days the ESPN scoreboard came back empty for are filled from the MLB
     # schedule so one flaky source can't blank the whole grid.
     schedule = _merge_schedules(schedule, mlb_schedule)
 
     # Forecaster projected starts fill whatever the scoreboard didn't list
-    # (or everything, when the scoreboard is blocked). Union per pitcher —
-    # build_pitcher_starts keeps MLB-confirmed dates as confirmed=True and
-    # clamps to the matchup period, so out-of-period Forecaster dates drop.
-    for name, dates in fc_data.items():
-        existing = fp_data.setdefault(name, [])
-        for d in dates:
-            if d not in existing:
-                existing.append(d)
+    # (or everything, when the scoreboard is blocked). The conflict resolver
+    # unions the two projected sources while dropping impossible
+    # back-to-back starts against higher-priority dates (see
+    # resolve_start_conflicts). build_pitcher_starts then keeps
+    # MLB-confirmed dates as confirmed=True and clamps to the matchup
+    # period, so out-of-period Forecaster dates drop.
+    fp_data = resolve_start_conflicts(mlb_data, fp_data, fc_data)
 
     pitcher_starts = build_pitcher_starts(mlb_data, fp_data, mp["start"], mp["end"])
 

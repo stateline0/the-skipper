@@ -23,6 +23,7 @@ from mlb import (  # noqa: E402
     fetch_forecaster_probables,
     fetch_espn_probables,
     get_starts_for_players,
+    resolve_start_conflicts,
     FORECASTER_STARTS_CACHE_KEY,
 )
 
@@ -204,6 +205,114 @@ def test_forecaster_failure_leaves_other_sources_intact():
     assert starts["Sean Manaea"]["starts"] == 1
     assert starts["Sean Manaea"]["startDates"][0]["confirmed"] is False
     assert starts["Merrill Kelly"] == {"starts": 0, "startDates": []}
+
+
+# ─── Cross-source start-conflict resolution ────────────────────────────────
+
+def test_conflict_projected_next_to_confirmed_dropped():
+    # The Cease case: confirmed Aug 11, stale projection Aug 12, legit
+    # second start Aug 16 (5-day gap).
+    out = resolve_start_conflicts(
+        mlb_data={"dylan cease": ["2026-08-11"]},
+        scoreboard_data={"dylan cease": ["2026-08-12", "2026-08-16"]},
+        forecaster_data={},
+    )
+    assert out == {"dylan cease": ["2026-08-16"]}
+
+
+def test_conflict_scoreboard_beats_forecaster():
+    # Forecaster's guess one day after the scoreboard's date is dropped —
+    # even though the Forecaster date is chronologically earlier than a
+    # later scoreboard date it doesn't conflict with.
+    out = resolve_start_conflicts(
+        mlb_data={},
+        scoreboard_data={"braxton ashcraft": ["2026-08-13"]},
+        forecaster_data={"braxton ashcraft": ["2026-08-12", "2026-08-17"]},
+    )
+    assert out == {"braxton ashcraft": ["2026-08-13", "2026-08-17"]}
+
+
+def test_conflict_exact_min_gap_survives():
+    # Exactly 4 days apart is a believable short-rest turn — keep both.
+    out = resolve_start_conflicts(
+        mlb_data={"paul skenes": ["2026-08-11"]},
+        scoreboard_data={"paul skenes": ["2026-08-15"]},
+        forecaster_data={},
+    )
+    assert out == {"paul skenes": ["2026-08-15"]}
+
+
+def test_conflict_confirmed_dates_never_dropped():
+    # Adjacent confirmed dates pass through build_pitcher_starts untouched —
+    # the resolver only filters projected sources.
+    mlb_data = {"weird case": ["2026-08-11", "2026-08-12"]}
+    out = resolve_start_conflicts(mlb_data, {}, {})
+    assert out == {}
+    assert mlb_data == {"weird case": ["2026-08-11", "2026-08-12"]}
+
+
+def test_conflict_same_source_keeps_earlier():
+    out = resolve_start_conflicts(
+        mlb_data={},
+        scoreboard_data={},
+        forecaster_data={"glitch guy": ["2026-08-12", "2026-08-10"]},
+    )
+    assert out == {"glitch guy": ["2026-08-10"]}
+
+
+def test_conflict_end_to_end_starts_and_flags():
+    # Through get_starts_for_players: the phantom Aug 12 start disappears,
+    # starts drops from 3 to 2, confirmed flags stay correct.
+    originals = _stub_sources(
+        mlb_data={"dylan cease": ["2026-08-11"]},
+        fp_data={"dylan cease": ["2026-08-12", "2026-08-16"]},
+        schedule={},
+        fc_data={"dylan cease": ["2026-08-12"]},
+    )
+    try:
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            starts, _ = get_starts_for_players(["Dylan Cease"], 19)
+    finally:
+        _restore_sources(originals)
+    entry = starts["Dylan Cease"]
+    assert entry["starts"] == 2
+    assert [(sd["date"], sd["confirmed"]) for sd in entry["startDates"]] == [
+        ("2026-08-11", True), ("2026-08-16", False)]
+
+
+def test_period_boundary_anchor_suppresses_phantom():
+    # Period 19 starts 08-10. The pitcher really started 08-08 (previous
+    # period's tail, visible via the widened MLB fetch window). A stale
+    # projection on 08-10 must be dropped; a legit 08-12 start (4 days
+    # after the anchor) survives. The anchor date itself never renders,
+    # and pre-period days stay out of the schedule payload.
+    calls = {}
+    originals = (mlb.fetch_mlb_probables_and_schedule,
+                 mlb.fetch_espn_probables,
+                 mlb.fetch_forecaster_probables)
+
+    def fake_mlb(start, end):
+        calls["window"] = (start, end)
+        return ({"kyle freeland": ["2026-08-08"]},
+                {"2026-08-08": {"COL": {"opponent": "STL", "is_home": False,
+                                        "status": "final", "win_prob": None}}})
+    mlb.fetch_mlb_probables_and_schedule = fake_mlb
+    mlb.fetch_espn_probables = lambda s, e: ({}, {})
+    mlb.fetch_forecaster_probables = lambda: {
+        "kyle freeland": ["2026-08-10", "2026-08-12"]}
+    try:
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            starts, schedule = get_starts_for_players(["Kyle Freeland"], 19)
+    finally:
+        _restore_sources(originals)
+    assert calls["window"] == ("2026-08-07", "2026-08-16")
+    entry = starts["Kyle Freeland"]
+    assert [(sd["date"], sd["confirmed"]) for sd in entry["startDates"]] == [
+        ("2026-08-12", False)]
+    assert entry["starts"] == 1
+    assert "2026-08-08" not in schedule
 
 
 # ─── Hardened scoreboard fetch ─────────────────────────────────────────────
