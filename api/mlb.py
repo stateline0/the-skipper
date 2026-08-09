@@ -65,15 +65,16 @@ MATCHUP_PERIODS = {
 # Keys are lowercased last names for matching against ESPN fantasy names.
 # ---------------------------------------------------------------------------
 
-# Real-browser UA — the bare "Mozilla/5.0" this fetch used to send is the
-# generic fingerprint ESPN's WAF challenges (same lesson as the Forecaster
-# scrape, June 2026 — see forecaster.py's UA notes). Same Safari string as
-# forecaster.PRIMARY_HEADERS.
+# Honest tool UA — verified Aug 9 2026: this host's edge 403s browser-styled
+# UAs ("Mozilla/..." — including full Safari and Googlebot strings) from
+# non-browser clients, while plain tool UAs (curl/x, python-requests/x, this
+# one) get HTTP 200 with full data. The bare "Mozilla/5.0" this fetch sent
+# for months is what killed the probables feed. NOTE: this is the OPPOSITE
+# of the www.espn.com article WAF, which trusts Safari and blocks generic
+# UAs (see forecaster.py) — the two hosts sit behind different rules, so
+# don't "unify" them.
 SCOREBOARD_HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-        "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15"
-    ),
+    "User-Agent": "the-skipper/1.0 (+https://github.com/stateline0/the-skipper)",
     "Accept": "application/json",
 }
 

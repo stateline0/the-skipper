@@ -126,7 +126,11 @@ def get_injuries() -> dict:
         pass
 
     try:
-        r = requests.get(INJURIES_FEED, timeout=15, headers={"User-Agent": "Mozilla/5.0"})
+        # Honest tool UA — site.api.espn.com 403s browser-styled UAs from
+        # non-browser clients (same rule that broke the scoreboard probables;
+        # see SCOREBOARD_HEADERS in mlb.py, verified Aug 9 2026).
+        r = requests.get(INJURIES_FEED, timeout=15, headers={
+            "User-Agent": "the-skipper/1.0 (+https://github.com/stateline0/the-skipper)"})
         if r.status_code != 200:
             print(f"[injuries.py] feed HTTP {r.status_code}")
             return {}

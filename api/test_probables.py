@@ -240,9 +240,11 @@ def test_scoreboard_zero_event_days_logged_with_browser_ua():
         mlb.requests = orig
     assert pitchers == {}
     assert set(schedule.keys()) == {"2026-08-06", "2026-08-07"}
-    # Every request carried the Safari UA, not the bare "Mozilla/5.0".
+    # Every request carried the honest tool UA — site.api.espn.com 403s
+    # browser-styled UAs (incl. the bare "Mozilla/5.0") from non-browser clients.
     for call in fake.calls:
-        assert "Safari" in call["headers"]["User-Agent"]
+        ua = call["headers"]["User-Agent"]
+        assert ua.startswith("the-skipper/") and not ua.startswith("Mozilla"), ua
     out = buf.getvalue()
     assert "zero events on 2 day(s)" in out
     assert "2026-08-06, 2026-08-07" in out
