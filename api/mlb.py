@@ -618,15 +618,31 @@ def get_starts_for_players(player_names, matchup_period, team_map=None):
 
     mp = MATCHUP_PERIODS[matchup_period]
 
+    # The MLB fetch reaches back MIN_START_GAP_DAYS-1 days before the period
+    # so the conflict resolver can see the previous period's tail — statsapi
+    # lists starters for past dates, and it's the same single range request.
+    # Without this, a stale projection on the period's first days can't be
+    # checked against a real start just before the boundary. Anchor days
+    # never render: build_pitcher_starts clamps to the period, and they're
+    # pruned from the schedule fallback below.
+    anchor_start = (
+        datetime.strptime(mp["start"], "%Y-%m-%d")
+        - timedelta(days=MIN_START_GAP_DAYS - 1)
+    ).strftime("%Y-%m-%d")
+
     # The three probable sources are independent (MLB Stats vs ESPN scoreboard
     # vs Forecaster article) — fetch them concurrently instead of back-to-back.
     with ThreadPoolExecutor(max_workers=3) as ex:
-        mlb_future  = ex.submit(fetch_mlb_probables_and_schedule, mp["start"], mp["end"])
+        mlb_future  = ex.submit(fetch_mlb_probables_and_schedule, anchor_start, mp["end"])
         espn_future = ex.submit(fetch_espn_probables, mp["start"], mp["end"])
         fc_future   = ex.submit(fetch_forecaster_probables)
         mlb_data, mlb_schedule = mlb_future.result()
         fp_data, schedule      = espn_future.result()
         fc_data                = fc_future.result()
+
+    # Anchor-window days are for conflict resolution only — keep the schedule
+    # payload period-shaped. (ISO dates compare correctly as strings.)
+    mlb_schedule = {d: v for d, v in mlb_schedule.items() if d >= mp["start"]}
 
     # Days the ESPN scoreboard came back empty for are filled from the MLB
     # schedule so one flaky source can't blank the whole grid.

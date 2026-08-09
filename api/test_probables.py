@@ -281,6 +281,40 @@ def test_conflict_end_to_end_starts_and_flags():
         ("2026-08-11", True), ("2026-08-16", False)]
 
 
+def test_period_boundary_anchor_suppresses_phantom():
+    # Period 19 starts 08-10. The pitcher really started 08-08 (previous
+    # period's tail, visible via the widened MLB fetch window). A stale
+    # projection on 08-10 must be dropped; a legit 08-12 start (4 days
+    # after the anchor) survives. The anchor date itself never renders,
+    # and pre-period days stay out of the schedule payload.
+    calls = {}
+    originals = (mlb.fetch_mlb_probables_and_schedule,
+                 mlb.fetch_espn_probables,
+                 mlb.fetch_forecaster_probables)
+
+    def fake_mlb(start, end):
+        calls["window"] = (start, end)
+        return ({"kyle freeland": ["2026-08-08"]},
+                {"2026-08-08": {"COL": {"opponent": "STL", "is_home": False,
+                                        "status": "final", "win_prob": None}}})
+    mlb.fetch_mlb_probables_and_schedule = fake_mlb
+    mlb.fetch_espn_probables = lambda s, e: ({}, {})
+    mlb.fetch_forecaster_probables = lambda: {
+        "kyle freeland": ["2026-08-10", "2026-08-12"]}
+    try:
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            starts, schedule = get_starts_for_players(["Kyle Freeland"], 19)
+    finally:
+        _restore_sources(originals)
+    assert calls["window"] == ("2026-08-07", "2026-08-16")
+    entry = starts["Kyle Freeland"]
+    assert [(sd["date"], sd["confirmed"]) for sd in entry["startDates"]] == [
+        ("2026-08-12", False)]
+    assert entry["starts"] == 1
+    assert "2026-08-08" not in schedule
+
+
 # ─── Hardened scoreboard fetch ─────────────────────────────────────────────
 
 class _FakeResp:
