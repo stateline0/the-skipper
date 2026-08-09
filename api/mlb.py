@@ -65,6 +65,20 @@ MATCHUP_PERIODS = {
 # Keys are lowercased last names for matching against ESPN fantasy names.
 # ---------------------------------------------------------------------------
 
+# Honest tool UA — verified Aug 9 2026: this host's edge 403s browser-styled
+# UAs ("Mozilla/..." — including full Safari and Googlebot strings) from
+# non-browser clients, while plain tool UAs (curl/x, python-requests/x, this
+# one) get HTTP 200 with full data. The bare "Mozilla/5.0" this fetch sent
+# for months is what killed the probables feed. NOTE: this is the OPPOSITE
+# of the www.espn.com article WAF, which trusts Safari and blocks generic
+# UAs (see forecaster.py) — the two hosts sit behind different rules, so
+# don't "unify" them.
+SCOREBOARD_HEADERS = {
+    "User-Agent": "the-skipper/1.0 (+https://github.com/stateline0/the-skipper)",
+    "Accept": "application/json",
+}
+
+
 def fetch_espn_probables(period_start, period_end):
     """
     Fetch probable pitchers AND full game schedule from ESPN scoreboard API
@@ -90,6 +104,7 @@ def fetch_espn_probables(period_start, period_end):
 
     pitchers = {}   # full_name_lower -> [dates]
     schedule = {}   # date -> { team_abbrev -> {opponent, is_home, status} }
+    empty_days = []  # days ESPN answered but listed no events (block/outage tell)
 
     current = start_dt
 
@@ -102,12 +117,24 @@ def fetch_espn_probables(period_start, period_end):
             f"?dates={date_str}&limit=50"
         )
         try:
-            r = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
+            r = requests.get(url, headers=SCOREBOARD_HEADERS, timeout=10)
+            if r.status_code != 200:
+                # A WAF challenge or block answers with a non-200 (or a stub
+                # body) — log status + size so the failure mode is readable
+                # from function logs instead of silently blanking the grid.
+                print(f"[mlb.py] ESPN scoreboard HTTP {r.status_code} for "
+                      f"{date_str} ({len(r.content)} bytes)")
+                current += timedelta(days=1)
+                continue
             data = r.json()
 
             schedule[iso_date] = {}
 
-            for event in data.get("events", []):
+            events = data.get("events", [])
+            if not events:
+                empty_days.append(iso_date)
+
+            for event in events:
                 # ── Game status ──────────────────────────────────────────
                 status_obj  = event.get("status", {}).get("type", {})
                 status_name = status_obj.get("name", "STATUS_SCHEDULED")
@@ -268,7 +295,9 @@ def fetch_espn_probables(period_start, period_end):
 
     print(f"[mlb.py] ESPN scoreboard: {len(pitchers)} pitchers, "
           f"{sum(len(v) for v in schedule.values())} team-days across "
-          f"{len(schedule)} days")
+          f"{len(schedule)} days"
+          + (f" — zero events on {len(empty_days)} day(s): "
+             f"{', '.join(empty_days)}" if empty_days else ""))
     return pitchers, schedule
 
 
@@ -462,6 +491,68 @@ def build_pitcher_starts(mlb_data, fp_data, period_start, period_end):
 
 
 # ---------------------------------------------------------------------------
+# ESPN Fantasy Forecaster — projected starters (third probables source).
+#
+# The scoreboard API only carries officially-announced probables (and has
+# gone dark entirely — see PR #183), so on its own the grid degrades to
+# confirmed-only. The Forecaster article projects every team's rotation
+# ~10 days out — the same dataset ESPN's fantasy app shows under "Probable
+# Starters". forecaster.py already scrapes it with WAF-safe UAs; here we
+# reduce its entries to the { name_key: [dates] } shape build_pitcher_starts
+# expects, and cache the reduction so the 15-minute warm cron doesn't
+# re-scrape the article every run.
+# ---------------------------------------------------------------------------
+
+FORECASTER_STARTS_CACHE_KEY = "cache:forecaster-starts"
+FORECASTER_STARTS_TTL = 3600  # seconds — the article updates at most daily
+
+
+def _forecaster_entries_to_probables(entries: list) -> dict:
+    """Reduce forecaster.py entries to { "zac gallen": ["2026-08-08", ...] }.
+    Placeholder-FPTS entries still name a real pitcher and date, so they
+    count as starts — only the (ignored) FPTS value is generic."""
+    out = {}
+    for e in entries:
+        name = (e.get("pitcher") or "").strip().lower()
+        date = e.get("date") or ""
+        if not name or not date:
+            continue
+        dates = out.setdefault(name, [])
+        if date not in dates:
+            dates.append(date)
+    return out
+
+
+def fetch_forecaster_probables() -> dict:
+    """Forecaster projected starters as { name_key: [dates] }, KV-cached.
+    Returns {} on any failure so the grid falls back to the other two
+    sources — exactly the pre-Forecaster behavior."""
+    try:
+        from kv import cache_get, cache_set
+        cached = cache_get(FORECASTER_STARTS_CACHE_KEY)
+        if cached:
+            return cached
+        # Lazy import keeps forecaster's bs4 dependency out of mlb.py's
+        # import path on cache-hit runs (and out of the blast radius of
+        # /api/espn if the scraper module ever breaks).
+        from forecaster import fetch_forecaster
+        data = fetch_forecaster()
+        if "error" in data:
+            print(f"[mlb.py] Forecaster probables unavailable: {data['error']}")
+            return {}
+        probables = _forecaster_entries_to_probables(data.get("entries", []))
+        print(f"[mlb.py] Forecaster probables: {len(probables)} pitchers "
+              f"({data.get('fetch_note', '')})")
+        if probables:
+            cache_set(FORECASTER_STARTS_CACHE_KEY, probables,
+                      ttl_seconds=FORECASTER_STARTS_TTL)
+        return probables
+    except Exception as e:
+        print(f"[mlb.py] Forecaster probables fetch failed: {e}")
+        return {}
+
+
+# ---------------------------------------------------------------------------
 # Public helper — called by espn.py to look up starts for a list of players.
 #
 # Given a matchup period and a list of full player names ("Luis Severino"),
@@ -486,17 +577,29 @@ def get_starts_for_players(player_names, matchup_period, team_map=None):
 
     mp = MATCHUP_PERIODS[matchup_period]
 
-    # The two probable sources are independent (MLB Stats vs ESPN scoreboard) —
-    # fetch them concurrently instead of back-to-back to halve the wall time.
-    with ThreadPoolExecutor(max_workers=2) as ex:
+    # The three probable sources are independent (MLB Stats vs ESPN scoreboard
+    # vs Forecaster article) — fetch them concurrently instead of back-to-back.
+    with ThreadPoolExecutor(max_workers=3) as ex:
         mlb_future  = ex.submit(fetch_mlb_probables_and_schedule, mp["start"], mp["end"])
         espn_future = ex.submit(fetch_espn_probables, mp["start"], mp["end"])
+        fc_future   = ex.submit(fetch_forecaster_probables)
         mlb_data, mlb_schedule = mlb_future.result()
         fp_data, schedule      = espn_future.result()
+        fc_data                = fc_future.result()
 
     # Days the ESPN scoreboard came back empty for are filled from the MLB
     # schedule so one flaky source can't blank the whole grid.
     schedule = _merge_schedules(schedule, mlb_schedule)
+
+    # Forecaster projected starts fill whatever the scoreboard didn't list
+    # (or everything, when the scoreboard is blocked). Union per pitcher —
+    # build_pitcher_starts keeps MLB-confirmed dates as confirmed=True and
+    # clamps to the matchup period, so out-of-period Forecaster dates drop.
+    for name, dates in fc_data.items():
+        existing = fp_data.setdefault(name, [])
+        for d in dates:
+            if d not in existing:
+                existing.append(d)
 
     pitcher_starts = build_pitcher_starts(mlb_data, fp_data, mp["start"], mp["end"])
 
