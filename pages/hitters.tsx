@@ -8,7 +8,7 @@ import Head from 'next/head'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   UIHitter, Weeks, MONTHS, buildDateRange, todayISO, hitterFromPayload,
-  HitterScheduleGrid, HitterStatsTable,
+  HitterScheduleGrid, HitterStatsTable, HitterSort,
 } from '../components/HitterTables'
 
 interface MatchupPeriod {
@@ -34,6 +34,9 @@ type Tab = 'schedule' | 'stats'
 
 export default function Hitters() {
   const [tab, setTab] = useState<Tab>('schedule')
+  // Shared between the Schedule and Stats tables so the sort survives the tab
+  // switch (each table would otherwise reset it on unmount).
+  const [sort, setSort] = useState<HitterSort | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [live, setLive] = useState<any | null>(null)
@@ -199,8 +202,8 @@ export default function Hitters() {
               </div>
 
               {tab === 'schedule'
-                ? <HitterScheduleGrid hitters={hitters} weeks={weeks} weekDates={weekDates} today={today} actualsTracked />
-                : <HitterStatsTable hitters={hitters} weeks={weeks} leagueAvg={live?.leagueAvg} />}
+                ? <HitterScheduleGrid hitters={hitters} weeks={weeks} weekDates={weekDates} today={today} actualsTracked sort={sort} onSortChange={setSort} />
+                : <HitterStatsTable hitters={hitters} weeks={weeks} leagueAvg={live?.leagueAvg} sort={sort} onSortChange={setSort} />}
             </div>
           </>
         )}

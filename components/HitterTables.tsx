@@ -2,7 +2,9 @@
 //
 // Shared hitter Schedule/Stats tables used by both the Hitters page (My
 // hitters) and the Free Agents page (FA hitters). Each table manages its own
-// column sorting internally, so callers don't wire anything. The Stats table
+// column sorting internally by default; pass `sort` + `onSortChange` to hold
+// the sort in the caller instead, so one sort state can be shared between the
+// Schedule and Stats tabs (it survives the tab switch). The Stats table
 // includes an advanced (Savant) column group: xBA/xSLG/xwOBA + Barrel%/Whiff%.
 //
 // Pass `showOwn` to render an Own% column (Free Agents view).
@@ -84,6 +86,12 @@ const pct = (n?: number) => (n === undefined ? '—' : `${n.toFixed(1)}%`)
 
 type SortDir = 'asc' | 'desc'
 
+// Sort state a caller can hold to share one sort between the Schedule and
+// Stats tables. `key` covers every sortable column on BOTH tables (sortVal
+// below handles them all), so a sort set on one tab orders the other too —
+// even when that column isn't rendered there.
+export interface HitterSort { key: string; dir: SortDir }
+
 // Numeric sort value for a hitter under a given column key. Returns null for an
 // absent value (sinks to the bottom regardless of direction).
 function sortVal(h: UIHitter, weeks: Weeks, key: string): number | null {
@@ -118,13 +126,24 @@ function sortVal(h: UIHitter, weeks: Weeks, key: string): number | null {
   }
 }
 
-function useSortedHitters(hitters: UIHitter[], weeks: Weeks) {
-  const [key, setKey] = useState<string | null>(null)   // null → caller's order
-  const [dir, setDir] = useState<SortDir>('desc')
+function useSortedHitters(
+  hitters: UIHitter[], weeks: Weeks,
+  sort?: HitterSort | null, onSortChange?: (s: HitterSort) => void,
+) {
+  // Controlled when onSortChange is provided (the caller owns the sort, so it
+  // survives the Schedule/Stats tab switch); internal state otherwise.
+  const [localKey, setLocalKey] = useState<string | null>(null)   // null → caller's order
+  const [localDir, setLocalDir] = useState<SortDir>('desc')
+  const controlled = !!onSortChange
+  const key = controlled ? (sort?.key ?? null) : localKey
+  const dir = controlled ? (sort?.dir ?? 'desc') : localDir
 
   function onSort(k: string) {
-    if (k === key) setDir(d => (d === 'desc' ? 'asc' : 'desc'))
-    else { setKey(k); setDir('desc') }
+    const next: HitterSort = k === key
+      ? { key: k, dir: dir === 'desc' ? 'asc' : 'desc' }
+      : { key: k, dir: 'desc' }
+    if (controlled) onSortChange!(next)
+    else { setLocalKey(next.key); setLocalDir(next.dir) }
   }
 
   const sorted = useMemo(() => {
@@ -306,11 +325,12 @@ export function IlPill({ status, estReturn, detail }: {
 
 // ─── Schedule grid ──────────────────────────────────────────────────────────
 
-export function HitterScheduleGrid({ hitters, weeks, weekDates, today, showOwn, actualsTracked }: {
+export function HitterScheduleGrid({ hitters, weeks, weekDates, today, showOwn, actualsTracked, sort, onSortChange }: {
   hitters: UIHitter[]; weeks: Weeks; weekDates: string[]; today: string
   showOwn?: boolean; actualsTracked?: boolean
+  sort?: HitterSort | null; onSortChange?: (s: HitterSort) => void
 }) {
-  const { sorted, key, dir, onSort } = useSortedHitters(hitters, weeks)
+  const { sorted, key, dir, onSort } = useSortedHitters(hitters, weeks, sort, onSortChange)
   const headerStyle: React.CSSProperties = {
     padding: '8px 6px', fontSize: 10, fontFamily: 'var(--mono)', fontWeight: 500,
     color: 'var(--ink-3)', letterSpacing: '0.04em', borderBottom: '1px solid var(--border)',
@@ -503,11 +523,12 @@ function DayPopover({ g, oppLabel, dnp }: { g: DayGame; oppLabel: string; dnp?: 
 
 // ─── Stats table (with advanced Savant columns) ───────────────────────────────
 
-export function HitterStatsTable({ hitters, weeks, showOwn, leagueAvg, seasonView }: {
+export function HitterStatsTable({ hitters, weeks, showOwn, leagueAvg, seasonView, sort, onSortChange }: {
   hitters: UIHitter[]; weeks: Weeks; showOwn?: boolean; leagueAvg?: HitterAdvanced
   seasonView?: boolean   // League viewer: swap the weekly Proj-wk column for a rest-of-season ROS column
+  sort?: HitterSort | null; onSortChange?: (s: HitterSort) => void
 }) {
-  const { sorted, key, dir, onSort } = useSortedHitters(hitters, weeks)
+  const { sorted, key, dir, onSort } = useSortedHitters(hitters, weeks, sort, onSortChange)
   const cellStyle: React.CSSProperties = {
     padding: '10px', borderBottom: '1px solid var(--border)', verticalAlign: 'middle', whiteSpace: 'nowrap',
   }

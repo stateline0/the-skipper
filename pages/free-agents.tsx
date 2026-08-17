@@ -1,10 +1,10 @@
 import Head from 'next/head'
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import ScheduleGrid from '../components/ScheduleGrid'
-import StatsTable, { PITCHER_COLUMNS, SV_COLUMN, PitcherColumn, SeasonStats, SavantExpected } from '../components/StatsTable'
+import StatsTable, { PITCHER_COLUMNS, SV_COLUMN, PitcherColumn, SeasonStats, SavantExpected, sortPitchersBy } from '../components/StatsTable'
 import {
   UIHitter, Weeks, buildDateRange, todayISO, hitterFromPayload,
-  HitterScheduleGrid, HitterStatsTable,
+  HitterScheduleGrid, HitterStatsTable, HitterSort,
 } from '../components/HitterTables'
 
 const CACHE_VERSION = 11 // bump this whenever the API response shape changes
@@ -162,18 +162,21 @@ export default function FreeAgents() {
     }
   }, [selectedPeriod])
 
-function handleSort(col: string) {
+function handleSort(col: string, preferredDir: 'asc' | 'desc' = 'desc') {
+    // preferredDir is the column's first-click direction — 'desc' for the
+    // schedule headers, and the Stats tab's per-column hint ('asc' for
+    // lower-is-better stats like ERA).
     if (col === sortCol) {
-      // Same column — cycle: desc → asc → default (percentOwned desc)
-      if (sortDir === 'desc') {
-        setSortDir('asc')
+      // Same column — cycle: first-click dir → flipped → default (percentOwned desc)
+      if (sortDir === preferredDir) {
+        setSortDir(preferredDir === 'desc' ? 'asc' : 'desc')
       } else {
         setSortCol('percentOwned')
         setSortDir('desc')
       }
     } else {
       setSortCol(col)
-      setSortDir('desc')
+      setSortDir(preferredDir)
     }
   }
 
@@ -190,38 +193,24 @@ function handleSort(col: string) {
   const spList = useMemo(() => freeSPs.filter(p => isStarterView(p) && nameMatches(p.name)), [freeSPs, nameMatches])
   const rpList = useMemo(() => freeSPs.filter(p => !isStarterView(p) && nameMatches(p.name)), [freeSPs, nameMatches])
 
+  // One sorted list feeds BOTH the Schedule and Stats tabs, so the order (and
+  // the shared sortCol/sortDir state) survives the tab switch. Date columns
+  // exist only on the schedule, so they're sorted here; every other key is a
+  // StatsTable column — delegate to its comparator so the two tabs can never
+  // disagree on ordering.
   const sortedSPs = useMemo(() => {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(sortCol)) {
+      return sortPitchersBy(spList, sortCol, sortDir, { fptsPerStart, actualFpts })
+    }
     const sorted = [...spList]
     sorted.sort((a, b) => {
-      let aVal: number
-      let bVal: number
-
-      if (sortCol === 'name') {
-        // String sort — flip the numeric logic
-        const cmp = a.name.localeCompare(b.name)
-        return sortDir === 'asc' ? cmp : -cmp
-      } else if (sortCol === 'percentOwned') {
-        aVal = a.percentOwned ?? 0
-        bVal = b.percentOwned ?? 0
-      } else if (sortCol === 'projFpts') {
-        aVal = a.projFpts ?? 0
-        bVal = b.projFpts ?? 0
-      } else if (sortCol === 'actFpts') {
-        aVal = Object.values(actualFpts[a.name] || {}).reduce((sum: number, v: number) => sum + v, 0)
-        bVal = Object.values(actualFpts[b.name] || {}).reduce((sum: number, v: number) => sum + v, 0)
-      } else if (sortCol === 'starts') {
-        aVal = a.starts ?? 0
-        bVal = b.starts ?? 0
-      } else {
-        // Date column — sort by adjusted per-start projection if pitcher starts that day
-        const aStart = a.startDates?.find(s => s.date === sortCol)
-        const bStart = b.startDates?.find(s => s.date === sortCol)
-        const aDetail = projectionDetails[a.name]?.starts?.find((s: any) => s.date === sortCol)
-        const bDetail = projectionDetails[b.name]?.starts?.find((s: any) => s.date === sortCol)
-        aVal = aStart ? (aDetail?.proj ?? fptsPerStart[a.name] ?? 0) : 0
-        bVal = bStart ? (bDetail?.proj ?? fptsPerStart[b.name] ?? 0) : 0
-      }
-
+      // Date column — sort by adjusted per-start projection if pitcher starts that day
+      const aStart = a.startDates?.find(s => s.date === sortCol)
+      const bStart = b.startDates?.find(s => s.date === sortCol)
+      const aDetail = projectionDetails[a.name]?.starts?.find((s: any) => s.date === sortCol)
+      const bDetail = projectionDetails[b.name]?.starts?.find((s: any) => s.date === sortCol)
+      const aVal = aStart ? (aDetail?.proj ?? fptsPerStart[a.name] ?? 0) : 0
+      const bVal = bStart ? (bDetail?.proj ?? fptsPerStart[b.name] ?? 0) : 0
       return sortDir === 'desc' ? bVal - aVal : aVal - bVal
     })
     return sorted
@@ -476,6 +465,9 @@ function handleSort(col: string) {
                   fptsPerStart={fptsPerStart}
                   actualFpts={actualFpts}
                   projectionDetails={projectionDetails}
+                  sortCol={sortCol}
+                  sortDir={sortDir}
+                  onSortChange={handleSort}
                 />
               )}
             </div>
@@ -532,6 +524,9 @@ function handleSort(col: string) {
 // and an Own% column.
 function FAHitters({ period, nameQuery, posFilter }: { period: number | null; nameQuery: string; posFilter: string }) {
   const [tab, setTab] = useState<'schedule' | 'stats'>('schedule')
+  // Shared between the Schedule and Stats tables so the sort survives the tab
+  // switch (each table would otherwise reset it on unmount).
+  const [sort, setSort] = useState<HitterSort | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [data, setData] = useState<any | null>(null)
@@ -627,8 +622,8 @@ function FAHitters({ period, nameQuery, posFilter }: { period: number | null; na
             No hitters match your filters.
           </div>
         ) : tab === 'schedule'
-          ? <HitterScheduleGrid hitters={filteredHitters} weeks={weeks} weekDates={weekDates} today={today} showOwn actualsTracked />
-          : <HitterStatsTable hitters={filteredHitters} weeks={weeks} showOwn leagueAvg={data?.leagueAvg} />}
+          ? <HitterScheduleGrid hitters={filteredHitters} weeks={weeks} weekDates={weekDates} today={today} showOwn actualsTracked sort={sort} onSortChange={setSort} />
+          : <HitterStatsTable hitters={filteredHitters} weeks={weeks} showOwn leagueAvg={data?.leagueAvg} sort={sort} onSortChange={setSort} />}
       </div>
     </>
   )
