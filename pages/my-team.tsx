@@ -10,12 +10,30 @@ type RosterTab = 'schedule' | 'stats'
 // roster order: active SPs, dropped streamers, IL last).
 type SectionSort = { col: string; dir: 'asc' | 'desc' } | null
 
-// Header click on a Stats tab — mirrors StatsTable's uncontrolled toggle:
+// Header click on either tab — mirrors StatsTable's uncontrolled toggle:
 // first click uses the column's preferred direction, repeat clicks flip.
 function nextSort(prev: SectionSort, col: string, preferredDir?: 'asc' | 'desc'): SectionSort {
   return prev?.col === col
     ? { col, dir: prev.dir === 'desc' ? 'asc' : 'desc' }
     : { col, dir: preferredDir ?? 'desc' }
+}
+
+// A pitcher's points for one schedule date, used when sorting by a date
+// column: actual FPTS once the game has been played, otherwise the locked
+// projection for that day, otherwise the model's per-start projection if a
+// start is scheduled. No start and nothing recorded → 0 (sorts last on desc).
+function dateSortVal(
+  p: RosterSP, date: string,
+  actualFpts: Record<string, Record<string, number>>,
+  lockedProjections: Record<string, Record<string, number>>,
+  fptsPerStart: Record<string, number>,
+): number {
+  const actual = actualFpts[p.name]?.[date]
+  if (actual !== undefined) return actual
+  const locked = lockedProjections[p.name]?.[date]
+  if (locked !== undefined) return locked
+  const hasStart = (p.startDates || []).some((s: any) => s.date === date)
+  return hasStart ? (fptsPerStart[p.name] ?? 0) : 0
 }
 
 const CACHE_VERSION = 12 // bump this whenever the API response shape changes
@@ -147,14 +165,25 @@ export default function MyTeam() {
 
   // Apply each section's shared sort to the list BOTH tabs render, so
   // switching Schedule ↔ Stats never resets the view. Unsorted → keep the
-  // curated roster order above.
+  // curated roster order above. Date columns exist only on the schedule grid,
+  // so they're sorted here by that day's points; every other key is a
+  // StatsTable column and delegates to its comparator.
   const sortCtx = { fptsPerStart, actualFpts }
-  const sortedStarterSPs = spSort
-    ? sortPitchersBy(rosterStarterSPs, spSort.col, spSort.dir, sortCtx)
-    : rosterStarterSPs
-  const sortedRelievers = rpSort
-    ? sortPitchersBy(rosterRelievers, rpSort.col, rpSort.dir, sortCtx)
-    : rosterRelievers
+  const applySort = (list: RosterSP[], sort: SectionSort): RosterSP[] => {
+    if (!sort) return list
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(sort.col)) {
+      return sortPitchersBy(list, sort.col, sort.dir, sortCtx)
+    }
+    const sorted = [...list]
+    sorted.sort((a, b) => {
+      const aVal = dateSortVal(a, sort.col, actualFpts, lockedProjections, fptsPerStart)
+      const bVal = dateSortVal(b, sort.col, actualFpts, lockedProjections, fptsPerStart)
+      return sort.dir === 'desc' ? bVal - aVal : aVal - bVal
+    })
+    return sorted
+  }
+  const sortedStarterSPs = applySort(rosterStarterSPs, spSort)
+  const sortedRelievers = applySort(rosterRelievers, rpSort)
 
   const teamSavesTotal = rosterRelievers.reduce((acc, p) => {
     const byDay = actualSaves[p.name] || {}
@@ -499,6 +528,9 @@ export default function MyTeam() {
                   lockedProjections={lockedProjections}
                   projectionDetails={projectionDetails}
                   liveStats={liveStats}
+                  sortCol={spSort?.col}
+                  sortDir={spSort?.dir}
+                  onSortChange={col => setSpSort(s => nextSort(s, col))}
                 />
               ) : (
                 <StatsTable
@@ -579,6 +611,9 @@ export default function MyTeam() {
                   fptsPerStart={fptsPerStart}
                   lockedProjections={lockedProjections}
                   liveStats={liveStats}
+                  sortCol={rpSort?.col}
+                  sortDir={rpSort?.dir}
+                  onSortChange={col => setRpSort(s => nextSort(s, col))}
                 />
                 ) : (
                   <StatsTable
