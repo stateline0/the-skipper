@@ -631,6 +631,51 @@ export const ROS_COLUMN: PitcherColumn = {
   ),
 }
 
+// ─── Sorting ─────────────────────────────────────────────────────────────────
+
+// Sort a pitcher list by a column key, using the column's sortValue /
+// stringValue. IL pitchers and missing data (NaN sortValue) always sink to the
+// bottom regardless of direction. An unknown key returns the list as-is.
+// Exported so pages that share one sort between the Schedule and Stats tabs
+// can order both views with the exact same comparator.
+export function sortPitchersBy<T extends Pitcher>(
+  pitchers: T[],
+  sortCol: string,
+  sortDir: 'asc' | 'desc',
+  ctx: StatsTableContext,
+  columns: PitcherColumn[] = PITCHER_COLUMNS,
+): T[] {
+  const col = columns.find(c => c.key === sortCol)
+  if (!col) return pitchers
+  const list = [...pitchers]
+  list.sort((a, b) => {
+    // IL always sinks to the bottom regardless of sort direction.
+    // Mirrors the existing ScheduleGrid layout where IL is rendered last.
+    if (a.slot === 'IL' && b.slot !== 'IL') return 1
+    if (b.slot === 'IL' && a.slot !== 'IL') return -1
+
+    if (col.stringValue) {
+      const cmp = col.stringValue(a, ctx).localeCompare(col.stringValue(b, ctx))
+      return sortDir === 'asc' ? cmp : -cmp
+    }
+    if (col.sortValue) {
+      const av = col.sortValue(a, ctx)
+      const bv = col.sortValue(b, ctx)
+      // Missing data (sortValue returns NaN) always sinks to the bottom
+      // regardless of sort direction — flipping desc→asc shouldn't bring
+      // pitchers without season stats to the top.
+      const aMissing = !Number.isFinite(av)
+      const bMissing = !Number.isFinite(bv)
+      if (aMissing && !bMissing) return 1
+      if (bMissing && !aMissing) return -1
+      if (aMissing && bMissing) return 0
+      return sortDir === 'desc' ? bv - av : av - bv
+    }
+    return 0
+  })
+  return list
+}
+
 // ─── Main component ───────────────────────────────────────────────────────────
 
 interface Props {
@@ -641,6 +686,15 @@ interface Props {
   projectionDetails?: Record<string, any>
   defaultSortCol?: string
   defaultSortDir?: 'asc' | 'desc'
+  // Controlled mode — pass all three to hold the sort in the parent (shared
+  // with the Schedule tab so it survives the tab switch). The parent owns
+  // sorting the `pitchers` array (via sortPitchersBy, or its own logic for
+  // keys this table has no column for, e.g. schedule dates); the table renders
+  // rows as passed and only reports header clicks with the column's
+  // first-click direction.
+  sortCol?: string
+  sortDir?: 'asc' | 'desc'
+  onSortChange?: (col: string, preferredDir?: 'asc' | 'desc') => void
 }
 
 export default function StatsTable({
@@ -651,9 +705,15 @@ export default function StatsTable({
   projectionDetails = {},
   defaultSortCol = 'projFpts',
   defaultSortDir = 'desc',
+  sortCol: controlledCol,
+  sortDir: controlledDir,
+  onSortChange,
 }: Props) {
-  const [sortCol, setSortCol] = useState(defaultSortCol)
-  const [sortDir, setSortDir] = useState<'asc' | 'desc'>(defaultSortDir)
+  const [localCol, setLocalCol] = useState(defaultSortCol)
+  const [localDir, setLocalDir] = useState<'asc' | 'desc'>(defaultSortDir)
+  const controlled = !!onSortChange
+  const sortCol = controlled ? controlledCol : localCol
+  const sortDir = controlled ? (controlledDir ?? 'desc') : localDir
   // Tap-to-show popover for cell detail (sparkline values, Luck/Pace help) —
   // surfaces what the hover `title` can't reach on touch devices.
   const [popover, setPopover] = useState<{ content: React.ReactNode; top: number; left: number } | null>(null)
@@ -670,51 +730,32 @@ export default function StatsTable({
 
   function handleSort(col: PitcherColumn) {
     if (!col.sortValue && !col.stringValue) return
-    if (col.key === sortCol) {
-      setSortDir(d => (d === 'desc' ? 'asc' : 'desc'))
+    if (controlled) {
+      // First-click direction hint mirrors the uncontrolled default below;
+      // the parent's handler decides what to do with it.
+      const defaultDir: 'asc' | 'desc' = col.sortValue ? 'desc' : 'asc'
+      onSortChange!(col.key, col.preferredDir || defaultDir)
+      return
+    }
+    if (col.key === localCol) {
+      setLocalDir(d => (d === 'desc' ? 'asc' : 'desc'))
     } else {
-      setSortCol(col.key)
+      setLocalCol(col.key)
       // First-click direction:
       // 1. Honor an explicit preferredDir if the column declares one
       //    (used for "lower is better" stats like ERA, BB/9, xERA).
       // 2. Else: numeric columns default to desc (best first), strings to asc (A→Z).
       const defaultDir: 'asc' | 'desc' = col.sortValue ? 'desc' : 'asc'
-      setSortDir(col.preferredDir || defaultDir)
+      setLocalDir(col.preferredDir || defaultDir)
     }
   }
 
   const sortedPitchers = useMemo(() => {
-    const col = columns.find(c => c.key === sortCol)
-    if (!col) return pitchers
-    const ctx: StatsTableContext = { fptsPerStart, actualFpts }
-    const list = [...pitchers]
-    list.sort((a, b) => {
-      // IL always sinks to the bottom regardless of sort direction.
-      // Mirrors the existing ScheduleGrid layout where IL is rendered last.
-      if (a.slot === 'IL' && b.slot !== 'IL') return 1
-      if (b.slot === 'IL' && a.slot !== 'IL') return -1
-
-      if (col.stringValue) {
-        const cmp = col.stringValue(a, ctx).localeCompare(col.stringValue(b, ctx))
-        return sortDir === 'asc' ? cmp : -cmp
-      }
-      if (col.sortValue) {
-        const av = col.sortValue(a, ctx)
-        const bv = col.sortValue(b, ctx)
-        // Missing data (sortValue returns NaN) always sinks to the bottom
-        // regardless of sort direction — flipping desc→asc shouldn't bring
-        // pitchers without season stats to the top.
-        const aMissing = !Number.isFinite(av)
-        const bMissing = !Number.isFinite(bv)
-        if (aMissing && !bMissing) return 1
-        if (bMissing && !aMissing) return -1
-        if (aMissing && bMissing) return 0
-        return sortDir === 'desc' ? bv - av : av - bv
-      }
-      return 0
-    })
-    return list
-  }, [pitchers, sortCol, sortDir, columns, fptsPerStart, actualFpts])
+    // Controlled mode: the parent already sorted the list (possibly by a key
+    // this table has no column for) — render it as passed.
+    if (controlled) return pitchers
+    return sortPitchersBy(pitchers, localCol, localDir, { fptsPerStart, actualFpts }, columns)
+  }, [pitchers, controlled, localCol, localDir, columns, fptsPerStart, actualFpts])
 
   const ctx: StatsTableContext = { fptsPerStart, actualFpts, projectionDetails, openInfo }
 

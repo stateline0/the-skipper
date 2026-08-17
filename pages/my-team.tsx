@@ -2,9 +2,21 @@ import Head from 'next/head'
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { useRouter } from 'next/router'
 import ScheduleGrid from '../components/ScheduleGrid'
-import StatsTable from '../components/StatsTable'
+import StatsTable, { sortPitchersBy } from '../components/StatsTable'
 
 type RosterTab = 'schedule' | 'stats'
+
+// Sort shared between a section's Schedule and Stats tabs (null → curated
+// roster order: active SPs, dropped streamers, IL last).
+type SectionSort = { col: string; dir: 'asc' | 'desc' } | null
+
+// Header click on a Stats tab — mirrors StatsTable's uncontrolled toggle:
+// first click uses the column's preferred direction, repeat clicks flip.
+function nextSort(prev: SectionSort, col: string, preferredDir?: 'asc' | 'desc'): SectionSort {
+  return prev?.col === col
+    ? { col, dir: prev.dir === 'desc' ? 'asc' : 'desc' }
+    : { col, dir: preferredDir ?? 'desc' }
+}
 
 const CACHE_VERSION = 12 // bump this whenever the API response shape changes
 
@@ -117,6 +129,11 @@ export default function MyTeam() {
   const [activeTab, setActiveTab] = useState<RosterTab>('schedule')
   const [relieverTab, setRelieverTab] = useState<RosterTab>('schedule')
 
+  // Per-section sort, held here (not inside StatsTable) so it survives the
+  // Schedule/Stats toggle — and so the Schedule tab shows the same row order.
+  const [spSort, setSpSort] = useState<SectionSort>(null)
+  const [rpSort, setRpSort] = useState<SectionSort>(null)
+
   // ── Derived values ─────────────────────────────────────────────────────
   const weekLabel = getWeekRange(weekStart, weekEnd)
 
@@ -127,6 +144,17 @@ export default function MyTeam() {
     ...rosterSPs.filter(p => (p.position || p.slot) === 'SP' && p.slot === 'IL'),
   ]
   const rosterRelievers = rosterSPs.filter(p => (p.position || p.slot) === 'RP')
+
+  // Apply each section's shared sort to the list BOTH tabs render, so
+  // switching Schedule ↔ Stats never resets the view. Unsorted → keep the
+  // curated roster order above.
+  const sortCtx = { fptsPerStart, actualFpts }
+  const sortedStarterSPs = spSort
+    ? sortPitchersBy(rosterStarterSPs, spSort.col, spSort.dir, sortCtx)
+    : rosterStarterSPs
+  const sortedRelievers = rpSort
+    ? sortPitchersBy(rosterRelievers, rpSort.col, rpSort.dir, sortCtx)
+    : rosterRelievers
 
   const teamSavesTotal = rosterRelievers.reduce((acc, p) => {
     const byDay = actualSaves[p.name] || {}
@@ -462,7 +490,7 @@ export default function MyTeam() {
 
               {activeTab === 'schedule' ? (
                 <ScheduleGrid
-                  pitchers={rosterStarterSPs}
+                  pitchers={sortedStarterSPs}
                   schedule={schedule}
                   matchupDates={matchupDates}
                   actualFpts={actualFpts}
@@ -474,10 +502,13 @@ export default function MyTeam() {
                 />
               ) : (
                 <StatsTable
-                  pitchers={rosterStarterSPs}
+                  pitchers={sortedStarterSPs}
                   fptsPerStart={fptsPerStart}
                   actualFpts={actualFpts}
                   projectionDetails={projectionDetails}
+                  sortCol={spSort?.col}
+                  sortDir={spSort?.dir}
+                  onSortChange={(col, dir) => setSpSort(s => nextSort(s, col, dir))}
                 />
               )}
             </div>
@@ -538,7 +569,7 @@ export default function MyTeam() {
                 </div>
                 {relieverTab === 'schedule' ? (
                 <ScheduleGrid
-                  pitchers={rosterRelievers}
+                  pitchers={sortedRelievers}
                   schedule={schedule}
                   matchupDates={matchupDates}
                   actualFpts={actualFpts}
@@ -551,10 +582,13 @@ export default function MyTeam() {
                 />
                 ) : (
                   <StatsTable
-                    pitchers={rosterRelievers}
+                    pitchers={sortedRelievers}
                     fptsPerStart={fptsPerStart}
                     actualFpts={actualFpts}
                     projectionDetails={projectionDetails}
+                    sortCol={rpSort?.col}
+                    sortDir={rpSort?.dir}
+                    onSortChange={(col, dir) => setRpSort(s => nextSort(s, col, dir))}
                   />
                 )}
               </div>
