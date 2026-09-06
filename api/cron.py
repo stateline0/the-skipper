@@ -100,7 +100,10 @@ def get_current_period() -> tuple:
     for num, mp in MATCHUP_PERIODS.items():
         if mp["start"] <= today <= mp["end"]:
             return num, mp
-    return 1, MATCHUP_PERIODS.get(1, {})
+    # Outside the season window: fall back to the last period, never
+    # Period 1 — otherwise post-season runs would write stale keys.
+    last = max(MATCHUP_PERIODS)
+    return last, MATCHUP_PERIODS[last]
 
 
 def lock_all_mlb_projections() -> dict:
