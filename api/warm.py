@@ -26,7 +26,7 @@ def _current_period() -> int:
     for num, mp in MATCHUP_PERIODS.items():
         if mp["start"] <= today <= mp["end"]:
             return num
-    return 1
+    return max(MATCHUP_PERIODS)
 
 
 class handler(BaseHTTPRequestHandler):
