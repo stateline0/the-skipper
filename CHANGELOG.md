@@ -2,6 +2,30 @@
 
 ---
 
+## September 5, 2026 — 2026 playoff matchup periods + post-season fallback fix (PR #187)
+
+Both hardcoded matchup-period tables ended at Period 22 (Aug 31 – Sep 6);
+playoffs start Sep 7 and were not represented anywhere.
+
+### What shipped
+- **Playoff periods 23–25** added to `api/config.py` (`MATCHUP_PERIODS` list,
+  labels `Playoff R1`–`R3`) and `api/mlb.py` (dict): Sep 7–13, Sep 14–20,
+  Sep 21–27, standard 12-start limit. Confirmed from the ESPN league page
+  (league 77651433); Sep 27 is also MLB's final regular-season day, so
+  Period 25 is the last period of the year. No frontend changes — the period
+  dropdown renders `{label} · {start}–{end}` from `/api/config`.
+- **Post-season fallback fix** (`api/cron.py::get_current_period`,
+  `api/warm.py::_current_period`). Both returned **Period 1** when today fell
+  outside every period window, so after the last period the daily cron would
+  have locked projections under `proj2:2026:1:*` keys and polluted Period 1
+  accuracy data. Both now return `max(MATCHUP_PERIODS)`, matching what
+  `api/config.py::get_current_period` already did.
+- **Not changed:** `api/accuracy.py` / `pages/accuracy.tsx` "22 periods"
+  mentions are comments/UI copy; the KV scan is wildcarded so playoff data
+  aggregates automatically (→ BACKLOG, Display polish).
+
+---
+
 ## Session 42 — June 12, 2026 — Four small consistency fixes (lock values + dropped-player display)
 
 The four self-contained items from the backlog review, batched into one PR.

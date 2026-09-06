@@ -141,7 +141,7 @@ Once any MLB game starts for the active scoring period, ESPN locks that period's
 ### Known limitations
 `Confidence: 8/10 · Last assessed: April 10, 2026`
 
-- `matchupPeriodDates` not returned for this league via any available view → all 22 period dates hardcoded in `api/config.py`
+- `matchupPeriodDates` not returned for this league via any available view → all 25 period dates hardcoded in `api/config.py` (22 regular-season + 3 playoff rounds: 23 = Sep 7–13, 24 = Sep 14–20, 25 = Sep 21–27, 12-start limit)
 - Free agent actual FPTS only available if player was rostered at time of start — ESPN API limitation, no workaround
 - ESPN caches roster data server-side — cache-busting params (`_` timestamp) have no effect on staleness
 
@@ -714,7 +714,9 @@ Vercel CLI v50+ does not serve Python serverless functions locally. All Python A
 
 ### Why matchup period dates are hardcoded
 
-ESPN's API does not return `matchupPeriodDates` for this league via any available view. All 22 matchup period date ranges are hardcoded in `api/config.py`.
+ESPN's API does not return `matchupPeriodDates` for this league via any available view. All 25 matchup period date ranges are hardcoded in `api/config.py` (mirror dict in `api/mlb.py`): 22 regular-season periods plus three one-week playoff rounds — 23 (Sep 7–13), 24 (Sep 14–20), 25 (Sep 21–27), 12-start limit — confirmed from the ESPN league page. Sep 27 is MLB's final regular-season day, so Period 25 is the last period of the year.
+
+When today falls outside every period window, `config.get_current_period()`, `cron.get_current_period()` and `warm._current_period()` all fall back to the **last** period, never Period 1. The cron/warm fallbacks used to return Period 1, which after the final period would have locked projections under `proj2:2026:1:*` keys and polluted Period 1 accuracy data (fixed PR #187).
 
 ### Session storage for cross-page state
 
