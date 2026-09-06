@@ -9,7 +9,7 @@ import os
 from datetime import date
 from http.server import BaseHTTPRequestHandler
 
-# All 22 ESPN regular-season matchup periods for 2026.
+# All 22 regular-season + 3 playoff ESPN matchup periods for 2026.
 # Dates are full ISO format (YYYY-MM-DD) — single source of truth.
 # mlb.py has its own copy to avoid cross-file imports in serverless context.
 MATCHUP_PERIODS = [
@@ -35,6 +35,10 @@ MATCHUP_PERIODS = [
     {"period": 20, "label": "Period 20", "start": "2026-08-17", "end": "2026-08-23",  "limit": 12},
     {"period": 21, "label": "Period 21", "start": "2026-08-24", "end": "2026-08-30",  "limit": 12},
     {"period": 22, "label": "Period 22", "start": "2026-08-31", "end": "2026-09-06",  "limit": 12},
+    # Playoffs — three one-week rounds, standard 12-start limit.
+    {"period": 23, "label": "Playoff R1", "start": "2026-09-07", "end": "2026-09-13", "limit": 12},
+    {"period": 24, "label": "Playoff R2", "start": "2026-09-14", "end": "2026-09-20", "limit": 12},
+    {"period": 25, "label": "Playoff R3", "start": "2026-09-21", "end": "2026-09-27", "limit": 12},
 ]
 
 
